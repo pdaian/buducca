@@ -12,6 +12,7 @@ class TelegramConfig:
     poll_interval_seconds: float = 1.0
     long_poll_timeout_seconds: int = 30
     allowed_chat_ids: list[int] = field(default_factory=list)
+    process_pending_updates_on_startup: bool = False
 
 
 @dataclass

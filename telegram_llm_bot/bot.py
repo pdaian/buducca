@@ -67,6 +67,12 @@ class BotRunner:
         logging.info("Bot started. Waiting for messages...")
         while True:
             try:
+                if self._offset is None and not self.config.telegram.process_pending_updates_on_startup:
+                    pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
+                    if pending_updates:
+                        self._offset = pending_updates[-1].update_id + 1
+                        logging.info("Skipped %s pending update(s) from before startup", len(pending_updates))
+
                 updates = self.telegram.get_updates(
                     offset=self._offset,
                     timeout_seconds=self.config.telegram.long_poll_timeout_seconds,
