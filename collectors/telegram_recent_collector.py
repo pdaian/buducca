@@ -40,7 +40,12 @@ def create_collector(config: dict):
     timeout_seconds = float(config.get("timeout_seconds", 30))
     max_messages = int(config.get("max_messages", 50))
 
-    bot_token = config.get("bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    bot_token = (
+        config.get("collector_bot_token")
+        or config.get("bot_token")
+        or os.environ.get("TELEGRAM_COLLECTOR_BOT_TOKEN", "")
+        or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    )
     bot_client = config.get("_bot_client")
     if not bot_client and bot_token:
         bot_client = TelegramLiteClient(bot_token=bot_token, timeout_seconds=timeout_seconds)

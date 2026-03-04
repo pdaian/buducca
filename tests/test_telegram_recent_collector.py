@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from assistant_framework.workspace import Workspace
 from collectors.telegram_recent_collector import create_collector
@@ -61,6 +62,24 @@ class TelegramRecentCollectorTests(unittest.TestCase):
             collector["run"](workspace)
 
             self.assertEqual(bot.offset, 99)
+
+    def test_prefers_collector_bot_token_over_legacy_bot_token(self) -> None:
+        created_tokens = []
+
+        class _CaptureClient:
+            def __init__(self, bot_token: str, timeout_seconds: float) -> None:
+                created_tokens.append(bot_token)
+
+            def get_updates(self, offset=None, timeout_seconds=20):
+                return []
+
+        with patch("collectors.telegram_recent_collector.TelegramLiteClient", _CaptureClient):
+            collector = create_collector(
+                {"collector_bot_token": "collector-token", "bot_token": "legacy-token"}
+            )
+
+        self.assertIsNotNone(collector)
+        self.assertEqual(created_tokens, ["collector-token"])
 
 
 if __name__ == "__main__":
