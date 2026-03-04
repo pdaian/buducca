@@ -55,6 +55,10 @@ If you need messages a normal bot token cannot access:
 3. Add your `api_id` and `api_hash`
 4. Re-run collectors and complete one-time QR login
 
+## Debug mode
+
+Set `runtime.debug` to `true` in `config.json` to force DEBUG logging and print full LLM request/response payloads plus request timing data.
+
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots

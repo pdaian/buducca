@@ -28,6 +28,7 @@
       "models/ggml-base.en.bin",
       "--file",
       "{input}"
-    ]
+    ],
+    "debug": false
   }
 }

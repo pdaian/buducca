@@ -28,7 +28,11 @@ class BotRunner:
 
         http_client = HttpClient(timeout_seconds=config.runtime.request_timeout_seconds)
         self.telegram = TelegramClient(bot_token=config.telegram.bot_token, http_client=http_client)
-        self.llm = OpenAICompatibleClient(config=config.llm, http_client=http_client)
+        self.llm = OpenAICompatibleClient(
+            config=config.llm,
+            http_client=http_client,
+            debug=config.runtime.debug,
+        )
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids)
         self._offset: int | None = None
