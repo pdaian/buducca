@@ -68,6 +68,7 @@ class BotRunner:
                 "Use skill_call only when user explicitly requests a skill run or task execution.",
                 "If done is false, the tool result will be provided back to you so you can choose the next step.",
                 "If done is true, the tool result is sent to the user as the final answer.",
+                "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
             ]
         )
         return f"{base_prompt}\n\n" + "\n".join(skill_lines)
