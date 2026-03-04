@@ -5,6 +5,7 @@ from pathlib import Path
 
 from telegram_llm_bot.bot import BotRunner
 from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
+from telegram_llm_bot.telegram_client import IncomingMessage
 
 
 class DummyTelegram:
@@ -33,6 +34,23 @@ class DummyLLM:
         self.calls += 1
         self.messages = messages
         return self.reply
+
+
+
+
+class PollingTelegram:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get_updates(self, offset=None, timeout_seconds=30):
+        self.calls.append((offset, timeout_seconds))
+        if not self.responses:
+            raise KeyboardInterrupt
+        result = self.responses.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
 
 class BotTests(unittest.TestCase):
@@ -160,12 +178,41 @@ class BotTests(unittest.TestCase):
         bot.llm = DummyLLM("heard")
         bot._transcribe_voice_note = lambda _fid: "turn on lights"
 
-        from telegram_llm_bot.telegram_client import IncomingMessage
-
         bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
 
         self.assertEqual(bot.telegram.sent, [(1, "heard")])
         self.assertIn("Voice note transcript", bot.llm.messages[-1]["content"])
+
+
+    def test_run_forever_skips_pending_updates_on_startup_by_default(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = PollingTelegram(
+            responses=[
+                [IncomingMessage(update_id=5, chat_id=1, text="old")],
+                KeyboardInterrupt(),
+            ]
+        )
+
+        bot.run_forever()
+
+        self.assertEqual(bot.telegram.calls[0], (None, 0))
+        self.assertEqual(bot.telegram.calls[1], (6, bot.config.telegram.long_poll_timeout_seconds))
+
+    def test_run_forever_can_process_pending_updates_when_enabled(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(
+                bot_token="t",
+                process_pending_updates_on_startup=True,
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = PollingTelegram(responses=[KeyboardInterrupt()])
+
+        bot.run_forever()
+
+        self.assertEqual(bot.telegram.calls[0], (None, bot.config.telegram.long_poll_timeout_seconds))
 
     def test_handle_voice_update_replies_on_transcription_error(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
@@ -176,8 +223,6 @@ class BotTests(unittest.TestCase):
             raise RuntimeError("bad")
 
         bot._transcribe_voice_note = _boom
-
-        from telegram_llm_bot.telegram_client import IncomingMessage
 
         bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
 
