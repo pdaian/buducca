@@ -21,8 +21,9 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
 
+    configured_level = getattr(logging, config.runtime.log_level.upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, config.runtime.log_level.upper(), logging.INFO),
+        level=logging.DEBUG if config.runtime.debug else configured_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
