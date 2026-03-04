@@ -20,6 +20,8 @@ from .telegram_client import IncomingMessage, TelegramClient
 
 _TELEGRAM_MAX_MESSAGE_LEN = 4096
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_MAX_SKILL_PARSE_CHARS = 20_000
+_MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 
 
 class BotRunner:
@@ -104,6 +106,9 @@ class BotRunner:
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
         payload_text = reply.strip()
+        if "skill_call" not in payload_text:
+            return None
+
         fenced = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", payload_text, re.DOTALL)
         if fenced:
             payload_text = fenced.group(1).strip()
@@ -111,8 +116,21 @@ class BotRunner:
         try:
             payload = json.loads(payload_text)
         except json.JSONDecodeError:
+            if len(payload_text) > _MAX_SKILL_PARSE_CHARS:
+                logging.warning(
+                    "Skipping skill call recovery parse for oversized reply (%s chars)",
+                    len(payload_text),
+                )
+                return None
+
             decoder = json.JSONDecoder()
-            for match in re.finditer(r"\{", payload_text):
+            for idx, match in enumerate(re.finditer(r"\{", payload_text), start=1):
+                if idx > _MAX_SKILL_PARSE_BRACE_ATTEMPTS:
+                    logging.warning(
+                        "Stopping skill call recovery parse after %s brace attempts",
+                        _MAX_SKILL_PARSE_BRACE_ATTEMPTS,
+                    )
+                    break
                 try:
                     parsed, _end = decoder.raw_decode(payload_text[match.start() :])
                 except json.JSONDecodeError:
@@ -272,14 +290,23 @@ class BotRunner:
             reply = self._build_status_message()
         else:
             prompt = self._build_messages(chat_id, text)
-            model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
-            skill_call = self._try_parse_skill_call(model_reply)
-            if skill_call:
-                reply = self._strip_think_blocks(
-                    self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+            try:
+                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                skill_call = self._try_parse_skill_call(model_reply)
+                if skill_call:
+                    reply = self._strip_think_blocks(
+                        self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+                    )
+                else:
+                    reply = model_reply
+            except Exception:
+                logging.exception("Failed to generate or parse LLM response for chat_id=%s", chat_id)
+                self.telegram.send_message(
+                    chat_id,
+                    "I ran into an internal error while handling that request. "
+                    "Please try again.",
                 )
-            else:
-                reply = model_reply
+                return
             self._history[chat_id].append({"role": "user", "content": text})
             self._history[chat_id].append({"role": "assistant", "content": reply})
 

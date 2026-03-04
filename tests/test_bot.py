@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from telegram_llm_bot.bot import BotRunner
 from telegram_llm_bot.http import RequestTimeoutError
@@ -35,6 +36,11 @@ class DummyLLM:
         self.calls += 1
         self.messages = messages
         return self.reply
+
+
+class BrokenLLM:
+    def generate_reply(self, messages):
+        raise RuntimeError("llm parse failed")
 
 
 
@@ -199,6 +205,33 @@ class BotTests(unittest.TestCase):
         )
 
         self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}})
+
+    def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
+        bot = self.make_bot()
+        decoder_path = "telegram_llm_bot.bot.json.JSONDecoder.raw_decode"
+
+        with patch(decoder_path) as raw_decode:
+            parsed = bot._try_parse_skill_call("{" * 2000)
+
+        self.assertIsNone(parsed)
+        raw_decode.assert_not_called()
+
+    def test_handle_message_replies_when_llm_generation_fails(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = BrokenLLM()
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(
+            bot.telegram.sent,
+            [
+                (
+                    1,
+                    "I ran into an internal error while handling that request. Please try again.",
+                )
+            ],
+        )
 
     def test_transcribe_voice_note_reads_whisper_txt_output(self) -> None:
         bot = self.make_bot(
