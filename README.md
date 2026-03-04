@@ -78,6 +78,19 @@ If you need messages a normal bot token cannot access:
 
 Set `runtime.debug` to `true` in `config.json` to force DEBUG logging and print full LLM request/response payloads plus request timing data. You can also set `runtime.log_level` to `"DEBUG"` to enable the same model-call verbosity.
 
+## Timeout tuning (including 10x)
+
+If your local model is slow, increase `runtime.request_timeout_seconds` in `config.json`.
+For example, to increase from 30 seconds to 300 seconds (10x):
+
+```json
+"runtime": {
+  "request_timeout_seconds": 300
+}
+```
+
+This timeout is used by outbound HTTP calls made by the bot (including LLM requests).
+
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots

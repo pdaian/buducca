@@ -43,6 +43,11 @@ class BrokenLLM:
         raise RuntimeError("llm parse failed")
 
 
+class TimeoutLLM:
+    def generate_reply(self, messages):
+        raise RequestTimeoutError("timed out")
+
+
 
 
 class PollingTelegram:
@@ -229,6 +234,24 @@ class BotTests(unittest.TestCase):
                 (
                     1,
                     "I ran into an internal error while handling that request. Please try again.",
+                )
+            ],
+        )
+
+    def test_handle_message_replies_when_llm_request_times_out(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = TimeoutLLM()
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(
+            bot.telegram.sent,
+            [
+                (
+                    1,
+                    "The language model request timed out after 30s. "
+                    "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
                 )
             ],
         )
