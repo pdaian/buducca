@@ -299,6 +299,15 @@ class BotRunner:
                     )
                 else:
                     reply = model_reply
+            except RequestTimeoutError:
+                logging.warning("LLM request timed out for chat_id=%s", chat_id)
+                self.telegram.send_message(
+                    chat_id,
+                    "The language model request timed out "
+                    f"after {self.config.runtime.request_timeout_seconds:g}s. "
+                    "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
+                )
+                return
             except Exception:
                 logging.exception("Failed to generate or parse LLM response for chat_id=%s", chat_id)
                 self.telegram.send_message(

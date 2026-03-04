@@ -16,7 +16,7 @@
     "history_messages": 8
   },
   "runtime": {
-    "request_timeout_seconds": 30,
+    "request_timeout_seconds": 300,
     "log_level": "INFO",
     "workspace_dir": "workspace",
     "collector_status_file": "collector_status.json",
