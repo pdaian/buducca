@@ -40,6 +40,17 @@ class TaskwarriorSkillTests(unittest.TestCase):
             run_mock.assert_called_once_with(["task", "list"], capture_output=True, text=True, check=False)
             self.assertEqual(result, "1 Buy milk")
 
+    def test_list_accepts_command_alias(self) -> None:
+        with patch.object(self.module.subprocess, "run") as run_mock:
+            run_mock.return_value.returncode = 0
+            run_mock.return_value.stdout = "1 Buy milk"
+            run_mock.return_value.stderr = ""
+
+            result = self.module.run(self.workspace, {"command": "list"})
+
+            run_mock.assert_called_once_with(["task", "list"], capture_output=True, text=True, check=False)
+            self.assertEqual(result, "1 Buy milk")
+
     def test_add_calls_task_add(self) -> None:
         with patch.object(self.module.subprocess, "run") as run_mock:
             run_mock.return_value.returncode = 0

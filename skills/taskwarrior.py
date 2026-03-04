@@ -6,7 +6,11 @@ from typing import Any
 from assistant_framework.workspace import Workspace
 
 NAME = "taskwarrior"
-DESCRIPTION = "Manage Taskwarrior todos (add/list/done)."
+DESCRIPTION = (
+    "Manage Taskwarrior todos. "
+    "Use args.action (or args.command) with one of: list/add/done. "
+    "add needs args.description, done needs args.id, list accepts optional args.filter."
+)
 
 
 def _run_task_command(command: list[str]) -> str:
@@ -28,7 +32,10 @@ def _run_task_command(command: list[str]) -> str:
 
 def run(workspace: Workspace, args: dict[str, Any]) -> str:
     _ = workspace
-    action = str(args.get("action", "list")).strip().lower()
+    action_raw = args.get("action")
+    if action_raw is None:
+        action_raw = args.get("command", "list")
+    action = str(action_raw).strip().lower()
 
     if action == "list":
         command = ["task", "list"]
