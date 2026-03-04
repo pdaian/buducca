@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/buducca-logo.svg" alt="Rainbow cartoony stuffed turtle in a lush forest with a BUDUCCA rainbow banner" width="900"/>
+</p>
+
 # Personal Assistant Agent Framework (Python, file-first)
 
 This repository includes a lightweight agent framework that is easy to extend for personal assistant workflows.
