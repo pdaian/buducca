@@ -19,9 +19,11 @@ class DummyLLM:
     def __init__(self, reply: str) -> None:
         self.reply = reply
         self.calls = 0
+        self.messages = None
 
-    def generate_reply(self, _messages):
+    def generate_reply(self, messages):
         self.calls += 1
+        self.messages = messages
         return self.reply
 
 
@@ -81,6 +83,47 @@ class BotTests(unittest.TestCase):
             sent = bot.telegram.sent[0][1]
             self.assertIn("collector:telegram_recent", sent)
             self.assertIn("last_success_at", sent)
+
+    def test_system_prompt_includes_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
+                'def run(workspace, args):\n    return args.get("text", "")\n',
+                encoding="utf-8",
+            )
+
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_message(1, "hi")
+
+            system_prompt = bot.llm.messages[0]["content"]
+            self.assertIn("Available skills", system_prompt)
+            self.assertIn("echo: Echoes user text.", system_prompt)
+            self.assertIn('"skill_call"', system_prompt)
+
+    def test_skill_call_output_executes_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n',
+                encoding="utf-8",
+            )
+
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM('{"skill_call": {"name": "echo", "args": {"text": "hello"}}}')
+
+            bot._handle_message(1, "run the echo skill")
+
+            self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
 
 
 if __name__ == "__main__":

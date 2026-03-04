@@ -94,6 +94,20 @@ python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk
 python3 run_skill.py taskwarrior --args '{"action":"done","id":"3"}'
 ```
 
+
+### Telegram skill invocation behavior
+
+The bot now injects a dynamic skill guide into the system prompt at runtime using files in `runtime.skills_dir` (default `skills`).
+
+- It lists every available skill name + description for the model.
+- If a user explicitly asks to run a skill, the model should answer with strict JSON:
+
+```json
+{"skill_call": {"name": "taskwarrior", "args": {"action": "list"}}}
+```
+
+When this output is detected, the bot executes the skill locally and sends the skill output back to Telegram.
+
 ## Where outputs go
 
 - Recent Telegram collection output: `workspace/telegram.recent`
