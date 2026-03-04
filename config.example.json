@@ -20,6 +20,14 @@
     "log_level": "INFO",
     "workspace_dir": "workspace",
     "collector_status_file": "collector_status.json",
-    "skills_dir": "skills"
+    "skills_dir": "skills",
+    "enable_voice_notes": false,
+    "voice_transcribe_command": [
+      "whisper-cli",
+      "--model",
+      "models/ggml-base.en.bin",
+      "--file",
+      "{input}"
+    ]
   }
 }

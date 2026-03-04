@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
+import tempfile
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -14,7 +16,7 @@ from assistant_framework import SkillManager, Workspace
 from .config import BotConfig
 from .http import HttpClient
 from .llm_client import OpenAICompatibleClient
-from .telegram_client import TelegramClient
+from .telegram_client import IncomingMessage, TelegramClient
 
 _TELEGRAM_MAX_MESSAGE_LEN = 4096
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -71,7 +73,7 @@ class BotRunner:
                 )
                 for update in updates:
                     self._offset = update.update_id + 1
-                    self._handle_message(update.chat_id, update.text)
+                    self._handle_update(update)
             except KeyboardInterrupt:
                 logging.info("Bot interrupted. Exiting.")
                 return
@@ -182,6 +184,51 @@ class BotRunner:
                 ]
             )
         return "\n".join(lines)
+
+    def _transcribe_voice_note(self, voice_file_id: str) -> str | None:
+        if not self.config.runtime.enable_voice_notes:
+            return None
+
+        command_template = self.config.runtime.voice_transcribe_command
+        file_path = self.telegram.get_file_path(voice_file_id)
+        voice_bytes = self.telegram.download_file(file_path)
+
+        with tempfile.TemporaryDirectory() as td:
+            input_path = Path(td) / "voice_note.ogg"
+            input_path.write_bytes(voice_bytes)
+
+            command = [part.replace("{input}", str(input_path)) for part in command_template]
+            if not any("{input}" in part for part in command_template):
+                command.append(str(input_path))
+
+            proc = subprocess.run(command, capture_output=True, text=True, check=False)
+            if proc.returncode != 0:
+                stderr = proc.stderr.strip() or "no stderr"
+                raise RuntimeError(f"voice transcription command failed: {stderr}")
+
+            transcript = proc.stdout.strip()
+            return transcript or None
+
+    def _handle_update(self, update: IncomingMessage) -> None:
+        if update.text:
+            self._handle_message(update.chat_id, update.text)
+            return
+
+        if not update.voice_file_id:
+            return
+
+        try:
+            transcript = self._transcribe_voice_note(update.voice_file_id)
+        except Exception:
+            logging.exception("Failed to transcribe voice note for chat_id=%s", update.chat_id)
+            self.telegram.send_message(update.chat_id, "I could not transcribe that voice note locally.")
+            return
+
+        if not transcript:
+            self.telegram.send_message(update.chat_id, "I received your voice note but could not extract text.")
+            return
+
+        self._handle_message(update.chat_id, f"[Voice note transcript]\n{transcript}")
 
     def _handle_message(self, chat_id: int, text: str) -> None:
         if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:

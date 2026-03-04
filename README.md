@@ -62,7 +62,38 @@ pip install telethon
 4. On first run, the app prints a login URL for QR sign-in. Open it and complete Telegram device linking.
 5. Future runs reuse the saved session automatically.
 
-## 4) Run the Telegram bot
+
+## 4) Enable local voice note parsing in the **main bot**
+
+This keeps transcription on your own machine (no external speech API required).
+
+1. Install a local speech-to-text CLI (for example `whisper.cpp`'s `whisper-cli`).
+2. In `config.json`, set:
+   - `runtime.enable_voice_notes = true`
+   - `runtime.voice_transcribe_command` to a command list that prints transcript text to stdout.
+3. Include `{input}` in the command where the downloaded Telegram voice-note file path should be inserted.
+
+Example:
+
+```json
+"runtime": {
+  "enable_voice_notes": true,
+  "voice_transcribe_command": [
+    "whisper-cli",
+    "--model",
+    "models/ggml-base.en.bin",
+    "--file",
+    "{input}"
+  ]
+}
+```
+
+When a voice note arrives, the bot downloads the file from Telegram, runs your local command, and feeds the transcript to the LLM as normal chat text.
+
+---
+
+
+## 5) Run the Telegram bot
 
 ```bash
 python3 run_bot.py --config config.json
@@ -70,7 +101,7 @@ python3 run_bot.py --config config.json
 
 You can send `/status` to the bot to check collector health and runtime info.
 
-## 5) Run a skill on demand
+## 6) Run a skill on demand
 
 ```bash
 python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
@@ -79,7 +110,7 @@ python3 run_skill.py summarize_workspace --workspace workspace --skills skills -
 ---
 
 
-## 6) Use the Taskwarrior skill
+## 7) Use the Taskwarrior skill
 
 If you have a local `task` CLI installed, you can manage todos directly:
 
