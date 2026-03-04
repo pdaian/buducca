@@ -1,0 +1,9 @@
+{
+  "collectors": {
+    "telegram_recent_collector": {
+      "bot_token": "123456:bot-token",
+      "timeout_seconds": 30,
+      "max_messages": 50
+    }
+  }
+}

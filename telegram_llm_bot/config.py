@@ -30,6 +30,8 @@ class LLMConfig:
 class RuntimeConfig:
     request_timeout_seconds: float = 30.0
     log_level: str = "INFO"
+    workspace_dir: str = "workspace"
+    collector_status_file: str = "collector_status.json"
 
 
 @dataclass
