@@ -78,6 +78,22 @@ python3 run_skill.py summarize_workspace --workspace workspace --skills skills -
 
 ---
 
+
+## 6) Use the Taskwarrior skill
+
+If you have a local `task` CLI installed, you can manage todos directly:
+
+```bash
+# List tasks
+python3 run_skill.py taskwarrior --args '{"action":"list"}'
+
+# Add a task
+python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk"}'
+
+# Mark task 3 as done
+python3 run_skill.py taskwarrior --args '{"action":"done","id":"3"}'
+```
+
 ## Where outputs go
 
 - Recent Telegram collection output: `workspace/telegram.recent`
