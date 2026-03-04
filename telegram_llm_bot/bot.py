@@ -255,6 +255,24 @@ class BotRunner:
                 transcript_path = input_path.with_suffix(".txt")
                 if transcript_path.exists():
                     transcript = transcript_path.read_text(encoding="utf-8").strip()
+
+            if not transcript:
+                for candidate in sorted(input_path.parent.glob("*.txt")):
+                    candidate_text = candidate.read_text(encoding="utf-8").strip()
+                    if candidate_text:
+                        transcript = candidate_text
+                        break
+
+            if not transcript:
+                for candidate in sorted(input_path.parent.glob("*.json")):
+                    try:
+                        payload = json.loads(candidate.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+                        transcript = payload["text"].strip()
+                        if transcript:
+                            break
             return transcript or None
 
     def _handle_update(self, update: IncomingMessage) -> None:

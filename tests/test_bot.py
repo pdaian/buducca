@@ -278,6 +278,48 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(transcript, "whisper transcript")
 
+    def test_transcribe_voice_note_reads_first_non_empty_txt_when_name_differs(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import sys; from pathlib import Path; out = Path(sys.argv[1]); "
+                        "(out / 'alt_name.txt').write_text('fallback transcript', encoding='utf-8')"
+                    ),
+                    "{input_dir}",
+                ],
+            )
+        )
+        bot.telegram = DummyTelegram()
+
+        transcript = bot._transcribe_voice_note("voice-id")
+
+        self.assertEqual(transcript, "fallback transcript")
+
+    def test_transcribe_voice_note_reads_json_text_payload(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import json, sys; from pathlib import Path; out = Path(sys.argv[1]); "
+                        "(out / 'transcript.json').write_text(json.dumps({'text': 'json transcript'}), encoding='utf-8')"
+                    ),
+                    "{input_dir}",
+                ],
+            )
+        )
+        bot.telegram = DummyTelegram()
+
+        transcript = bot._transcribe_voice_note("voice-id")
+
+        self.assertEqual(transcript, "json transcript")
+
     def test_handle_voice_update_uses_transcript(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
         bot.telegram = DummyTelegram()
