@@ -41,6 +41,10 @@ python3 run_skill.py file --args '{"action":"read","path":"telegram.recent"}'
 python3 run_skill.py file --args '{"action":"write","path":"notes/today.txt","content":"Top priorities"}'
 python3 run_skill.py file --args '{"action":"append","path":"notes/today.txt","content":"\n- ship update"}'
 
+# Web search (DuckDuckGo, no API key)
+python3 run_skill.py web_search --args '{"query":"latest python 3.12 release notes"}'
+python3 run_skill.py web_search --args '{"query":"rust tokio tutorial","max_results":5}'
+
 # Taskwarrior examples
 python3 run_skill.py taskwarrior --args '{"action":"list"}'
 python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home","due":"tomorrow"}'
