@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+class RequestTimeoutError(RuntimeError):
+    """Raised when an HTTP request times out."""
 
 
 class HttpClient:
@@ -28,6 +33,8 @@ class HttpClient:
         try:
             with urlopen(req, timeout=self.timeout_seconds) as response:
                 return response.read()
+        except (socket.timeout, TimeoutError) as err:
+            raise RequestTimeoutError(f"Request timed out for {req.full_url}") from err
         except HTTPError as err:
             detail = err.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"HTTP {err.code} for {req.full_url}: {detail}") from err
@@ -38,6 +45,8 @@ class HttpClient:
         try:
             with urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
+        except (socket.timeout, TimeoutError) as err:
+            raise RequestTimeoutError(f"Request timed out for {req.full_url}") from err
         except HTTPError as err:
             detail = err.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"HTTP {err.code} for {req.full_url}: {detail}") from err
