@@ -179,6 +179,27 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
 
+    def test_skill_call_parses_json_after_think_block(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            """I will run that now.
+{"skill_call": {"name": "taskwarrior", "args": {"action": "list"}}}"""
+        )
+
+        self.assertEqual(parsed, {"name": "taskwarrior", "args": {"action": "list"}})
+
+    def test_skill_call_parses_first_valid_json_block(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            """Great idea.
+{"note": "not a tool call"}
+{"skill_call": {"name": "echo", "args": {"text": "hi"}}}"""
+        )
+
+        self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}})
+
     def test_transcribe_voice_note_reads_whisper_txt_output(self) -> None:
         bot = self.make_bot(
             runtime=RuntimeConfig(

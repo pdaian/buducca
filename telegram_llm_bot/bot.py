@@ -102,6 +102,7 @@ class BotRunner:
         return messages
 
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
+        payload: Any | None = None
         payload_text = reply.strip()
         fenced = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", payload_text, re.DOTALL)
         if fenced:
@@ -110,7 +111,17 @@ class BotRunner:
         try:
             payload = json.loads(payload_text)
         except json.JSONDecodeError:
-            return None
+            decoder = json.JSONDecoder()
+            for match in re.finditer(r"\{", payload_text):
+                try:
+                    parsed, _end = decoder.raw_decode(payload_text[match.start() :])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict) and isinstance(parsed.get("skill_call"), dict):
+                    payload = parsed
+                    break
+            if payload is None:
+                return None
 
         if not isinstance(payload, dict):
             return None
