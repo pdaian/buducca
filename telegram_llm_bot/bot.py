@@ -22,6 +22,7 @@ _TELEGRAM_MAX_MESSAGE_LEN = 4096
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
+_MAX_SKILL_CHAIN_STEPS = 12
 
 
 class BotRunner:
@@ -62,9 +63,11 @@ class BotRunner:
         skill_lines.extend(
             [
                 "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
-                '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}}}',
+                '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}, "done": <true|false>}}',
                 "Do not include any extra text before or after JSON.",
                 "Use skill_call only when user explicitly requests a skill run or task execution.",
+                "If done is false, the tool result will be provided back to you so you can choose the next step.",
+                "If done is true, the tool result is sent to the user as the final answer.",
             ]
         )
         return f"{base_prompt}\n\n" + "\n".join(skill_lines)
@@ -151,7 +154,42 @@ class BotRunner:
         args = skill_call.get("args", {})
         if not isinstance(args, dict):
             return None
-        return {"name": skill_call["name"], "args": args}
+        done = skill_call.get("done", payload.get("done", True))
+        if not isinstance(done, bool):
+            done = True
+        return {"name": skill_call["name"], "args": args, "done": done}
+
+    def _continue_skill_chain_prompt(self, skill_name: str, skill_result: str) -> str:
+        return (
+            f"Skill `{skill_name}` returned:\n{skill_result}\n\n"
+            "If you need another skill call, respond with valid JSON skill_call and done=false. "
+            "If no more skills are needed, respond normally to the user."
+        )
+
+    def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
+        model_reply = initial_model_reply
+        for _ in range(_MAX_SKILL_CHAIN_STEPS):
+            skill_call = self._try_parse_skill_call(model_reply)
+            if not skill_call:
+                return model_reply
+
+            skill_result = self._strip_think_blocks(
+                self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+            )
+            if skill_call["done"]:
+                return skill_result
+
+            prompt.append({"role": "assistant", "content": model_reply})
+            prompt.append(
+                {
+                    "role": "user",
+                    "content": self._continue_skill_chain_prompt(skill_call["name"], skill_result),
+                }
+            )
+            model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+
+        logging.warning("Skill chain exceeded max steps (%s)", _MAX_SKILL_CHAIN_STEPS)
+        return "I stopped after too many chained skill calls. Please narrow the request and try again."
 
     def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:
         if name not in self._skills:
@@ -310,13 +348,7 @@ class BotRunner:
             prompt = self._build_messages(chat_id, text)
             try:
                 model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
-                skill_call = self._try_parse_skill_call(model_reply)
-                if skill_call:
-                    reply = self._strip_think_blocks(
-                        self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
-                    )
-                else:
-                    reply = model_reply
+                reply = self._resolve_llm_reply(prompt, model_reply)
             except RequestTimeoutError:
                 logging.warning("LLM request timed out for chat_id=%s", chat_id)
                 self.telegram.send_message(
