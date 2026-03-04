@@ -47,6 +47,10 @@ class BotRunner:
         self._workspace = Workspace(self.config.runtime.workspace_dir)
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
 
+    @property
+    def _debug_enabled(self) -> bool:
+        return self.config.runtime.debug or self.config.runtime.log_level.upper() == "DEBUG"
+
     def _build_system_prompt(self) -> str:
         base_prompt = self.config.llm.system_prompt.strip()
         if not self._skills:
@@ -169,7 +173,7 @@ class BotRunner:
 
     def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
         model_reply = initial_model_reply
-        for _ in range(_MAX_SKILL_CHAIN_STEPS):
+        for step_index in range(_MAX_SKILL_CHAIN_STEPS):
             skill_call = self._try_parse_skill_call(model_reply)
             if not skill_call:
                 return model_reply
@@ -187,7 +191,21 @@ class BotRunner:
                     "content": self._continue_skill_chain_prompt(skill_call["name"], skill_result),
                 }
             )
+            if self._debug_enabled:
+                logging.debug(
+                    "Skill chain step %s/%s prompt before intermediate LLM call: %s",
+                    step_index + 1,
+                    _MAX_SKILL_CHAIN_STEPS,
+                    prompt,
+                )
             model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+            if self._debug_enabled:
+                logging.debug(
+                    "Skill chain step %s/%s intermediate LLM response: %s",
+                    step_index + 1,
+                    _MAX_SKILL_CHAIN_STEPS,
+                    model_reply,
+                )
 
         logging.warning("Skill chain exceeded max steps (%s)", _MAX_SKILL_CHAIN_STEPS)
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
