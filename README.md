@@ -30,13 +30,13 @@ cp agent_config.example.json agent_config.json
 cp config.example.json config.json
 ```
 
-- `agent_config.json` is for collectors.
-- `config.json` is for the Telegram bot runtime.
+- `agent_config.json` is for collectors (including a collector-specific Telegram token).
+- `config.json` is for the main Telegram bot runtime token and LLM settings.
 
 ## 2) Collect recent Telegram messages (bot token flow)
 
 1. Open `agent_config.json`.
-2. Set `collectors.telegram_recent_collector.bot_token`.
+2. Set `collectors.telegram_recent_collector.collector_bot_token` (this can be different from the main bot token in `config.json`).
 3. Start collectors:
 
 ```bash
