@@ -139,6 +139,21 @@ The bot now injects a dynamic skill guide into the system prompt at runtime usin
 
 When this output is detected, the bot executes the skill locally and sends the skill output back to Telegram.
 
+
+## 8) Reset workspace + ephemeral local data
+
+Use the helper script to clean generated workspace files and local caches:
+
+```bash
+python3 reset_workspace.py --dry-run
+python3 reset_workspace.py --yes
+```
+
+By default it removes:
+- your configured runtime workspace directory (from `config.json`, default `workspace`)
+- configured Telegram user session path (from `agent_config.json`, if present)
+- common Python/test caches (`__pycache__`, `*.pyc`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.coverage`)
+
 ## Where outputs go
 
 - Recent Telegram collection output: `workspace/telegram.recent`
