@@ -3,7 +3,14 @@
     "telegram_recent_collector": {
       "bot_token": "123456:bot-token",
       "timeout_seconds": 30,
-      "max_messages": 50
+      "max_messages": 50,
+      "user_client": {
+        "enabled": false,
+        "api_id": 123456,
+        "api_hash": "your_api_hash",
+        "session_path": "workspace/collectors/telegram_user",
+        "qr_wait_seconds": 120
+      }
     }
   }
 }

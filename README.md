@@ -1,79 +1,81 @@
-# Personal Assistant Agent Framework (Python, file-first)
+# Personal Assistant Agent Framework
 
-This repository includes a lightweight agent framework that is easy to extend for personal assistant workflows.
+This repo gives you a simple way to run your own personal assistant with local files.
 
-## Architecture
+## What this project does
 
-The framework is built around three pluggable components:
+You can use this project to:
+- run a Telegram bot
+- collect recent Telegram messages into local files
+- run small assistant "skills" against your workspace data
 
-1. **Workspace (`workspace/`)**
-   - A local folder where the agent reads/writes durable files.
-   - Skills and collectors operate through the same workspace abstraction.
+## What makes it unique
 
-2. **Skills (`skills/*.py`)**
-   - Python files that expose a callable `run(workspace, args)`.
-   - Loaded dynamically at runtime.
+- **File-first design:** everything important is saved in your local workspace folder.
+- **Modular pieces:** you can add collectors and skills without changing the whole app.
+- **Works with both Telegram bot + user account collection:** the Telegram collector can use a normal bot token, and can also optionally use a user session (QR login) to read messages bots cannot access.
 
-3. **Data Collectors (`collectors/*.py`)**
-   - Python files that expose either:
-     - `create_collector(config)` returning `{name, interval_seconds, run}`
-     - or module globals + `run(workspace)`.
-   - Executed by a **separate background runner** (`run_collectors.py`) on intervals.
-   - Persist execution stats to `workspace/collector_status.json`.
+---
 
-## Included Collector: Telegram Recent Messages
+## Common things you may want to do
 
-`collectors/telegram_recent_collector.py` pulls recent Telegram updates and writes newline-delimited JSON records to:
-
-- `workspace/telegram.recent`
-
-It uses a lightweight Telegram Bot API client with token authentication (`TelegramLiteClient`) and stores polling offset in:
-
-- `workspace/collectors/telegram_recent.offset`
-
-## Telegram `/status` command
-
-When running `run_bot.py`, sending `/status` to the bot returns:
-
-- bot uptime and handled message count
-- active in-memory chat count
-- collector loop metadata (loop count, update time)
-- per-collector success/failure counts and `last_success_at`
-
-`/status` reads from `runtime.workspace_dir/runtime.collector_status_file` (defaults to `workspace/collector_status.json`) which is produced by `run_collectors.py`.
-
-## Quick Start
-
-### 1) Prepare collector config
+## 1) Start from example config files
 
 ```bash
 cp agent_config.example.json agent_config.json
-```
-
-Edit `agent_config.json` and set your Telegram bot token for collectors.
-
-### 2) (Optional) Prepare bot config for `/status`
-
-```bash
 cp config.example.json config.json
 ```
 
-By default, bot status reads from `workspace/collector_status.json`.
+- `agent_config.json` is for collectors.
+- `config.json` is for the Telegram bot runtime.
 
-### 3) Run collectors in background process
+## 2) Collect recent Telegram messages (bot token flow)
+
+1. Open `agent_config.json`.
+2. Set `collectors.telegram_recent_collector.bot_token`.
+3. Start collectors:
 
 ```bash
 python3 run_collectors.py --workspace workspace --collectors collectors --config agent_config.json
 ```
 
-### 4) Run Telegram bot
+Collected messages are written to `workspace/telegram.recent`.
+
+## 3) Collect Telegram messages from your **user account** (QR flow)
+
+Use this if you want messages a bot account usually cannot see.
+
+1. Install Telethon once:
+
+```bash
+pip install telethon
+```
+
+2. In `agent_config.json`, enable:
+   - `collectors.telegram_recent_collector.user_client.enabled = true`
+   - set your `api_id` and `api_hash`
+3. Run collectors (same command as above).
+4. On first run, the app prints a login URL for QR sign-in. Open it and complete Telegram device linking.
+5. Future runs reuse the saved session automatically.
+
+## 4) Run the Telegram bot
 
 ```bash
 python3 run_bot.py --config config.json
 ```
 
-### 5) Run a skill on demand
+You can send `/status` to the bot to check collector health and runtime info.
+
+## 5) Run a skill on demand
 
 ```bash
 python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 ```
+
+---
+
+## Where outputs go
+
+- Recent Telegram collection output: `workspace/telegram.recent`
+- Collector status file: `workspace/collector_status.json`
+- Telegram collector state: `workspace/collectors/telegram_recent.offset`
