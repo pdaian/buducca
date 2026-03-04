@@ -17,6 +17,8 @@
   },
   "runtime": {
     "request_timeout_seconds": 30,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "workspace_dir": "workspace",
+    "collector_status_file": "collector_status.json"
   }
 }

@@ -1,68 +1,79 @@
-# Telegram LLM Bot Framework (Python, minimal dependencies)
+# Personal Assistant Agent Framework (Python, file-first)
 
-A lightweight Telegram bot framework using only Python's standard library.
+This repository includes a lightweight agent framework that is easy to extend for personal assistant workflows.
 
-## What it does
+## Architecture
 
-- Logs in using your Telegram bot key.
-- Receives text messages with long polling.
-- Sends message context to a configurable OpenAI-compatible endpoint.
-- Returns model replies to Telegram.
+The framework is built around three pluggable components:
 
-## Features
+1. **Workspace (`workspace/`)**
+   - A local folder where the agent reads/writes durable files.
+   - Skills and collectors operate through the same workspace abstraction.
 
-- **No third-party dependencies** (stdlib only).
-- **Config file driven** (`config.json`).
-- **OpenAI-compatible endpoint path is configurable** (default: `/chat/completions`).
-- **Per-chat short conversation memory** (bounded).
-- **Optional chat allowlist** using `allowed_chat_ids`.
-- **Auto-splits long replies** to Telegram's message size limit.
+2. **Skills (`skills/*.py`)**
+   - Python files that expose a callable `run(workspace, args)`.
+   - Loaded dynamically at runtime.
 
-## Files
+3. **Data Collectors (`collectors/*.py`)**
+   - Python files that expose either:
+     - `create_collector(config)` returning `{name, interval_seconds, run}`
+     - or module globals + `run(workspace)`.
+   - Executed by a **separate background runner** (`run_collectors.py`) on intervals.
+   - Persist execution stats to `workspace/collector_status.json`.
 
-- `run_bot.py` – entrypoint.
-- `telegram_llm_bot/config.py` – config dataclasses + validation.
-- `telegram_llm_bot/http.py` – minimal JSON HTTP client.
-- `telegram_llm_bot/telegram_client.py` – Telegram API wrapper.
-- `telegram_llm_bot/llm_client.py` – OpenAI-compatible API wrapper.
-- `telegram_llm_bot/bot.py` – bot orchestration and memory.
+## Included Collector: Telegram Recent Messages
 
-## Quick start
+`collectors/telegram_recent_collector.py` pulls recent Telegram updates and writes newline-delimited JSON records to:
+
+- `workspace/telegram.recent`
+
+It uses a lightweight Telegram Bot API client with token authentication (`TelegramLiteClient`) and stores polling offset in:
+
+- `workspace/collectors/telegram_recent.offset`
+
+## Telegram `/status` command
+
+When running `run_bot.py`, sending `/status` to the bot returns:
+
+- bot uptime and handled message count
+- active in-memory chat count
+- collector loop metadata (loop count, update time)
+- per-collector success/failure counts and `last_success_at`
+
+`/status` reads from `runtime.workspace_dir/runtime.collector_status_file` (defaults to `workspace/collector_status.json`) which is produced by `run_collectors.py`.
+
+## Quick Start
+
+### 1) Prepare collector config
+
+```bash
+cp agent_config.example.json agent_config.json
+```
+
+Edit `agent_config.json` and set your Telegram bot token for collectors.
+
+### 2) (Optional) Prepare bot config for `/status`
 
 ```bash
 cp config.example.json config.json
+```
+
+By default, bot status reads from `workspace/collector_status.json`.
+
+### 3) Run collectors in background process
+
+```bash
+python3 run_collectors.py --workspace workspace --collectors collectors --config agent_config.json
+```
+
+### 4) Run Telegram bot
+
+```bash
 python3 run_bot.py --config config.json
 ```
 
-## Configuration
+### 5) Run a skill on demand
 
-```json
-{
-  "telegram": {
-    "bot_token": "123456:token",
-    "poll_interval_seconds": 0.2,
-    "long_poll_timeout_seconds": 30,
-    "allowed_chat_ids": []
-  },
-  "llm": {
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "your-key",
-    "model": "gpt-4o-mini",
-    "endpoint_path": "/chat/completions",
-    "system_prompt": "You are a concise and helpful assistant.",
-    "temperature": 0.2,
-    "max_tokens": 400,
-    "history_messages": 8
-  },
-  "runtime": {
-    "request_timeout_seconds": 30,
-    "log_level": "INFO"
-  }
-}
+```bash
+python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 ```
-
-### Notes
-
-- `history_messages` is the number of past user+assistant turns retained per chat.
-- Validation errors are raised at startup if required config fields are missing.
-- Only text messages are processed.
