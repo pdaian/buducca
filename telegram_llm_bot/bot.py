@@ -209,7 +209,10 @@ class BotRunner:
             input_path = Path(td) / "voice_note.ogg"
             input_path.write_bytes(voice_bytes)
 
-            command = [part.replace("{input}", str(input_path)) for part in command_template]
+            command = [
+                part.replace("{input}", str(input_path)).replace("{input_dir}", str(input_path.parent))
+                for part in command_template
+            ]
             if not any("{input}" in part for part in command_template):
                 command.append(str(input_path))
 
@@ -219,6 +222,10 @@ class BotRunner:
                 raise RuntimeError(f"voice transcription command failed: {stderr}")
 
             transcript = proc.stdout.strip()
+            if not transcript:
+                transcript_path = input_path.with_suffix(".txt")
+                if transcript_path.exists():
+                    transcript = transcript_path.read_text(encoding="utf-8").strip()
             return transcript or None
 
     def _handle_update(self, update: IncomingMessage) -> None:
