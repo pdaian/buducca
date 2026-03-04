@@ -10,9 +10,17 @@ from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, Telegra
 class DummyTelegram:
     def __init__(self) -> None:
         self.sent = []
+        self.file_path = "voice/test.ogg"
+        self.file_bytes = b"dummy"
 
     def send_message(self, chat_id: int, text: str) -> None:
         self.sent.append((chat_id, text))
+
+    def get_file_path(self, file_id: str) -> str:
+        return self.file_path
+
+    def download_file(self, file_path: str) -> bytes:
+        return self.file_bytes
 
 
 class DummyLLM:
@@ -145,6 +153,35 @@ class BotTests(unittest.TestCase):
             bot._handle_message(1, "run the echo skill")
 
             self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
+
+    def test_handle_voice_update_uses_transcript(self) -> None:
+        bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("heard")
+        bot._transcribe_voice_note = lambda _fid: "turn on lights"
+
+        from telegram_llm_bot.telegram_client import IncomingMessage
+
+        bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
+
+        self.assertEqual(bot.telegram.sent, [(1, "heard")])
+        self.assertIn("Voice note transcript", bot.llm.messages[-1]["content"])
+
+    def test_handle_voice_update_replies_on_transcription_error(self) -> None:
+        bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("unused")
+
+        def _boom(_fid: str):
+            raise RuntimeError("bad")
+
+        bot._transcribe_voice_note = _boom
+
+        from telegram_llm_bot.telegram_client import IncomingMessage
+
+        bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
+
+        self.assertEqual(bot.telegram.sent, [(1, "I could not transcribe that voice note locally.")])
 
 
 if __name__ == "__main__":

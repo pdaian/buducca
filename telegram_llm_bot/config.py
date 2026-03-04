@@ -33,6 +33,8 @@ class RuntimeConfig:
     workspace_dir: str = "workspace"
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
+    enable_voice_notes: bool = False
+    voice_transcribe_command: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +64,8 @@ def _validate(config: BotConfig) -> None:
         raise ValueError("llm.model must be set")
     if config.llm.history_messages < 0:
         raise ValueError("llm.history_messages must be >= 0")
+    if config.runtime.enable_voice_notes and not config.runtime.voice_transcribe_command:
+        raise ValueError("runtime.voice_transcribe_command must be set when runtime.enable_voice_notes is true")
 
 
 def load_config(path: str | Path) -> BotConfig:

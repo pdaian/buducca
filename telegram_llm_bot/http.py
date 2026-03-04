@@ -23,6 +23,17 @@ class HttpClient:
         req = Request(url=url, method="GET")
         return self._request_json(req)
 
+    def get_bytes(self, url: str) -> bytes:
+        req = Request(url=url, method="GET")
+        try:
+            with urlopen(req, timeout=self.timeout_seconds) as response:
+                return response.read()
+        except HTTPError as err:
+            detail = err.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {err.code} for {req.full_url}: {detail}") from err
+        except URLError as err:
+            raise RuntimeError(f"Failed request to {req.full_url}: {err}") from err
+
     def _request_json(self, req: Request) -> dict[str, Any]:
         try:
             with urlopen(req, timeout=self.timeout_seconds) as response:
