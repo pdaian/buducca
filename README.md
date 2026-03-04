@@ -46,6 +46,25 @@ python3 reset_workspace.py --dry-run
 python3 reset_workspace.py --yes
 ```
 
+## Voice notes with OpenAI Whisper CLI
+
+When `runtime.enable_voice_notes` is `true`, `runtime.voice_transcribe_command` can call the Python `whisper` command directly. The bot replaces:
+
+- `{input}` with the downloaded voice-note path
+- `{input_dir}` with the temporary directory containing that file
+
+Example command array for `config.json`:
+
+```json
+"voice_transcribe_command": [
+  "whisper",
+  "--model", "base.en",
+  "--output_dir", "{input_dir}",
+  "--output_format", "txt",
+  "{input}"
+]
+```
+
 ## Optional: Telegram user-account collection (QR login)
 
 If you need messages a normal bot token cannot access:

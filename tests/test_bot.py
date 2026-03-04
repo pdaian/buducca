@@ -173,6 +173,28 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
 
+    def test_transcribe_voice_note_reads_whisper_txt_output(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import sys; from pathlib import Path; p = Path(sys.argv[1]); "
+                        "Path(sys.argv[2], p.stem + '.txt').write_text('whisper transcript', encoding='utf-8')"
+                    ),
+                    "{input}",
+                    "{input_dir}",
+                ],
+            )
+        )
+        bot.telegram = DummyTelegram()
+
+        transcript = bot._transcribe_voice_note("voice-id")
+
+        self.assertEqual(transcript, "whisper transcript")
+
     def test_handle_voice_update_uses_transcript(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
         bot.telegram = DummyTelegram()
