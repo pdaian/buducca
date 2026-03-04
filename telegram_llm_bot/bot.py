@@ -31,7 +31,7 @@ class BotRunner:
         self.llm = OpenAICompatibleClient(
             config=config.llm,
             http_client=http_client,
-            debug=config.runtime.debug,
+            debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
         )
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids)

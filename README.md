@@ -76,7 +76,7 @@ If you need messages a normal bot token cannot access:
 
 ## Debug mode
 
-Set `runtime.debug` to `true` in `config.json` to force DEBUG logging and print full LLM request/response payloads plus request timing data.
+Set `runtime.debug` to `true` in `config.json` to force DEBUG logging and print full LLM request/response payloads plus request timing data. You can also set `runtime.log_level` to `"DEBUG"` to enable the same model-call verbosity.
 
 ## Data locations
 
