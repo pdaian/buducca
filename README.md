@@ -1,4 +1,8 @@
-# Personal Assistant Agent Framework
+<p align="center">
+  <img src="assets/buducca-logo.svg" alt="Rainbow cartoony stuffed turtle in a lush forest with a BUDUCCA rainbow banner" width="900"/>
+</p>
+
+# Personal Assistant Agent Framework (Python, file-first)
 
 This repo gives you a simple way to run your own personal assistant with local files.
 
