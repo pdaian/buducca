@@ -1,0 +1,22 @@
+{
+  "telegram": {
+    "bot_token": "123456:replace-with-your-telegram-token",
+    "poll_interval_seconds": 0.2,
+    "long_poll_timeout_seconds": 30,
+    "allowed_chat_ids": []
+  },
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "replace-with-api-key",
+    "model": "gpt-4o-mini",
+    "endpoint_path": "/chat/completions",
+    "system_prompt": "You are a concise and helpful assistant.",
+    "temperature": 0.2,
+    "max_tokens": 400,
+    "history_messages": 8
+  },
+  "runtime": {
+    "request_timeout_seconds": 30,
+    "log_level": "INFO"
+  }
+}
