@@ -53,6 +53,27 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.telegram.sent, [(1, "hello")])
         self.assertEqual(len(bot._history[1]), 2)
 
+    def test_handle_message_strips_think_blocks_from_reply_and_history(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("<think>private reasoning</think>hello")
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(bot.telegram.sent, [(1, "hello")])
+        self.assertEqual(bot._history[1][1]["content"], "hello")
+
+
+    def test_logs_debug_when_think_blocks_filtered(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("<think>private reasoning</think>hello")
+
+        with self.assertLogs(level="DEBUG") as logs:
+            bot._handle_message(1, "hi")
+
+        self.assertTrue(any("Filtered <think> block(s) from llm output" in line for line in logs.output))
+
     def test_status_command_uses_collector_status_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             ws = Path(td) / "workspace"
