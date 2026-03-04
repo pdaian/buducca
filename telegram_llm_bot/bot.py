@@ -17,6 +17,7 @@ from .llm_client import OpenAICompatibleClient
 from .telegram_client import TelegramClient
 
 _TELEGRAM_MAX_MESSAGE_LEN = 4096
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
 class BotRunner:
@@ -132,6 +133,11 @@ class BotRunner:
             start += _TELEGRAM_MAX_MESSAGE_LEN
         return chunks
 
+    def _strip_think_blocks(self, text: str, *, source: str) -> str:
+        if _THINK_BLOCK_RE.search(text):
+            logging.debug("Filtered <think> block(s) from %s output", source)
+        return _THINK_BLOCK_RE.sub("", text).strip()
+
     def _read_collector_status(self) -> dict:
         status_path = Path(self.config.runtime.workspace_dir) / self.config.runtime.collector_status_file
         if not status_path.exists():
@@ -189,10 +195,12 @@ class BotRunner:
             reply = self._build_status_message()
         else:
             prompt = self._build_messages(chat_id, text)
-            model_reply = self.llm.generate_reply(prompt)
+            model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
             skill_call = self._try_parse_skill_call(model_reply)
             if skill_call:
-                reply = self._run_skill_call(skill_call["name"], skill_call["args"])
+                reply = self._strip_think_blocks(
+                    self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+                )
             else:
                 reply = model_reply
             self._history[chat_id].append({"role": "user", "content": text})
