@@ -63,6 +63,12 @@ class BotTests(unittest.TestCase):
         )
         return BotRunner(cfg)
 
+    def test_llm_verbose_debug_enabled_when_log_level_is_debug(self) -> None:
+        runtime = RuntimeConfig(log_level="DEBUG", debug=False)
+        bot = self.make_bot(runtime=runtime)
+
+        self.assertTrue(bot.llm.debug)
+
     def test_split_long_message(self) -> None:
         bot = self.make_bot()
         parts = bot._split_for_telegram("a" * 5000)
