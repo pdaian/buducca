@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Deque
+from typing import Any, Deque
+
+from assistant_framework import SkillManager, Workspace
 
 from .config import BotConfig
 from .http import HttpClient
@@ -31,6 +34,31 @@ class BotRunner:
         self._history: dict[int, Deque[dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=self.config.llm.history_messages * 2)
         )
+        self._workspace = Workspace(self.config.runtime.workspace_dir)
+        self._skills = SkillManager(self.config.runtime.skills_dir).load()
+
+    def _build_system_prompt(self) -> str:
+        base_prompt = self.config.llm.system_prompt.strip()
+        if not self._skills:
+            return base_prompt
+
+        skill_lines = [
+            "You can call local skills if a user asks you to run one.",
+            "Available skills:",
+        ]
+        for name in sorted(self._skills):
+            description = self._skills[name].description or "No description provided."
+            skill_lines.append(f"- {name}: {description}")
+
+        skill_lines.extend(
+            [
+                "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
+                '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}}}',
+                "Do not include any extra text before or after JSON.",
+                "Use skill_call only when user explicitly requests a skill run or task execution.",
+            ]
+        )
+        return f"{base_prompt}\n\n" + "\n".join(skill_lines)
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")
@@ -53,10 +81,44 @@ class BotRunner:
             time.sleep(self.config.telegram.poll_interval_seconds)
 
     def _build_messages(self, chat_id: int, text: str) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = [{"role": "system", "content": self.config.llm.system_prompt}]
+        messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[chat_id])
         messages.append({"role": "user", "content": text})
         return messages
+
+    def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
+        payload_text = reply.strip()
+        fenced = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", payload_text, re.DOTALL)
+        if fenced:
+            payload_text = fenced.group(1).strip()
+
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+        skill_call = payload.get("skill_call")
+        if not isinstance(skill_call, dict):
+            return None
+        if not isinstance(skill_call.get("name"), str):
+            return None
+        args = skill_call.get("args", {})
+        if not isinstance(args, dict):
+            return None
+        return {"name": skill_call["name"], "args": args}
+
+    def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:
+        if name not in self._skills:
+            available = ", ".join(sorted(self._skills)) or "(none)"
+            return f"Unknown skill '{name}'. Available skills: {available}"
+
+        try:
+            return self._skills[name].run(self._workspace, args)
+        except Exception as exc:
+            logging.exception("Skill execution failed for %s", name)
+            return f"Skill '{name}' failed: {exc}"
 
     def _split_for_telegram(self, text: str) -> list[str]:
         if len(text) <= _TELEGRAM_MAX_MESSAGE_LEN:
@@ -127,7 +189,12 @@ class BotRunner:
             reply = self._build_status_message()
         else:
             prompt = self._build_messages(chat_id, text)
-            reply = self.llm.generate_reply(prompt)
+            model_reply = self.llm.generate_reply(prompt)
+            skill_call = self._try_parse_skill_call(model_reply)
+            if skill_call:
+                reply = self._run_skill_call(skill_call["name"], skill_call["args"])
+            else:
+                reply = model_reply
             self._history[chat_id].append({"role": "user", "content": text})
             self._history[chat_id].append({"role": "assistant", "content": reply})
 

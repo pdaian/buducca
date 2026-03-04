@@ -32,6 +32,7 @@ class RuntimeConfig:
     log_level: str = "INFO"
     workspace_dir: str = "workspace"
     collector_status_file: str = "collector_status.json"
+    skills_dir: str = "skills"
 
 
 @dataclass
