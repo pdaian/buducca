@@ -38,6 +38,20 @@ class DummyLLM:
         return self.reply
 
 
+class SequentialLLM:
+    def __init__(self, replies) -> None:
+        self.replies = list(replies)
+        self.calls = 0
+        self.messages = None
+
+    def generate_reply(self, messages):
+        self.calls += 1
+        self.messages = messages
+        if not self.replies:
+            raise RuntimeError("no more replies")
+        return self.replies.pop(0)
+
+
 class BrokenLLM:
     def generate_reply(self, messages):
         raise RuntimeError("llm parse failed")
@@ -188,7 +202,33 @@ class BotTests(unittest.TestCase):
 
             bot._handle_message(1, "run the echo skill")
 
-            self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
+        self.assertEqual(bot.telegram.sent, [(1, "echo:hello")])
+
+    def test_skill_call_chain_requeries_until_done(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n',
+                encoding="utf-8",
+            )
+
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = SequentialLLM(
+                [
+                    '{"skill_call": {"name": "echo", "args": {"text": "step1"}, "done": false}}',
+                    '{"skill_call": {"name": "echo", "args": {"text": "step2"}, "done": true}}',
+                ]
+            )
+
+            bot._handle_message(1, "run multi-step")
+
+            self.assertEqual(bot.telegram.sent, [(1, "echo:step2")])
+            self.assertEqual(bot.llm.calls, 2)
+            self.assertIn("Skill `echo` returned:\necho:step1", bot.llm.messages[-1]["content"])
 
     def test_skill_call_parses_json_after_think_block(self) -> None:
         bot = self.make_bot()
@@ -198,7 +238,7 @@ class BotTests(unittest.TestCase):
 {"skill_call": {"name": "taskwarrior", "args": {"action": "list"}}}"""
         )
 
-        self.assertEqual(parsed, {"name": "taskwarrior", "args": {"action": "list"}})
+        self.assertEqual(parsed, {"name": "taskwarrior", "args": {"action": "list"}, "done": True})
 
     def test_skill_call_parses_first_valid_json_block(self) -> None:
         bot = self.make_bot()
@@ -209,7 +249,7 @@ class BotTests(unittest.TestCase):
 {"skill_call": {"name": "echo", "args": {"text": "hi"}}}"""
         )
 
-        self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}})
+        self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}, "done": True})
 
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
