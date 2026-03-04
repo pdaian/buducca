@@ -17,7 +17,7 @@ Run your own Telegram assistant with a tiny, understandable Python stack.
 ## High-value use cases
 
 - 💬 **Telegram personal assistant:** ask for summaries, reminders, context from recent messages.
-- ✅ **Todo manager:** run local Taskwarrior commands from chat (`list`, `add`, `done`).
+- ✅ **Todo manager:** run local Taskwarrior commands from chat (`list`, `add`, `modify`, `done`) with project/due support.
 - 🧠 **Workspace summarizer:** turn collected chat history into fast local briefings.
 - 🎤 **Private voice-note assistant:** transcribe voice notes using your own local speech CLI.
 
@@ -36,9 +36,15 @@ python3 run_bot.py --config config.json
 # Run a skill manually
 python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 
+# File skill examples
+python3 run_skill.py file --args '{"action":"read","path":"telegram.recent"}'
+python3 run_skill.py file --args '{"action":"write","path":"notes/today.txt","content":"Top priorities"}'
+python3 run_skill.py file --args '{"action":"append","path":"notes/today.txt","content":"\n- ship update"}'
+
 # Taskwarrior examples
 python3 run_skill.py taskwarrior --args '{"action":"list"}'
-python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk"}'
+python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home","due":"tomorrow"}'
+python3 run_skill.py taskwarrior --args '{"action":"modify","id":"3","project":"Errands","due":"eod"}'
 python3 run_skill.py taskwarrior --args '{"action":"done","id":"3"}'
 
 # Reset generated local state

@@ -29,6 +29,14 @@ class TaskwarriorSkillTests(unittest.TestCase):
         result = self.module.run(self.workspace, {"action": "done"})
         self.assertEqual(result, "Missing required arg `id` for action `done`.")
 
+    def test_modify_requires_id(self) -> None:
+        result = self.module.run(self.workspace, {"action": "modify"})
+        self.assertEqual(result, "Missing required arg `id` for action `modify`.")
+
+    def test_modify_requires_field(self) -> None:
+        result = self.module.run(self.workspace, {"action": "modify", "id": "2"})
+        self.assertEqual(result, "Action `modify` requires at least one of: `project`, `due`.")
+
     def test_list_calls_task_list(self) -> None:
         with patch.object(self.module.subprocess, "run") as run_mock:
             run_mock.return_value.returncode = 0
@@ -63,6 +71,46 @@ class TaskwarriorSkillTests(unittest.TestCase):
                 ["task", "add", "Buy milk"], capture_output=True, text=True, check=False
             )
             self.assertEqual(result, "Created task 5.")
+
+    def test_add_supports_project_and_due(self) -> None:
+        with patch.object(self.module.subprocess, "run") as run_mock:
+            run_mock.return_value.returncode = 0
+            run_mock.return_value.stdout = "Created task 6."
+            run_mock.return_value.stderr = ""
+
+            result = self.module.run(
+                self.workspace,
+                {
+                    "action": "add",
+                    "description": "Pay rent",
+                    "project": "Home",
+                    "due": "tomorrow",
+                },
+            )
+
+            run_mock.assert_called_once_with(
+                ["task", "add", "project:Home", "due:tomorrow", "Pay rent"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result, "Created task 6.")
+
+    def test_modify_calls_task_modify(self) -> None:
+        with patch.object(self.module.subprocess, "run") as run_mock:
+            run_mock.return_value.returncode = 0
+            run_mock.return_value.stdout = "Modified 1 task."
+            run_mock.return_value.stderr = ""
+
+            result = self.module.run(self.workspace, {"action": "modify", "id": "3", "project": "Ops"})
+
+            run_mock.assert_called_once_with(
+                ["task", "3", "modify", "project:Ops"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result, "Modified 1 task.")
 
 
 if __name__ == "__main__":
