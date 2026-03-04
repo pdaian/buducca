@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from telegram_llm_bot.bot import BotRunner
+from telegram_llm_bot.http import RequestTimeoutError
 from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
 from telegram_llm_bot.telegram_client import IncomingMessage
 
@@ -197,6 +198,16 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.telegram.calls[0], (None, 0))
         self.assertEqual(bot.telegram.calls[1], (6, bot.config.telegram.long_poll_timeout_seconds))
+
+
+    def test_run_forever_treats_poll_timeout_as_retryable(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = PollingTelegram(responses=[RequestTimeoutError("timed out"), KeyboardInterrupt()])
+
+        with self.assertLogs(level="DEBUG") as logs:
+            bot.run_forever()
+
+        self.assertTrue(any("Long-poll request timed out; retrying" in line for line in logs.output))
 
     def test_run_forever_can_process_pending_updates_when_enabled(self) -> None:
         cfg = BotConfig(

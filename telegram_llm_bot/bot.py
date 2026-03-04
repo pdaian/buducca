@@ -14,7 +14,7 @@ from typing import Any, Deque
 from assistant_framework import SkillManager, Workspace
 
 from .config import BotConfig
-from .http import HttpClient
+from .http import HttpClient, RequestTimeoutError
 from .llm_client import OpenAICompatibleClient
 from .telegram_client import IncomingMessage, TelegramClient
 
@@ -83,6 +83,8 @@ class BotRunner:
             except KeyboardInterrupt:
                 logging.info("Bot interrupted. Exiting.")
                 return
+            except RequestTimeoutError:
+                logging.debug("Long-poll request timed out; retrying")
             except Exception:
                 logging.exception("Error while polling or handling message")
                 time.sleep(2)
