@@ -92,6 +92,5 @@ class NewCollectorsTests(unittest.TestCase):
             self.assertIn('"account": "work"', output)
 
 
-
 if __name__ == "__main__":
     unittest.main()
