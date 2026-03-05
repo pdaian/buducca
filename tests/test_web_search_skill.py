@@ -23,6 +23,23 @@ _SAMPLE_HTML = """
 </html>
 """
 
+_SAMPLE_PAGE_HTML = """
+<html>
+  <head>
+    <script>const huge = {"blob": "aaaaaaaaaaaaaaaaaaaa"}; function x(){return 1;}</script>
+    <style>body { background: #fff; }</style>
+  </head>
+  <body>
+    <article>
+      <h1>A clear title for the article</h1>
+      <p>This paragraph contains human-readable text about the subject and should be kept.</p>
+      <p>const config = { token: "abc" } ;;;;;;</p>
+      <p>Another readable paragraph that provides useful context from the page body for summarization.</p>
+    </article>
+  </body>
+</html>
+"""
+
 
 def load_web_search_module():
     skill_path = Path("skills/web_search/__init__.py")
@@ -48,7 +65,7 @@ class WebSearchSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             self.module._fetch_search_html = lambda query: _SAMPLE_HTML
-            self.module._fetch_page_html = lambda url: f"<html><body>Mock page for {url}</body></html>"
+            self.module._fetch_page_html = lambda url: f"<html><body><p>Mock page text for {url} with enough readable words for output.</p></body></html>"
             result = self.module.run(workspace, {"query": "unit test", "max_results": 10})
 
             self.assertIn("DuckDuckGo results for: unit test", result)
@@ -58,8 +75,8 @@ class WebSearchSkillTests(unittest.TestCase):
             self.assertIn("2. Example Result B", result)
             self.assertIn("URL: https://example.com/b", result)
             self.assertIn("Snippet: Snippet B text.", result)
-            self.assertIn("HTML:\n<html><body>Mock page for https://example.com/a</body></html>", result)
-            self.assertIn("HTML:\n<html><body>Mock page for https://example.com/b</body></html>", result)
+            self.assertIn("Page text:\nMock page text for https://example.com/a with enough readable words for output.", result)
+            self.assertIn("Page text:\nMock page text for https://example.com/b with enough readable words for output.", result)
 
     def test_max_results_capped_to_ten(self) -> None:
         links = "\n".join(
@@ -87,7 +104,14 @@ class WebSearchSkillTests(unittest.TestCase):
             self.module._fetch_page_html = fail
             result = self.module.run(workspace, {"query": "unit test"})
 
-            self.assertIn("HTML fetch failed: boom", result)
+            self.assertIn("Page fetch failed: boom", result)
+
+    def test_extract_readable_text_filters_scripts_and_noise(self) -> None:
+        text = self.module._extract_readable_text(_SAMPLE_PAGE_HTML)
+        self.assertIn("This paragraph contains human-readable text about the subject and should be kept.", text)
+        self.assertIn("Another readable paragraph that provides useful context from the page body for summarization.", text)
+        self.assertNotIn("function x", text)
+        self.assertNotIn("const config", text)
 
 
 if __name__ == "__main__":

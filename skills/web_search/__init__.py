@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 from html.parser import HTMLParser
+import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -12,11 +13,48 @@ NAME = "web_search"
 DESCRIPTION = (
     "Search the web with DuckDuckGo (no API key required). "
     "Args: query (required), max_results (optional, default 10, capped at 10). "
-    "Returns title/url/snippet results plus full HTML for each linked page."
+    "Returns title/url/snippet results plus cleaned page text for each linked page."
 )
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DEFAULT_MAX_RESULTS = 10
+_DEFAULT_MAX_PAGE_CHARS = 2200
+
+_TEXT_BREAK_TAGS = {
+    "p",
+    "div",
+    "li",
+    "article",
+    "section",
+    "main",
+    "aside",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "pre",
+    "tr",
+    "td",
+    "br",
+}
+
+_NON_CONTENT_TAGS = {
+    "script",
+    "style",
+    "noscript",
+    "svg",
+    "canvas",
+    "iframe",
+    "template",
+    "head",
+    "meta",
+    "link",
+    "object",
+    "embed",
+}
 
 
 class _DuckDuckGoHTMLParser(HTMLParser):
@@ -76,6 +114,49 @@ class _DuckDuckGoHTMLParser(HTMLParser):
                 return
 
 
+class _ReadableTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[str] = []
+        self._buffer: list[str] = []
+        self._ignored_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        tag = tag.lower()
+        if tag in _NON_CONTENT_TAGS:
+            self._ignored_stack.append(tag)
+            return
+        if not self._ignored_stack and tag in _TEXT_BREAK_TAGS:
+            self._flush_buffer()
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if self._ignored_stack and self._ignored_stack[-1] == tag:
+            self._ignored_stack.pop()
+            return
+        if not self._ignored_stack and tag in _TEXT_BREAK_TAGS:
+            self._flush_buffer()
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_stack:
+            return
+        if data.strip():
+            self._buffer.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._flush_buffer()
+
+    def _flush_buffer(self) -> None:
+        if not self._buffer:
+            return
+        text = _normalize_text(" ".join(self._buffer))
+        if text:
+            self.blocks.append(text)
+        self._buffer = []
+
+
 def _normalize_text(value: str) -> str:
     text = html.unescape(value)
     return " ".join(text.split())
@@ -105,6 +186,59 @@ def _clean_duckduckgo_href(href: str) -> str:
         return ""
 
     return unquote(href)
+
+
+def _looks_like_code_or_noise(line: str) -> bool:
+    if not line:
+        return True
+
+    symbols = sum(1 for ch in line if not ch.isalnum() and not ch.isspace())
+    letters = sum(1 for ch in line if ch.isalpha())
+    digits = sum(1 for ch in line if ch.isdigit())
+    non_space = max(1, sum(1 for ch in line if not ch.isspace()))
+
+    symbol_ratio = symbols / non_space
+    letter_ratio = letters / non_space
+
+    if symbol_ratio > 0.35 and len(line) > 50:
+        return True
+    if letter_ratio < 0.45 and len(line) > 50:
+        return True
+    if re.search(r"[{};]{3,}", line):
+        return True
+    if re.search(r"function\s*\(|=>|var\s+|const\s+|let\s+", line):
+        return True
+    if digits > letters * 2 and len(line) > 40:
+        return True
+    return False
+
+
+def _extract_readable_text(html_payload: str, max_chars: int = _DEFAULT_MAX_PAGE_CHARS) -> str:
+    parser = _ReadableTextExtractor()
+    parser.feed(html_payload)
+    parser.close()
+
+    cleaned_lines: list[str] = []
+    seen: set[str] = set()
+    current_len = 0
+    for block in parser.blocks:
+        line = block.strip()
+        if len(line) < 30:
+            continue
+        if line in seen:
+            continue
+        if _looks_like_code_or_noise(line):
+            continue
+
+        seen.add(line)
+        cleaned_lines.append(line)
+        current_len += len(line) + 1
+        if current_len >= max_chars:
+            break
+
+    if not cleaned_lines:
+        return "No readable text extracted from page."
+    return "\n".join(cleaned_lines)
 
 
 def _fetch_search_html(query: str) -> str:
@@ -186,9 +320,9 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
 
         try:
             page_html = _fetch_page_html(item["url"])
-            lines.append("   HTML:")
-            lines.append(page_html)
+            lines.append("   Page text:")
+            lines.append(_extract_readable_text(page_html))
         except Exception as exc:
-            lines.append(f"   HTML fetch failed: {exc}")
+            lines.append(f"   Page fetch failed: {exc}")
 
     return "\n".join(lines)
