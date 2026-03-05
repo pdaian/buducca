@@ -28,14 +28,27 @@ class SkillManager:
         spec.loader.exec_module(module)
         return module
 
+    def _iter_module_files(self) -> list[Path]:
+        modules: list[Path] = []
+        for file_path in sorted(self.skills_dir.glob("*.py")):
+            if file_path.name.startswith("_"):
+                continue
+            modules.append(file_path)
+
+        for subdir in sorted(path for path in self.skills_dir.iterdir() if path.is_dir()):
+            if subdir.name.startswith("_"):
+                continue
+            init_file = subdir / "__init__.py"
+            if init_file.exists():
+                modules.append(init_file)
+        return modules
+
     def load(self) -> dict[str, Skill]:
         skills: dict[str, Skill] = {}
         if not self.skills_dir.exists():
             return skills
 
-        for file_path in sorted(self.skills_dir.glob("*.py")):
-            if file_path.name.startswith("_"):
-                continue
+        for file_path in self._iter_module_files():
             module = self._load_module(file_path)
             skill = self._build_skill(module, file_path)
             skills[skill.name] = skill

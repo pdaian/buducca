@@ -1,0 +1,15 @@
+# Web search skill
+
+## What it does
+Searches DuckDuckGo and returns result metadata plus fetched HTML for each result.
+
+## Dependencies
+- Network access.
+- Python standard library (`urllib`, `html.parser`, `re`).
+- No API key required.
+
+## Usage
+```bash
+python3 run_skill.py web_search --args '{"query":"python 3.12 release notes"}'
+python3 run_skill.py web_search --args '{"query":"rust tokio tutorial","max_results":5}'
+```

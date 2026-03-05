@@ -9,17 +9,10 @@ Run your own Telegram assistant with a tiny, understandable Python stack.
 ## Why BUDUCCA
 
 - 🔒 **Privacy-first:** your data stays on your machine.
-- 🖥️ **Local-first execution:** collectors, skills, and optional voice transcription run locally.
+- 🖥️ **Local-first execution:** connectors, skills, and optional voice transcription run locally.
 - 📡 **No telemetry:** no tracking pipeline, no analytics SDK, no hidden reporting.
 - 🧩 **Simple backend:** small modular scripts + JSON config, easy to inspect and change.
 - 🐣 **Useful with tiny local models:** built for practical automation, not giant cloud-only setups.
-
-## High-value use cases
-
-- 💬 **Telegram personal assistant:** ask for summaries, reminders, context from recent messages.
-- ✅ **Todo manager:** run local Taskwarrior commands from chat (`list`, `add`, `modify`, `done`) with project/due support.
-- 🧠 **Workspace summarizer:** turn collected chat history into fast local briefings.
-- 🎤 **Private voice-note assistant:** transcribe voice notes using your own local speech CLI.
 
 ## Quick start
 
@@ -30,34 +23,62 @@ python3 run_collectors.py --workspace workspace --collectors collectors --config
 python3 run_bot.py --config config.json
 ```
 
+## Plugin layout (skills + connectors)
+
+To keep the main README focused, each skill and connector now has its own README in its own subfolder:
+
+- Skills live in `skills/<skill_name>/`
+  - code: `skills/<skill_name>/__init__.py`
+  - docs: `skills/<skill_name>/README.md`
+- Connectors live in `collectors/<connector_name>/`
+  - code: `collectors/<connector_name>/__init__.py`
+  - docs: `collectors/<connector_name>/README.md`
+
+### Available skills
+
+- `file` → `skills/file/README.md`
+- `summarize_workspace` → `skills/summarize_workspace/README.md`
+- `taskwarrior` → `skills/taskwarrior/README.md`
+- `web_search` → `skills/web_search/README.md`
+
+### Available connectors
+
+- `telegram_recent` → `collectors/telegram_recent/README.md`
+
+### Dynamic loading and optional removal
+
+Skills and connectors are loaded dynamically from the filesystem at runtime. If you delete a skill or connector folder, it is no longer loaded (no extra toggles required).
+
 ## Core commands
 
 ```bash
 # Run a skill manually
 python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 
-# File skill examples (bulk list args)
-python3 run_skill.py file --args '{"action":"read","paths":["telegram.recent","collector_status.json"]}'
-python3 run_skill.py file --args '{"action":"write","paths":["notes/today.txt","notes/tomorrow.txt"],"contents":["Top priorities","Plan ahead"]}'
-python3 run_skill.py file --args '{"action":"append","paths":["notes/today.txt","notes/tomorrow.txt"],"content":"\n- ship update"}'
-python3 run_skill.py file --args '{"action":"create_dir","directories":["notes/archive","notes/drafts"]}'
-python3 run_skill.py file --args '{"action":"move","paths":["notes/today.txt","notes/tomorrow.txt"],"destination_dir":"notes/archive"}'
-python3 run_skill.py file --args '{"action":"delete_dir","directories":["notes/drafts"]}'
-
-# Web search (DuckDuckGo, no API key)
-python3 run_skill.py web_search --args '{"query":"latest python 3.12 release notes"}'
-python3 run_skill.py web_search --args '{"query":"rust tokio tutorial","max_results":5}'
-
-# Taskwarrior examples
-python3 run_skill.py taskwarrior --args '{"action":"list"}'
-python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home","due":"tomorrow"}'
-python3 run_skill.py taskwarrior --args '{"action":"modify","tasks":["3","4"],"project":"Errands","due":"eod"}'
-python3 run_skill.py taskwarrior --args '{"action":"done","tasks":["3","4"]}'
-
 # Reset generated local state
 python3 reset_workspace.py --dry-run
 python3 reset_workspace.py --yes
 ```
+
+For skill-specific and connector-specific command examples, see each module README listed above.
+
+## Adding new skills and connectors
+
+1. Create a new folder under `skills/` or `collectors/`.
+2. Add implementation in `__init__.py` using the existing module patterns.
+3. Add a `README.md` in the same folder describing:
+   - what it does,
+   - required dependencies,
+   - configuration,
+   - usage examples.
+4. Test locally.
+5. Open a pull request back to this repository.
+
+Recommended workflow:
+- Import this repository into Codex (or a similar coding assistant/tool).
+- Describe the new functionality you want.
+- Let the tool generate/edit code + docs in the module folder.
+- Review, run tests, and submit a PR for inclusion in the main repo.
 
 ## Voice notes with OpenAI Whisper CLI
 
@@ -83,31 +104,16 @@ Example command array for `config.json`:
 If you need messages a normal bot token cannot access:
 
 1. `pip install telethon`
-2. Set `collectors.telegram_recent_collector.user_client.enabled = true` in `agent_config.json`
+2. Set `collectors.telegram_recent.user_client.enabled = true` in `agent_config.json`
 3. Add your `api_id` and `api_hash`
 4. Re-run collectors and complete one-time QR login
 
-## Debug mode
-
-Set `runtime.debug` to `true` in `config.json` to force DEBUG logging and print full LLM request/response payloads plus request timing data. You can also set `runtime.log_level` to `"DEBUG"` to enable the same model-call verbosity.
-
-## Timeout tuning (including 10x)
-
-If your local model is slow, increase `runtime.request_timeout_seconds` in `config.json`.
-For example, to increase from 30 seconds to 300 seconds (10x):
-
-```json
-"runtime": {
-  "request_timeout_seconds": 300
-}
-```
-
-This timeout is used by outbound HTTP calls made by the bot (including LLM requests).
+> Backward compatibility: `collectors.telegram_recent_collector` is still accepted.
 
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots
-- `workspace/collector_status.json` — collector health/status
-- `workspace/collectors/telegram_recent.offset` — collector checkpoint state
+- `workspace/collector_status.json` — connector health/status
+- `workspace/collectors/telegram_recent.offset` — connector checkpoint state
 
 That's it: one local workspace, one small backend, one assistant you control. 🔐
