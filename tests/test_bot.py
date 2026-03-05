@@ -277,6 +277,31 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}, "done": True})
 
+    def test_skill_call_parses_top_level_tool_name_shape(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"web_search": {"name": "web_search", "args": {"query": "x"}, "done": false}}'
+        )
+
+        self.assertEqual(parsed, {"name": "web_search", "args": {"query": "x"}, "done": False})
+
+    def test_skill_call_parses_top_level_tool_shape_without_args_key(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"web_search": {"query": "x", "max_results": 5, "done": true}}'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "web_search",
+                "args": {"query": "x", "max_results": 5},
+                "done": True,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "telegram_llm_bot.bot.json.JSONDecoder.raw_decode"
