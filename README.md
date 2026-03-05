@@ -51,8 +51,8 @@ python3 run_skill.py web_search --args '{"query":"rust tokio tutorial","max_resu
 # Taskwarrior examples
 python3 run_skill.py taskwarrior --args '{"action":"list"}'
 python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home","due":"tomorrow"}'
-python3 run_skill.py taskwarrior --args '{"action":"modify","id":"3","project":"Errands","due":"eod"}'
-python3 run_skill.py taskwarrior --args '{"action":"done","id":"3"}'
+python3 run_skill.py taskwarrior --args '{"action":"modify","tasks":["3","4"],"project":"Errands","due":"eod"}'
+python3 run_skill.py taskwarrior --args '{"action":"done","tasks":["3","4"]}'
 
 # Reset generated local state
 python3 reset_workspace.py --dry-run

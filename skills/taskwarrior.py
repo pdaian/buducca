@@ -10,8 +10,8 @@ DESCRIPTION = (
     "Manage Taskwarrior todos. "
     "Use args.action (or args.command) with one of: list/add/done/modify. "
     "add needs args.description and accepts optional args.project/args.due. "
-    "modify needs args.id and supports args.project/args.due updates. "
-    "done needs args.id, list accepts optional args.filter."
+    "modify needs args.tasks (list of IDs) and supports args.project/args.due updates. "
+    "done needs args.tasks (list of IDs), list accepts optional args.filter."
 )
 
 
@@ -47,6 +47,23 @@ def _build_optional_fields(args: dict[str, Any]) -> list[str]:
     return fields
 
 
+def _parse_task_ids(args: dict[str, Any], action: str) -> tuple[list[str], str | None]:
+    raw_tasks = args.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        return [], f"Missing required arg `tasks` (non-empty list) for action `{action}`."
+
+    task_ids: list[str] = []
+    for task in raw_tasks:
+        task_id = str(task).strip()
+        if task_id:
+            task_ids.append(task_id)
+
+    if not task_ids:
+        return [], f"Missing required arg `tasks` (non-empty list) for action `{action}`."
+
+    return task_ids, None
+
+
 def run(workspace: Workspace, args: dict[str, Any]) -> str:
     _ = workspace
     action_raw = args.get("action")
@@ -71,20 +88,20 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return _run_task_command(command)
 
     if action == "done":
-        task_id = str(args.get("id", "")).strip()
-        if not task_id:
-            return "Missing required arg `id` for action `done`."
-        return _run_task_command(["task", task_id, "done"])
+        task_ids, error = _parse_task_ids(args, action)
+        if error:
+            return error
+        return _run_task_command(["task", *task_ids, "done"])
 
     if action == "modify":
-        task_id = str(args.get("id", "")).strip()
-        if not task_id:
-            return "Missing required arg `id` for action `modify`."
+        task_ids, error = _parse_task_ids(args, action)
+        if error:
+            return error
 
         fields = _build_optional_fields(args)
         if not fields:
             return "Action `modify` requires at least one of: `project`, `due`."
 
-        return _run_task_command(["task", task_id, "modify", *fields])
+        return _run_task_command(["task", *task_ids, "modify", *fields])
 
     return "Unsupported action. Use one of: list, add, done, modify."
