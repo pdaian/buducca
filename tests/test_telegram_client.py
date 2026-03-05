@@ -22,6 +22,8 @@ class FakeHttp:
             }
         if url.endswith("/getFile"):
             return {"ok": True, "result": {"file_path": "voice/test.ogg"}}
+        if url.endswith("/sendChatAction"):
+            return {"ok": True}
         raise AssertionError(f"unexpected url: {url}")
 
     def get_bytes(self, url):
@@ -44,6 +46,14 @@ class TelegramClientTests(unittest.TestCase):
         data = client.download_file(path)
         self.assertEqual(path, "voice/test.ogg")
         self.assertEqual(data, b"abc")
+
+    def test_send_typing_action(self) -> None:
+        http = FakeHttp()
+        client = TelegramClient(bot_token="token", http_client=http)
+
+        client.send_typing_action(99)
+
+        self.assertEqual(http.calls[-1], ("post", "https://api.telegram.org/bottoken/sendChatAction", {"chat_id": 99, "action": "typing"}))
 
 
 if __name__ == "__main__":

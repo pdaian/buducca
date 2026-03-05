@@ -70,3 +70,12 @@ class TelegramClient:
         data = self.http_client.post_json(f"{self.base_url}/sendMessage", payload)
         if not data.get("ok"):
             raise RuntimeError(f"Telegram sendMessage failed: {data}")
+
+    def send_typing_action(self, chat_id: int) -> None:
+        payload = {
+            "chat_id": chat_id,
+            "action": "typing",
+        }
+        data = self.http_client.post_json(f"{self.base_url}/sendChatAction", payload)
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegram sendChatAction failed: {data}")
