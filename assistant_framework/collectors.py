@@ -22,6 +22,12 @@ class Collector:
     run: Callable[[Workspace], None]
 
 
+@dataclass
+class CollectorManifest:
+    name: str
+    file_structure: list[str]
+
+
 class CollectorManager:
     def __init__(self, collectors_dir: str | Path, config: dict[str, Any] | None = None) -> None:
         self.collectors_dir = Path(collectors_dir)
@@ -59,6 +65,22 @@ class CollectorManager:
             module = self._load_module(file_path)
             collectors.append(self._build_collector(module, file_path))
         return collectors
+
+    def load_manifests(self) -> list[CollectorManifest]:
+        manifests: list[CollectorManifest] = []
+        if not self.collectors_dir.exists():
+            return manifests
+
+        for file_path in self._iter_module_files():
+            module = self._load_module(file_path)
+            name = getattr(module, "NAME", file_path.parent.name if file_path.name == "__init__.py" else file_path.stem)
+            default_structure = [
+                str(file_path.as_posix()),
+                str((file_path.parent / "README.md").as_posix()),
+            ]
+            file_structure = list(getattr(module, "FILE_STRUCTURE", default_structure))
+            manifests.append(CollectorManifest(name=name, file_structure=file_structure))
+        return manifests
 
     def _build_collector(self, module: ModuleType, file_path: Path) -> Collector:
         if hasattr(module, "create_collector"):

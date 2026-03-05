@@ -1,56 +1,71 @@
 {
   "collectors": {
     "telegram_recent": {
-      "collector_bot_token": "123456:collector-bot-token",
+      "accounts": [
+        {
+          "name": "bot_account",
+          "collector_bot_token": "123456:collector-bot-token"
+        },
+        {
+          "name": "user_account",
+          "user_client": {
+            "enabled": false,
+            "api_id": 123456,
+            "api_hash": "your_api_hash",
+            "session_path": "workspace/collectors/telegram_user",
+            "qr_wait_seconds": 120
+          }
+        }
+      ],
       "timeout_seconds": 30,
-      "max_messages": 50,
-      "user_client": {
-        "enabled": false,
-        "api_id": 123456,
-        "api_hash": "your_api_hash",
-        "session_path": "workspace/collectors/telegram_user",
-        "qr_wait_seconds": 120
-      }
+      "max_messages": 50
     },
     "signal_messages": {
-      "device_name": "+15550001111",
-      "link_command": [
-        "signal-cli",
-        "link",
-        "-n",
-        "buducca-signal"
+      "accounts": [
+        {
+          "name": "primary",
+          "device_name": "+15550001111",
+          "command": ["signal-cli", "-o", "json", "-a", "+15550001111", "receive", "--ignore-attachments"]
+        }
       ],
-      "command": [
-        "signal-cli",
-        "-o",
-        "json",
-        "-a",
-        "+15550001111",
-        "receive",
-        "--ignore-attachments"
-      ]
+      "link_command": ["signal-cli", "link", "-n", "buducca-signal"]
     },
     "gmail": {
-      "command": "google-agentic gmail list --format json --limit 50"
+      "accounts": [
+        {"name": "personal", "command": "google-agentic gmail list --account personal --format json --limit 50"},
+        {"name": "work", "command": "google-agentic gmail list --account work --format json --limit 50"}
+      ]
     },
     "slack": {
-      "command": "python3 scripts/export_slack_recent.py"
+      "accounts": [
+        {"name": "workspace_a", "command": "python3 scripts/export_slack_recent_a.py"},
+        {"name": "workspace_b", "command": "python3 scripts/export_slack_recent_b.py"}
+      ]
     },
     "twitter_recent": {
-      "following_command": "python3 scripts/export_twitter_following.py",
-      "dms_command": "python3 scripts/export_twitter_dms.py"
+      "accounts": [
+        {
+          "name": "main",
+          "following_command": "python3 scripts/export_twitter_following.py",
+          "dms_command": "python3 scripts/export_twitter_dms.py"
+        }
+      ]
     },
     "whatsapp_messages": {
-      "session_file": "workspace/collectors/whatsapp/session.json",
-      "qr_command": "python3 scripts/whatsapp_qr_login.py",
-      "command": "python3 scripts/export_whatsapp_recent.py"
+      "accounts": [
+        {
+          "name": "phone_a",
+          "session_file": "workspace/collectors/whatsapp/session_a.json",
+          "command": "python3 scripts/export_whatsapp_recent_a.py"
+        }
+      ],
+      "qr_command": "python3 scripts/whatsapp_qr_login.py"
     },
     "google_calendar": {
       "accounts": [
         "primary@example.com",
-        "work@example.com"
-      ],
-      "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"
+        {"name": "work@example.com", "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"}
+      ]
     }
   }
 }

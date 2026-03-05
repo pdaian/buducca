@@ -184,6 +184,8 @@ class BotTests(unittest.TestCase):
             self.assertIn("Available skills", system_prompt)
             self.assertIn("echo: Echoes user text.", system_prompt)
             self.assertIn('"skill_call"', system_prompt)
+            self.assertIn("Available collectors and file structure", system_prompt)
+            self.assertIn("collectors/telegram_recent/__init__.py", system_prompt)
 
     def test_skill_call_output_executes_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -9,6 +9,7 @@ from assistant_framework.workspace import Workspace
 
 NAME = "google_calendar"
 INTERVAL_SECONDS = 600
+FILE_STRUCTURE = ["collectors/google_calendar/__init__.py", "collectors/google_calendar/README.md"]
 
 
 def _month_key(iso_str: str) -> str:
@@ -21,11 +22,20 @@ def _month_key(iso_str: str) -> str:
 def create_collector(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     timeout = float(config.get("timeout_seconds", 90))
-    accounts = config.get("accounts", [])
+    raw_accounts = config.get("accounts", [])
     command_template = config.get("command_template") or os.environ.get(
         "GOOGLE_CALENDAR_COMMAND_TEMPLATE",
         "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}",
     )
+
+    def _normalize_account(account: str | dict) -> tuple[str, str]:
+        if isinstance(account, dict):
+            account_name = str(account.get("name") or account.get("account") or "")
+            template = str(account.get("command_template") or command_template)
+            return account_name, template
+        return str(account), command_template
+
+    accounts = [_normalize_account(account) for account in raw_accounts]
 
     def _run(workspace: Workspace) -> None:
         now = datetime.now(timezone.utc)
@@ -36,8 +46,10 @@ def create_collector(config: dict):
             month_end = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
         month_end_iso = month_end.isoformat()
 
-        for account in accounts:
-            command = command_template.format(account=account, month_start=month_start, month_end=month_end_iso)
+        for account, template in accounts:
+            if not account:
+                continue
+            command = template.format(account=account, month_start=month_start, month_end=month_end_iso)
             code, stdout, _ = run_command(command, timeout_seconds=timeout)
             if code != 0 or not stdout.strip():
                 continue

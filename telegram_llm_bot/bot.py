@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque
 
-from assistant_framework import SkillManager, Workspace
+from assistant_framework import CollectorManager, SkillManager, Workspace
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
@@ -47,6 +47,7 @@ class BotRunner:
         )
         self._workspace = Workspace(self.config.runtime.workspace_dir)
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
+        self._collector_manifests = CollectorManager(self.config.runtime.collectors_dir).load_manifests()
 
     @property
     def _debug_enabled(self) -> bool:
@@ -54,19 +55,27 @@ class BotRunner:
 
     def _build_system_prompt(self) -> str:
         base_prompt = self.config.llm.system_prompt.strip()
-        if not self._skills:
-            return base_prompt
+        sections: list[str] = []
 
-        skill_lines = [
-            "You can call local skills if a user asks you to run one.",
-            "Available skills:",
-        ]
-        for name in sorted(self._skills):
-            description = self._skills[name].description or "No description provided."
-            skill_lines.append(f"- {name}: {description}")
+        if self._skills:
+            skill_intro = [
+                "You can call local skills if a user asks you to run one.",
+                "Available skills:",
+            ]
+            for name in sorted(self._skills):
+                description = self._skills[name].description or "No description provided."
+                skill_intro.append(f"- {name}: {description}")
+            sections.append("\n".join(skill_intro))
 
-        skill_lines.extend(
-            [
+        if self._collector_manifests:
+            collector_lines = ["Available collectors and file structure:"]
+            for manifest in sorted(self._collector_manifests, key=lambda m: m.name):
+                paths = ", ".join(manifest.file_structure)
+                collector_lines.append(f"- {manifest.name}: {paths}")
+            sections.append("\n".join(collector_lines))
+
+        if self._skills:
+            skill_rules = [
                 "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
                 '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}, "done": <true|false>}}',
                 "Do not include any extra text before or after JSON.",
@@ -75,8 +84,11 @@ class BotRunner:
                 "If done is true, the tool result is sent to the user as the final answer.",
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
             ]
-        )
-        return f"{base_prompt}\n\n" + "\n".join(skill_lines)
+            sections.append("\n".join(skill_rules))
+
+        if not sections:
+            return base_prompt
+        return f"{base_prompt}\n\n" + "\n\n".join(sections)
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")

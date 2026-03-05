@@ -35,6 +35,7 @@ class RuntimeConfig:
     workspace_dir: str = "workspace"
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
+    collectors_dir: str = "collectors"
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
 

@@ -9,7 +9,7 @@ Run your own Telegram assistant with a tiny, understandable Python stack.
 ## Why BUDUCCA
 
 - 🔒 **Privacy-first:** your data stays on your machine.
-- 🖥️ **Local-first execution:** connectors, skills, and optional voice transcription run locally.
+- 🖥️ **Local-first execution:** collectors, skills, and optional voice transcription run locally.
 - 📡 **No telemetry:** no tracking pipeline, no analytics SDK, no hidden reporting.
 - 🧩 **Simple backend:** small modular scripts + JSON config, easy to inspect and change.
 - 🐣 **Useful with tiny local models:** built for practical automation, not giant cloud-only setups.
@@ -23,16 +23,16 @@ python3 run_collectors.py --workspace workspace --collectors collectors --config
 python3 run_bot.py --config config.json
 ```
 
-## Plugin layout (skills + connectors)
+## Plugin layout (skills + collectors)
 
-To keep the main README focused, each skill and connector now has its own README in its own subfolder:
+To keep the main README focused, each skill and collector now has its own README in its own subfolder:
 
 - Skills live in `skills/<skill_name>/`
   - code: `skills/<skill_name>/__init__.py`
   - docs: `skills/<skill_name>/README.md`
-- Connectors live in `collectors/<connector_name>/`
-  - code: `collectors/<connector_name>/__init__.py`
-  - docs: `collectors/<connector_name>/README.md`
+- Collectors live in `collectors/<collector_name>/`
+  - code: `collectors/<collector_name>/__init__.py`
+  - docs: `collectors/<collector_name>/README.md`
 
 ### Available skills
 
@@ -41,7 +41,7 @@ To keep the main README focused, each skill and connector now has its own README
 - `taskwarrior` → `skills/taskwarrior/README.md`
 - `web_search` → `skills/web_search/README.md`
 
-### Available connectors
+### Available collectors
 
 - `telegram_recent` → `collectors/telegram_recent/README.md`
 - `signal_messages` → `collectors/signal_messages/README.md`
@@ -53,7 +53,11 @@ To keep the main README focused, each skill and connector now has its own README
 
 ### Dynamic loading and optional removal
 
-Skills and connectors are loaded dynamically from the filesystem at runtime. If you delete a skill or connector folder, it is no longer loaded (no extra toggles required).
+Skills and collectors are loaded dynamically from the filesystem at runtime. If you delete a skill or collector folder, it is no longer loaded (no extra toggles required).
+
+### Collector file structure in system prompt
+
+Each collector declares `FILE_STRUCTURE` in its module. The bot includes this collector file structure list in the system prompt so the agent can discover relevant collector files without extra user instructions.
 
 ## Core commands
 
@@ -66,9 +70,9 @@ python3 reset_workspace.py --dry-run
 python3 reset_workspace.py --yes
 ```
 
-For skill-specific and connector-specific command examples, see each module README listed above.
+For skill-specific and collector-specific command examples, see each module README listed above.
 
-## Adding new skills and connectors
+## Adding new skills and collectors
 
 1. Create a new folder under `skills/` or `collectors/`.
 2. Add implementation in `__init__.py` using the existing module patterns.
@@ -118,8 +122,8 @@ Example command array for `config.json`:
 If you need messages a normal bot token cannot access:
 
 1. `pip install telethon`
-2. Set `collectors.telegram_recent.user_client.enabled = true` in `agent_config.json`
-3. Add your `api_id` and `api_hash`
+2. Add an entry under `collectors.telegram_recent.accounts` with `user_client.enabled = true`
+3. Add `api_id` and `api_hash` in that account
 4. Run one-time signup command: `python3 run_telegram_collector_signup.py --config agent_config.json`
 5. Re-run collectors
 
@@ -141,8 +145,8 @@ python3 run_whatsapp_collector_signup.py --config agent_config.json
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots
-- `workspace/collector_status.json` — connector health/status
-- `workspace/collectors/telegram_recent.offset` — connector checkpoint state
+- `workspace/collector_status.json` — collector health/status
+- `workspace/collectors/telegram_recent.offset` — collector checkpoint state
 - `workspace/signal.messages.recent` — Signal messages
 - `workspace/gmail.recent` — Gmail message snapshots via Google Agentic CLI
 - `workspace/slack.recent` — Slack message snapshots
