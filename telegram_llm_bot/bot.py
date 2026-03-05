@@ -114,7 +114,12 @@ class BotRunner:
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
         payload_text = reply.strip()
-        if "skill_call" not in payload_text:
+        if (
+            "skill_call" not in payload_text
+            and '"args"' not in payload_text
+            and '"name"' not in payload_text
+            and '"done"' not in payload_text
+        ):
             return None
 
         fenced = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", payload_text, re.DOTALL)
@@ -151,18 +156,37 @@ class BotRunner:
 
         if not isinstance(payload, dict):
             return None
-        skill_call = payload.get("skill_call")
-        if not isinstance(skill_call, dict):
+        skill_call_payload: Any | None = payload.get("skill_call")
+        skill_name: str | None = None
+
+        if isinstance(skill_call_payload, dict):
+            skill_name = skill_call_payload.get("name")
+        elif len(payload) == 1:
+            [top_level_name] = payload.keys()
+            top_level_payload = payload.get(top_level_name)
+            if isinstance(top_level_payload, dict):
+                skill_call_payload = top_level_payload
+                declared_name = top_level_payload.get("name")
+                skill_name = declared_name if isinstance(declared_name, str) else top_level_name
+
+        if not isinstance(skill_call_payload, dict) or not isinstance(skill_name, str):
             return None
-        if not isinstance(skill_call.get("name"), str):
-            return None
-        args = skill_call.get("args", {})
+
+        raw_args = skill_call_payload.get("args")
+        if raw_args is None:
+            args = {
+                key: value
+                for key, value in skill_call_payload.items()
+                if key not in {"name", "done"}
+            }
+        else:
+            args = raw_args
         if not isinstance(args, dict):
             return None
-        done = skill_call.get("done", payload.get("done", True))
+        done = skill_call_payload.get("done", payload.get("done", True))
         if not isinstance(done, bool):
             done = True
-        return {"name": skill_call["name"], "args": args, "done": done}
+        return {"name": skill_name, "args": args, "done": done}
 
     def _continue_skill_chain_prompt(self, skill_name: str, skill_result: str) -> str:
         return (
