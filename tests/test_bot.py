@@ -13,11 +13,15 @@ from telegram_llm_bot.telegram_client import IncomingMessage
 class DummyTelegram:
     def __init__(self) -> None:
         self.sent = []
+        self.typing = []
         self.file_path = "voice/test.ogg"
         self.file_bytes = b"dummy"
 
     def send_message(self, chat_id: int, text: str) -> None:
         self.sent.append((chat_id, text))
+
+    def send_typing_action(self, chat_id: int) -> None:
+        self.typing.append(chat_id)
 
     def get_file_path(self, file_id: str) -> str:
         return self.file_path
@@ -109,6 +113,7 @@ class BotTests(unittest.TestCase):
         bot._handle_message(1, "hi")
 
         self.assertEqual(bot.telegram.sent, [(1, "hello")])
+        self.assertEqual(bot.telegram.typing, [1])
         self.assertEqual(len(bot._history[1]), 2)
 
     def test_handle_message_strips_think_blocks_from_reply_and_history(self) -> None:

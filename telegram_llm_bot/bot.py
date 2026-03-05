@@ -5,7 +5,9 @@ import logging
 import re
 import subprocess
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,7 @@ _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 _MAX_SKILL_CHAIN_STEPS = 12
 _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
+_TYPING_ACTION_INTERVAL_SECONDS = 4
 
 
 class BotRunner:
@@ -430,27 +433,28 @@ class BotRunner:
         if text.strip().lower() == "/status":
             reply = self._build_status_message()
         else:
-            prompt = self._build_messages(chat_id, text)
-            try:
-                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
-                reply = self._resolve_llm_reply(prompt, model_reply)
-            except RequestTimeoutError:
-                logging.warning("LLM request timed out for chat_id=%s", chat_id)
-                self.telegram.send_message(
-                    chat_id,
-                    "The language model request timed out "
-                    f"after {self.config.runtime.request_timeout_seconds:g}s. "
-                    "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
-                )
-                return
-            except Exception:
-                logging.exception("Failed to generate or parse LLM response for chat_id=%s", chat_id)
-                self.telegram.send_message(
-                    chat_id,
-                    "I ran into an internal error while handling that request. "
-                    "Please try again.",
-                )
-                return
+            with self._typing_indicator(chat_id):
+                prompt = self._build_messages(chat_id, text)
+                try:
+                    model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                    reply = self._resolve_llm_reply(prompt, model_reply)
+                except RequestTimeoutError:
+                    logging.warning("LLM request timed out for chat_id=%s", chat_id)
+                    self.telegram.send_message(
+                        chat_id,
+                        "The language model request timed out "
+                        f"after {self.config.runtime.request_timeout_seconds:g}s. "
+                        "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
+                    )
+                    return
+                except Exception:
+                    logging.exception("Failed to generate or parse LLM response for chat_id=%s", chat_id)
+                    self.telegram.send_message(
+                        chat_id,
+                        "I ran into an internal error while handling that request. "
+                        "Please try again.",
+                    )
+                    return
             self._history[chat_id].append({"role": "user", "content": text})
             self._history[chat_id].append(
                 {
@@ -462,3 +466,24 @@ class BotRunner:
         for chunk in self._split_for_telegram(reply):
             self.telegram.send_message(chat_id, chunk)
         logging.info("Replied to chat_id=%s", chat_id)
+
+    @contextmanager
+    def _typing_indicator(self, chat_id: int):
+        stop_event = threading.Event()
+
+        def _send_typing_actions() -> None:
+            while not stop_event.is_set():
+                try:
+                    self.telegram.send_typing_action(chat_id)
+                except Exception:
+                    logging.debug("Failed to send typing action for chat_id=%s", chat_id, exc_info=True)
+                    return
+                stop_event.wait(_TYPING_ACTION_INTERVAL_SECONDS)
+
+        worker = threading.Thread(target=_send_typing_actions, daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            worker.join(timeout=0.2)
