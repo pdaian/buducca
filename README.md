@@ -124,7 +124,7 @@ If you need messages a normal bot token cannot access:
 1. `pip install telethon`
 2. Add an entry under `collectors.telegram_recent.accounts` with `user_client.enabled = true`
 3. Add `api_id` and `api_hash` in that account
-4. Run one-time signup command: `python3 run_telegram_collector_signup.py --config agent_config.json`
+4. Run one-time signup command: `python3 -m collectors.telegram_recent.signup --config agent_config.json`
 5. Re-run collectors
 
 > Backward compatibility: `collectors.telegram_recent_collector` is still accepted.
@@ -136,10 +136,10 @@ Some collectors need one-time auth outside the main collector loop:
 
 ```bash
 # Signal second-device QR flow
-python3 run_signal_collector_signup.py --config agent_config.json
+python3 -m collectors.signal_messages.signup --config agent_config.json
 
 # WhatsApp Web QR flow
-python3 run_whatsapp_collector_signup.py --config agent_config.json
+python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 ```
 
 ## Data locations
