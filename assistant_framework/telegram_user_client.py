@@ -37,10 +37,20 @@ class TelegramUserClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         return TelegramClient(str(path), self.api_id, self.api_hash)
 
-    async def _login_if_needed(self, client) -> None:
+    def _session_exists(self) -> bool:
+        path = Path(self.session_path)
+        if path.exists():
+            return True
+        session_path = path.with_suffix(f"{path.suffix}.session") if path.suffix else path.with_suffix(".session")
+        return session_path.exists()
+
+    async def _login_if_needed(self, client, allow_interactive_login: bool) -> bool:
         await client.connect()
         if await client.is_user_authorized():
-            return
+            return True
+
+        if not allow_interactive_login:
+            return False
 
         if self.phone:
             await client.send_code_request(self.phone)
@@ -53,11 +63,14 @@ class TelegramUserClient:
         print("[telegram_recent_collector] Scan this QR with Telegram app:")
         print(qr_login.url)
         await qr_login.wait(timeout=self.qr_wait_seconds)
+        return await client.is_user_authorized()
 
     async def _collect(self, since_timestamp: int | None, max_messages: int) -> list[dict]:
         client = self._ensure_client()
         async with client:
-            await self._login_if_needed(client)
+            is_authorized = await self._login_if_needed(client, allow_interactive_login=False)
+            if not is_authorized:
+                return []
 
             cutoff = since_timestamp or 0
             messages: list[dict] = []
@@ -87,4 +100,19 @@ class TelegramUserClient:
     def get_recent_messages(self, since_timestamp: int | None, max_messages: int) -> list[dict]:
         import asyncio
 
+        if not self._session_exists():
+            return []
+
         return asyncio.run(self._collect(since_timestamp=since_timestamp, max_messages=max_messages))
+
+    async def _signup(self) -> None:
+        client = self._ensure_client()
+        async with client:
+            is_authorized = await self._login_if_needed(client, allow_interactive_login=True)
+            if not is_authorized:
+                raise RuntimeError("User session is not authorized yet")
+
+    def signup(self) -> None:
+        import asyncio
+
+        asyncio.run(self._signup())
