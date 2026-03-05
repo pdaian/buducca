@@ -19,6 +19,19 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ws.resolve("../bad.txt")
 
+    def test_directory_and_move_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ws = Workspace(td)
+            ws.write_text("src/a.txt", "hello")
+            ws.create_dir("dst")
+
+            moved_path = ws.move_file_to_dir("src/a.txt", "dst")
+            self.assertEqual(moved_path, "dst/a.txt")
+            self.assertEqual(ws.read_text("dst/a.txt"), "hello")
+
+            ws.delete_dir("dst")
+            self.assertFalse(ws.resolve("dst").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

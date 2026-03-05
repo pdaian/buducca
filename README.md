@@ -36,10 +36,13 @@ python3 run_bot.py --config config.json
 # Run a skill manually
 python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 
-# File skill examples
-python3 run_skill.py file --args '{"action":"read","path":"telegram.recent"}'
-python3 run_skill.py file --args '{"action":"write","path":"notes/today.txt","content":"Top priorities"}'
-python3 run_skill.py file --args '{"action":"append","path":"notes/today.txt","content":"\n- ship update"}'
+# File skill examples (bulk list args)
+python3 run_skill.py file --args '{"action":"read","paths":["telegram.recent","collector_status.json"]}'
+python3 run_skill.py file --args '{"action":"write","paths":["notes/today.txt","notes/tomorrow.txt"],"contents":["Top priorities","Plan ahead"]}'
+python3 run_skill.py file --args '{"action":"append","paths":["notes/today.txt","notes/tomorrow.txt"],"content":"\n- ship update"}'
+python3 run_skill.py file --args '{"action":"create_dir","directories":["notes/archive","notes/drafts"]}'
+python3 run_skill.py file --args '{"action":"move","paths":["notes/today.txt","notes/tomorrow.txt"],"destination_dir":"notes/archive"}'
+python3 run_skill.py file --args '{"action":"delete_dir","directories":["notes/drafts"]}'
 
 # Web search (DuckDuckGo, no API key)
 python3 run_skill.py web_search --args '{"query":"latest python 3.12 release notes"}'
