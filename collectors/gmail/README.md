@@ -5,7 +5,7 @@ Collects recent emails into `workspace/gmail.recent` using Google Agentic CLI.
 ## Multi-account setup
 1. In `agent_config.json`, add `collectors.gmail.accounts`.
 2. For each account, set `name` and a per-account `command`.
-3. Run `python3 run_collectors.py --workspace workspace --collectors collectors --config agent_config.json`.
+3. Run `python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json`.
 
 Example:
 ```json

@@ -5,7 +5,7 @@ Collects recent Slack messages into `workspace/slack.recent` from configured exp
 ## Multi-account setup
 1. Configure `collectors.slack.accounts` with one entry per workspace/account.
 2. Each account requires `name` and `command`.
-3. Start collectors with `run_collectors.py`.
+3. Start collectors with `python3 -m assistant_framework.cli collectors`.
 
 ## File structure
 - `collectors/slack/__init__.py`

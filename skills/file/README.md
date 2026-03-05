@@ -15,8 +15,8 @@ Provides workspace-safe file and directory operations in bulk:
 
 ## Usage
 ```bash
-python3 run_skill.py file --args '{"action":"read","paths":["telegram.recent"]}'
-python3 run_skill.py file --args '{"action":"write","paths":["notes/today.txt"],"content":"hello"}'
+python3 -m assistant_framework.cli skill file --args '{"action":"read","paths":["telegram.recent"]}'
+python3 -m assistant_framework.cli skill file --args '{"action":"write","paths":["notes/today.txt"],"content":"hello"}'
 ```
 
 Use `paths` for file actions and `directories` for directory actions.
