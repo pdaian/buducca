@@ -230,6 +230,56 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.llm.calls, 2)
             self.assertIn("Skill `echo` returned:\necho:step1", bot.llm.messages[-1]["content"])
 
+    def test_web_search_chain_uses_full_html_once_then_summarizes_in_prompt_buffer(self) -> None:
+        bot = self.make_bot()
+
+        class InspectingLLM:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def generate_reply(self, messages):
+                self.calls.append([m.copy() for m in messages])
+                if len(self.calls) == 1:
+                    return '{"skill_call": {"name": "web_search", "args": {"query": "x"}, "done": false}}'
+                return "final"
+
+        bot.llm = InspectingLLM()
+        bot._run_skill_call = lambda *_args, **_kwargs: (
+            "DuckDuckGo results for: x\n"
+            "1. Example\n"
+            "   URL: https://example.com\n"
+            "   Snippet: Example snippet\n"
+            "   HTML:\n"
+            "<html><body>Huge page</body></html>"
+        )
+
+        prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "find x"}]
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+
+        self.assertEqual(reply, "final")
+        self.assertIn("<html><body>Huge page</body></html>", bot.llm.calls[1][-1]["content"])
+        self.assertNotIn("<html><body>Huge page</body></html>", prompt[-1]["content"])
+        self.assertIn("Snippet: Example snippet", prompt[-1]["content"])
+
+    def test_handle_message_stores_web_search_summary_in_history(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM('{"skill_call": {"name": "web_search", "args": {"query": "x"}}}')
+        bot._run_skill_call = lambda *_args, **_kwargs: (
+            "DuckDuckGo results for: x\n"
+            "1. Example\n"
+            "   URL: https://example.com\n"
+            "   Snippet: Example snippet\n"
+            "   HTML:\n"
+            "<html><body>Huge page</body></html>"
+        )
+
+        bot._handle_message(1, "search")
+
+        self.assertIn("<html><body>Huge page</body></html>", bot.telegram.sent[0][1])
+        self.assertNotIn("<html><body>Huge page</body></html>", bot._history[1][1]["content"])
+        self.assertIn("Snippet: Example snippet", bot._history[1][1]["content"])
+
     def test_skill_call_chain_logs_intermediate_prompt_and_response_on_debug(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
