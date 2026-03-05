@@ -7,7 +7,7 @@ from assistant_framework.workspace import Workspace
 
 
 def load_file_module():
-    skill_path = Path("skills/file.py")
+    skill_path = Path("skills/file/__init__.py")
     spec = importlib.util.spec_from_file_location("file_skill", skill_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load file skill module")

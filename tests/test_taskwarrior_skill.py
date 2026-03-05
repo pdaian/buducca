@@ -7,7 +7,7 @@ from assistant_framework.workspace import Workspace
 
 
 def load_taskwarrior_module():
-    skill_path = Path("skills/taskwarrior.py")
+    skill_path = Path("skills/taskwarrior/__init__.py")
     spec = importlib.util.spec_from_file_location("taskwarrior_skill", skill_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load taskwarrior skill module")

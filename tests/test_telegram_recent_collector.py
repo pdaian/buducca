@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from assistant_framework.workspace import Workspace
-from collectors.telegram_recent_collector import create_collector
+from collectors.telegram_recent import create_collector
 
 
 class _FakeBotMessage:
@@ -73,7 +73,7 @@ class TelegramRecentCollectorTests(unittest.TestCase):
             def get_updates(self, offset=None, timeout_seconds=20):
                 return []
 
-        with patch("collectors.telegram_recent_collector.TelegramLiteClient", _CaptureClient):
+        with patch("collectors.telegram_recent.TelegramLiteClient", _CaptureClient):
             collector = create_collector(
                 {"collector_bot_token": "collector-token", "bot_token": "legacy-token"}
             )

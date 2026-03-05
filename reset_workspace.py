@@ -44,7 +44,7 @@ def _gather_targets(repo_root: Path) -> list[Path]:
     if isinstance(agent_config, dict):
         collector_cfg = (
             agent_config.get("collectors", {})
-            .get("telegram_recent_collector", {})
+            .get("telegram_recent", {}) or agent_config.get("collectors", {}).get("telegram_recent_collector", {})
             .get("user_client", {})
         )
     session_path = collector_cfg.get("session_path")

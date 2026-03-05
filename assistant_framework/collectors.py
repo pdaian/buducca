@@ -35,21 +35,37 @@ class CollectorManager:
         spec.loader.exec_module(module)
         return module
 
+    def _iter_module_files(self) -> list[Path]:
+        modules: list[Path] = []
+        for file_path in sorted(self.collectors_dir.glob("*.py")):
+            if file_path.name.startswith("_"):
+                continue
+            modules.append(file_path)
+
+        for subdir in sorted(path for path in self.collectors_dir.iterdir() if path.is_dir()):
+            if subdir.name.startswith("_"):
+                continue
+            init_file = subdir / "__init__.py"
+            if init_file.exists():
+                modules.append(init_file)
+        return modules
+
     def load(self) -> list[Collector]:
         collectors: list[Collector] = []
         if not self.collectors_dir.exists():
             return collectors
 
-        for file_path in sorted(self.collectors_dir.glob("*.py")):
-            if file_path.name.startswith("_"):
-                continue
+        for file_path in self._iter_module_files():
             module = self._load_module(file_path)
             collectors.append(self._build_collector(module, file_path))
         return collectors
 
     def _build_collector(self, module: ModuleType, file_path: Path) -> Collector:
         if hasattr(module, "create_collector"):
-            cfg = self.config.get(file_path.stem, {})
+            config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
+            cfg = self.config.get(config_key, {})
+            if not cfg and not config_key.endswith("_collector"):
+                cfg = self.config.get(f"{config_key}_collector", {})
             collector = module.create_collector(cfg)
             return Collector(
                 name=collector["name"],

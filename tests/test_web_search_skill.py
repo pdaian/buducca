@@ -25,7 +25,7 @@ _SAMPLE_HTML = """
 
 
 def load_web_search_module():
-    skill_path = Path("skills/web_search.py")
+    skill_path = Path("skills/web_search/__init__.py")
     spec = importlib.util.spec_from_file_location("web_search_skill", skill_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load web_search skill module")
