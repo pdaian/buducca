@@ -10,6 +10,6 @@ Runs Taskwarrior workflows from the assistant (`list`, `add`, `modify`, `done`).
 
 ## Usage
 ```bash
-python3 run_skill.py taskwarrior --args '{"action":"list"}'
-python3 run_skill.py taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home"}'
+python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"list"}'
+python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home"}'
 ```

@@ -8,7 +8,7 @@ Collects recent Telegram messages into `workspace/telegram.recent` and stores st
 3. If using user mode, run one-time signup:
    `python3 -m collectors.telegram_recent.signup --config agent_config.json`
 4. Run collectors:
-   `python3 run_collectors.py --workspace workspace --collectors collectors --config agent_config.json`
+   `python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json`
 
 ## File structure
 - `collectors/telegram_recent/__init__.py`

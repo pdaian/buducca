@@ -9,5 +9,5 @@ Lists workspace files and sizes, up to `max_items`.
 
 ## Usage
 ```bash
-python3 run_skill.py summarize_workspace --args '{"max_items":20}'
+python3 -m assistant_framework.cli skill summarize_workspace --args '{"max_items":20}'
 ```

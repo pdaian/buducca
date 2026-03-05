@@ -10,6 +10,6 @@ Searches DuckDuckGo and returns result metadata plus fetched HTML for each resul
 
 ## Usage
 ```bash
-python3 run_skill.py web_search --args '{"query":"python 3.12 release notes"}'
-python3 run_skill.py web_search --args '{"query":"rust tokio tutorial","max_results":5}'
+python3 -m assistant_framework.cli skill web_search --args '{"query":"python 3.12 release notes"}'
+python3 -m assistant_framework.cli skill web_search --args '{"query":"rust tokio tutorial","max_results":5}'
 ```

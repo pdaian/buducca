@@ -19,7 +19,7 @@ Run your own Telegram assistant with a tiny, understandable Python stack.
 ```bash
 cp config.example.json config.json
 cp agent_config.example.json agent_config.json
-python3 run_collectors.py --workspace workspace --collectors collectors --config agent_config.json
+python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
 python3 run_bot.py --config config.json
 ```
 
@@ -63,7 +63,7 @@ Each collector declares `FILE_STRUCTURE` in its module. The bot includes this co
 
 ```bash
 # Run a skill manually
-python3 run_skill.py summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
+python3 -m assistant_framework.cli skill summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 
 # Reset generated local state
 python3 reset_workspace.py --dry-run
