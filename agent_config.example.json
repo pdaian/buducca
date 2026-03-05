@@ -11,6 +11,46 @@
         "session_path": "workspace/collectors/telegram_user",
         "qr_wait_seconds": 120
       }
+    },
+    "signal_messages": {
+      "device_name": "+15550001111",
+      "link_command": [
+        "signal-cli",
+        "link",
+        "-n",
+        "buducca-signal"
+      ],
+      "command": [
+        "signal-cli",
+        "-o",
+        "json",
+        "-a",
+        "+15550001111",
+        "receive",
+        "--ignore-attachments"
+      ]
+    },
+    "gmail": {
+      "command": "google-agentic gmail list --format json --limit 50"
+    },
+    "slack": {
+      "command": "python3 scripts/export_slack_recent.py"
+    },
+    "twitter_recent": {
+      "following_command": "python3 scripts/export_twitter_following.py",
+      "dms_command": "python3 scripts/export_twitter_dms.py"
+    },
+    "whatsapp_messages": {
+      "session_file": "workspace/collectors/whatsapp/session.json",
+      "qr_command": "python3 scripts/whatsapp_qr_login.py",
+      "command": "python3 scripts/export_whatsapp_recent.py"
+    },
+    "google_calendar": {
+      "accounts": [
+        "primary@example.com",
+        "work@example.com"
+      ],
+      "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"
     }
   }
 }

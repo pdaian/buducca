@@ -44,6 +44,12 @@ To keep the main README focused, each skill and connector now has its own README
 ### Available connectors
 
 - `telegram_recent` → `collectors/telegram_recent/README.md`
+- `signal_messages` → `collectors/signal_messages/README.md`
+- `gmail` → `collectors/gmail/README.md`
+- `slack` → `collectors/slack/README.md`
+- `twitter_recent` → `collectors/twitter_recent/README.md`
+- `whatsapp_messages` → `collectors/whatsapp_messages/README.md`
+- `google_calendar` → `collectors/google_calendar/README.md`
 
 ### Dynamic loading and optional removal
 
@@ -119,10 +125,30 @@ If you need messages a normal bot token cannot access:
 
 > Backward compatibility: `collectors.telegram_recent_collector` is still accepted.
 
+
+## Additional collector signup commands
+
+Some collectors need one-time auth outside the main collector loop:
+
+```bash
+# Signal second-device QR flow
+python3 run_signal_collector_signup.py --config agent_config.json
+
+# WhatsApp Web QR flow
+python3 run_whatsapp_collector_signup.py --config agent_config.json
+```
+
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots
 - `workspace/collector_status.json` — connector health/status
 - `workspace/collectors/telegram_recent.offset` — connector checkpoint state
+- `workspace/signal.messages.recent` — Signal messages
+- `workspace/gmail.recent` — Gmail message snapshots via Google Agentic CLI
+- `workspace/slack.recent` — Slack message snapshots
+- `workspace/twitter.following.recent` — X/Twitter posts from following timeline
+- `workspace/twitter.dms.recent` — X/Twitter direct messages
+- `workspace/whatsapp.messages.recent` — WhatsApp message snapshots
+- `workspace/google_calendar/<account>.<month>.events.jsonl` — Google Calendar events per account/month
 
 That's it: one local workspace, one small backend, one assistant you control. 🔐
