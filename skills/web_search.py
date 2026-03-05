@@ -12,7 +12,7 @@ NAME = "web_search"
 DESCRIPTION = (
     "Search the web with DuckDuckGo (no API key required). "
     "Args: query (required), max_results (optional, default 10, capped at 10). "
-    "Returns concise title/url/snippet results for grounding follow-up responses."
+    "Returns title/url/snippet results plus full HTML for each linked page."
 )
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
@@ -140,6 +140,19 @@ def _extract_results(html_payload: str, max_results: int) -> list[dict[str, str]
     return deduped
 
 
+def _fetch_page_html(url: str) -> str:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; buducca-web-search-skill/1.0)",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=15) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
+
+
 def run(workspace: Workspace, args: dict[str, Any]) -> str:
     del workspace
 
@@ -170,5 +183,12 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         snippet = item.get("snippet", "")
         if snippet:
             lines.append(f"   Snippet: {snippet}")
+
+        try:
+            page_html = _fetch_page_html(item["url"])
+            lines.append("   HTML:")
+            lines.append(page_html)
+        except Exception as exc:
+            lines.append(f"   HTML fetch failed: {exc}")
 
     return "\n".join(lines)

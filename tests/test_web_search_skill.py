@@ -48,6 +48,7 @@ class WebSearchSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             self.module._fetch_search_html = lambda query: _SAMPLE_HTML
+            self.module._fetch_page_html = lambda url: f"<html><body>Mock page for {url}</body></html>"
             result = self.module.run(workspace, {"query": "unit test", "max_results": 10})
 
             self.assertIn("DuckDuckGo results for: unit test", result)
@@ -57,6 +58,8 @@ class WebSearchSkillTests(unittest.TestCase):
             self.assertIn("2. Example Result B", result)
             self.assertIn("URL: https://example.com/b", result)
             self.assertIn("Snippet: Snippet B text.", result)
+            self.assertIn("HTML:\n<html><body>Mock page for https://example.com/a</body></html>", result)
+            self.assertIn("HTML:\n<html><body>Mock page for https://example.com/b</body></html>", result)
 
     def test_max_results_capped_to_ten(self) -> None:
         links = "\n".join(
@@ -68,9 +71,23 @@ class WebSearchSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             self.module._fetch_search_html = lambda query: payload
+            self.module._fetch_page_html = lambda url: "<html></html>"
             result = self.module.run(workspace, {"query": "many", "max_results": 50})
             self.assertIn("10. Result 10", result)
             self.assertNotIn("11. Result 11", result)
+
+    def test_includes_html_fetch_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module._fetch_search_html = lambda query: _SAMPLE_HTML
+
+            def fail(_url):
+                raise RuntimeError("boom")
+
+            self.module._fetch_page_html = fail
+            result = self.module.run(workspace, {"query": "unit test"})
+
+            self.assertIn("HTML fetch failed: boom", result)
 
 
 if __name__ == "__main__":
