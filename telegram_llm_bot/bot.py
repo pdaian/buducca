@@ -23,6 +23,7 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 _MAX_SKILL_CHAIN_STEPS = 12
+_RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
 
 
 class BotRunner:
@@ -195,6 +196,30 @@ class BotRunner:
             "If no more skills are needed, respond normally to the user."
         )
 
+    def _summarize_skill_result_for_context(self, skill_name: str, skill_result: str) -> str:
+        if skill_name != "web_search" or "DuckDuckGo results for:" not in skill_result:
+            return skill_result
+
+        lines = skill_result.splitlines()
+        summarized: list[str] = []
+        skipping_html = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped == "HTML:":
+                skipping_html = True
+                continue
+
+            if skipping_html:
+                if _RESULT_HEADER_RE.match(line) or line.startswith("DuckDuckGo results for:"):
+                    skipping_html = False
+                else:
+                    continue
+
+            summarized.append(line)
+
+        return "\n".join(summarized).strip() or skill_result
+
     def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
         model_reply = initial_model_reply
         for step_index in range(_MAX_SKILL_CHAIN_STEPS):
@@ -202,17 +227,18 @@ class BotRunner:
             if not skill_call:
                 return model_reply
 
-            skill_result = self._strip_think_blocks(
+            raw_skill_result = self._strip_think_blocks(
                 self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
             )
+            summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
             if skill_call["done"]:
-                return skill_result
+                return raw_skill_result
 
             prompt.append({"role": "assistant", "content": model_reply})
             prompt.append(
                 {
                     "role": "user",
-                    "content": self._continue_skill_chain_prompt(skill_call["name"], skill_result),
+                    "content": self._continue_skill_chain_prompt(skill_call["name"], raw_skill_result),
                 }
             )
             if self._debug_enabled:
@@ -223,6 +249,10 @@ class BotRunner:
                     prompt,
                 )
             model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+            if summarized_skill_result != raw_skill_result:
+                prompt[-1]["content"] = self._continue_skill_chain_prompt(
+                    skill_call["name"], summarized_skill_result
+                )
             if self._debug_enabled:
                 logging.debug(
                     "Skill chain step %s/%s intermediate LLM response: %s",
@@ -410,7 +440,12 @@ class BotRunner:
                 )
                 return
             self._history[chat_id].append({"role": "user", "content": text})
-            self._history[chat_id].append({"role": "assistant", "content": reply})
+            self._history[chat_id].append(
+                {
+                    "role": "assistant",
+                    "content": self._summarize_skill_result_for_context("web_search", reply),
+                }
+            )
 
         for chunk in self._split_for_telegram(reply):
             self.telegram.send_message(chat_id, chunk)
