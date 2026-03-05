@@ -80,6 +80,14 @@ Recommended workflow:
 - Let the tool generate/edit code + docs in the module folder.
 - Review, run tests, and submit a PR for inclusion in the main repo.
 
+### Collector implementation pattern: explicit setup/signup command
+
+Collectors should avoid interactive setup during normal collection loops.
+
+- Any first-time auth/signup flow should be exposed as a separate command.
+- Collector runtime should be non-blocking and non-fatal when setup is incomplete.
+- If setup has not happened yet, collectors should return no data and wait for setup to be completed.
+
 ## Voice notes with OpenAI Whisper CLI
 
 When `runtime.enable_voice_notes` is `true`, `runtime.voice_transcribe_command` can call the Python `whisper` command directly. The bot replaces:
@@ -106,7 +114,8 @@ If you need messages a normal bot token cannot access:
 1. `pip install telethon`
 2. Set `collectors.telegram_recent.user_client.enabled = true` in `agent_config.json`
 3. Add your `api_id` and `api_hash`
-4. Re-run collectors and complete one-time QR login
+4. Run one-time signup command: `python3 run_telegram_collector_signup.py --config agent_config.json`
+5. Re-run collectors
 
 > Backward compatibility: `collectors.telegram_recent_collector` is still accepted.
 
