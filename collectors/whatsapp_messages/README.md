@@ -9,7 +9,7 @@ Collects recent WhatsApp messages into `workspace/whatsapp.messages.recent` via 
 
 Signup command:
 ```bash
-python3 run_whatsapp_collector_signup.py --config agent_config.json
+python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 ```
 
 ## File structure

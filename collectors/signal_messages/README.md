@@ -9,7 +9,7 @@ Collects recent Signal messages into `workspace/signal.messages.recent` using `s
 
 Signup command:
 ```bash
-python3 run_signal_collector_signup.py --config agent_config.json
+python3 -m collectors.signal_messages.signup --config agent_config.json
 ```
 
 ## File structure
