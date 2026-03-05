@@ -5,6 +5,7 @@ import unittest
 from assistant_framework.workspace import Workspace
 from collectors.google_calendar import create_collector as create_calendar_collector
 from collectors.twitter_recent import create_collector as create_twitter_collector
+from collectors.gmail import create_collector as create_gmail_collector
 
 
 class _FakeRunner:
@@ -61,6 +62,35 @@ class NewCollectorsTests(unittest.TestCase):
             files = list(workspace.resolve("google_calendar").glob("*.events.jsonl"))
             self.assertEqual(len(files), 1)
             self.assertIn("Standup", files[0].read_text(encoding="utf-8"))
+
+    def test_gmail_supports_multiple_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            collector = create_gmail_collector(
+                {
+                    "accounts": [
+                        {"name": "personal", "command": "gmail-a"},
+                        {"name": "work", "command": "gmail-b"},
+                    ]
+                }
+            )
+
+            fake = _FakeRunner(
+                [
+                    (0, json.dumps([{"id": "1", "subject": "a"}]), ""),
+                    (0, json.dumps([{"id": "2", "subject": "b"}]), ""),
+                ]
+            )
+
+            from unittest.mock import patch
+
+            with patch("collectors.gmail.run_command", fake):
+                collector["run"](workspace)
+
+            output = workspace.read_text("gmail.recent")
+            self.assertIn('"account": "personal"', output)
+            self.assertIn('"account": "work"', output)
+
 
 
 if __name__ == "__main__":

@@ -2,6 +2,6 @@
 
 from .workspace import Workspace
 from .skills import SkillManager
-from .collectors import CollectorManager, CollectorRunner
+from .collectors import CollectorManager, CollectorRunner, CollectorManifest
 
-__all__ = ["Workspace", "SkillManager", "CollectorManager", "CollectorRunner"]
+__all__ = ["Workspace", "SkillManager", "CollectorManager", "CollectorRunner", "CollectorManifest"]

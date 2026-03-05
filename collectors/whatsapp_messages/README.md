@@ -1,15 +1,17 @@
 # WhatsApp messages collector
 
-Collects recent WhatsApp messages into `workspace/whatsapp.messages.recent` via an external export command.
+Collects recent WhatsApp messages into `workspace/whatsapp.messages.recent` via external export commands.
 
-## Auth flow
-Use one-time WhatsApp Web QR login:
+## Multi-account setup
+1. Complete QR signup for each account/session.
+2. Configure `collectors.whatsapp_messages.accounts` with `name`, `session_file`, and `command`.
+3. Run collectors.
 
+Signup command:
 ```bash
 python3 run_whatsapp_collector_signup.py --config agent_config.json
 ```
 
-The QR output/log is written to `workspace/collectors/whatsapp_qr.txt` by default.
-
-## Debian dependencies
-This collector is dependency-light in Python and expects an external command/script (often Node-based) for WhatsApp Web auth and export.
+## File structure
+- `collectors/whatsapp_messages/__init__.py`
+- `collectors/whatsapp_messages/README.md`
