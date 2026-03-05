@@ -14,6 +14,7 @@ class Skill:
     name: str
     description: str
     run: Callable[[Workspace, dict[str, Any]], str]
+    requires_llm_response: bool = False
 
 
 class SkillManager:
@@ -61,6 +62,7 @@ class SkillManager:
                 name=registered["name"],
                 description=registered.get("description", ""),
                 run=registered["run"],
+                requires_llm_response=bool(registered.get("requires_llm_response", False)),
             )
 
         run = getattr(module, "run", None)
@@ -69,4 +71,5 @@ class SkillManager:
 
         name = getattr(module, "NAME", file_path.stem)
         description = getattr(module, "DESCRIPTION", "")
-        return Skill(name=name, description=description, run=run)
+        requires_llm_response = bool(getattr(module, "REQUIRES_LLM_RESPONSE", False))
+        return Skill(name=name, description=description, run=run, requires_llm_response=requires_llm_response)

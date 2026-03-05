@@ -271,7 +271,10 @@ class BotTests(unittest.TestCase):
     def test_handle_message_stores_web_search_summary_in_history(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()
-        bot.llm = DummyLLM('{"skill_call": {"name": "web_search", "args": {"query": "x"}}}')
+        bot.llm = SequentialLLM([
+            '{"skill_call": {"name": "web_search", "args": {"query": "x"}}}',
+            "Here is the summary from search.",
+        ])
         bot._run_skill_call = lambda *_args, **_kwargs: (
             "DuckDuckGo results for: x\n"
             "1. Example\n"
@@ -283,9 +286,9 @@ class BotTests(unittest.TestCase):
 
         bot._handle_message(1, "search")
 
-        self.assertIn("<html><body>Huge page</body></html>", bot.telegram.sent[0][1])
+        self.assertEqual(bot.telegram.sent[0][1], "Here is the summary from search.")
+        self.assertEqual(bot._history[1][1]["content"], "Here is the summary from search.")
         self.assertNotIn("<html><body>Huge page</body></html>", bot._history[1][1]["content"])
-        self.assertIn("Snippet: Example snippet", bot._history[1][1]["content"])
 
     def test_skill_call_chain_logs_intermediate_prompt_and_response_on_debug(self) -> None:
         with tempfile.TemporaryDirectory() as td:

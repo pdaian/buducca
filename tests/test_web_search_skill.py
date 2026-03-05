@@ -40,6 +40,15 @@ _SAMPLE_PAGE_HTML = """
 </html>
 """
 
+_ESCAPED_HTML_TEXT_PAGE = """
+<html>
+  <body>
+    <p>&lt;div class=\"shell\"&gt;rm -rf /&lt;/div&gt; &lt;span&gt;literal markup text&lt;/span&gt;</p>
+    <p>This is a normal sentence with enough words to be useful for the assistant response.</p>
+  </body>
+</html>
+"""
+
 
 def load_web_search_module():
     skill_path = Path("skills/web_search/__init__.py")
@@ -112,6 +121,12 @@ class WebSearchSkillTests(unittest.TestCase):
         self.assertIn("Another readable paragraph that provides useful context from the page body for summarization.", text)
         self.assertNotIn("function x", text)
         self.assertNotIn("const config", text)
+
+    def test_extract_readable_text_drops_escaped_markup_lines(self) -> None:
+        text = self.module._extract_readable_text(_ESCAPED_HTML_TEXT_PAGE)
+        self.assertIn("This is a normal sentence with enough words to be useful for the assistant response.", text)
+        self.assertNotIn("<div", text)
+        self.assertNotIn("literal markup text", text)
 
 
 if __name__ == "__main__":
