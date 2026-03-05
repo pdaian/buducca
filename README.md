@@ -40,6 +40,7 @@ To keep the main README focused, each skill and collector now has its own README
 - `summarize_workspace` → `skills/summarize_workspace/README.md`
 - `taskwarrior` → `skills/taskwarrior/README.md`
 - `web_search` → `skills/web_search/README.md`
+- `openhue` → `skills/openhue/README.md`
 
 ### Available collectors
 

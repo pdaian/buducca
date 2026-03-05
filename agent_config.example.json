@@ -25,21 +25,46 @@
         {
           "name": "primary",
           "device_name": "+15550001111",
-          "command": ["signal-cli", "-o", "json", "-a", "+15550001111", "receive", "--ignore-attachments"]
+          "command": [
+            "signal-cli",
+            "-o",
+            "json",
+            "-a",
+            "+15550001111",
+            "receive",
+            "--ignore-attachments"
+          ]
         }
       ],
-      "link_command": ["signal-cli", "link", "-n", "buducca-signal"]
+      "link_command": [
+        "signal-cli",
+        "link",
+        "-n",
+        "buducca-signal"
+      ]
     },
     "gmail": {
       "accounts": [
-        {"name": "personal", "command": "google-agentic gmail list --account personal --format json --limit 50"},
-        {"name": "work", "command": "google-agentic gmail list --account work --format json --limit 50"}
+        {
+          "name": "personal",
+          "command": "google-agentic gmail list --account personal --format json --limit 50"
+        },
+        {
+          "name": "work",
+          "command": "google-agentic gmail list --account work --format json --limit 50"
+        }
       ]
     },
     "slack": {
       "accounts": [
-        {"name": "workspace_a", "command": "python3 scripts/export_slack_recent_a.py"},
-        {"name": "workspace_b", "command": "python3 scripts/export_slack_recent_b.py"}
+        {
+          "name": "workspace_a",
+          "command": "python3 scripts/export_slack_recent_a.py"
+        },
+        {
+          "name": "workspace_b",
+          "command": "python3 scripts/export_slack_recent_b.py"
+        }
       ]
     },
     "twitter_recent": {
@@ -64,7 +89,10 @@
     "google_calendar": {
       "accounts": [
         "primary@example.com",
-        {"name": "work@example.com", "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"}
+        {
+          "name": "work@example.com",
+          "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"
+        }
       ]
     }
   }
