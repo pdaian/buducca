@@ -1,7 +1,7 @@
 # Web search skill
 
 ## What it does
-Searches DuckDuckGo and returns result metadata plus fetched HTML for each result.
+Searches DuckDuckGo and returns result metadata plus cleaned readable text for each result page.
 
 ## Dependencies
 - Network access.
