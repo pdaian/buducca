@@ -13,13 +13,16 @@ NAME = "web_search"
 REQUIRES_LLM_RESPONSE = True
 DESCRIPTION = (
     "Search the web with DuckDuckGo (no API key required). "
-    "Args: query (required), max_results (optional, default 10, capped at 10). "
-    "Returns title/url/snippet results plus cleaned page text for each linked page."
+    "Args: query (required), max_pages_checked (optional, default 80), "
+    "min_pages_returned (optional, default 10). "
+    "Returns title/url/snippet plus cleaned text for pages with non-trivial readable content."
 )
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
-_DEFAULT_MAX_RESULTS = 10
+_DEFAULT_MAX_PAGES_CHECKED = 80
+_DEFAULT_MIN_PAGES_RETURNED = 10
 _DEFAULT_MAX_PAGE_CHARS = 2200
+_MIN_NON_TRIVIAL_TEXT_CHARS = 180
 
 _TEXT_BREAK_TAGS = {
     "p",
@@ -254,6 +257,18 @@ def _extract_readable_text(html_payload: str, max_chars: int = _DEFAULT_MAX_PAGE
     return "\n".join(cleaned_lines)
 
 
+def _is_non_trivial_text(text: str) -> bool:
+    if not text or text == "No readable text extracted from page.":
+        return False
+
+    compact = text.replace("\n", " ").strip()
+    if len(compact) < _MIN_NON_TRIVIAL_TEXT_CHARS:
+        return False
+
+    words = [word for word in compact.split(" ") if word]
+    return len(words) >= 25
+
+
 def _fetch_search_html(query: str) -> str:
     payload = urlencode({"q": query}).encode("utf-8")
     request = Request(
@@ -316,34 +331,66 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return "Missing required arg `query`."
 
     try:
-        max_results = int(args.get("max_results", _DEFAULT_MAX_RESULTS))
+        max_pages_checked = int(args.get("max_pages_checked", _DEFAULT_MAX_PAGES_CHECKED))
     except (TypeError, ValueError):
-        max_results = _DEFAULT_MAX_RESULTS
+        max_pages_checked = _DEFAULT_MAX_PAGES_CHECKED
 
-    max_results = max(1, min(_DEFAULT_MAX_RESULTS, max_results))
+    try:
+        min_pages_returned = int(args.get("min_pages_returned", _DEFAULT_MIN_PAGES_RETURNED))
+    except (TypeError, ValueError):
+        min_pages_returned = _DEFAULT_MIN_PAGES_RETURNED
+
+    max_pages_checked = max(1, min(100, max_pages_checked))
+    min_pages_returned = max(1, min(100, min_pages_returned))
 
     try:
         payload = _fetch_search_html(query)
     except Exception as exc:
         return f"Web search failed: {exc}"
 
-    results = _extract_results(payload, max_results=max_results)
+    results = _extract_results(payload, max_results=max_pages_checked)
     if not results:
         return f"No results found for query: {query}"
 
-    lines = [f"DuckDuckGo results for: {query}"]
-    for idx, item in enumerate(results, start=1):
+    kept_results: list[tuple[dict[str, str], str]] = []
+    pages_checked = 0
+
+    for item in results:
+        if pages_checked >= max_pages_checked:
+            break
+
+        pages_checked += 1
+        try:
+            page_html = _fetch_page_html(item["url"])
+            page_text = _extract_readable_text(page_html)
+            if _is_non_trivial_text(page_text):
+                kept_results.append((item, page_text))
+                if len(kept_results) >= min_pages_returned:
+                    break
+        except Exception:
+            continue
+
+    if not kept_results:
+        return (
+            f"DuckDuckGo results for: {query}\n"
+            f"Checked {pages_checked} page(s), but none had non-trivial readable text."
+        )
+
+    lines = [
+        f"DuckDuckGo results for: {query}",
+        (
+            "Returned "
+            f"{len(kept_results)} page(s) with non-trivial text after checking {pages_checked} page(s) "
+            f"(target min_pages_returned={min_pages_returned}, max_pages_checked={max_pages_checked})."
+        ),
+    ]
+    for idx, (item, page_text) in enumerate(kept_results, start=1):
         lines.append(f"{idx}. {item['title']}")
         lines.append(f"   URL: {item['url']}")
         snippet = item.get("snippet", "")
         if snippet:
             lines.append(f"   Snippet: {snippet}")
-
-        try:
-            page_html = _fetch_page_html(item["url"])
-            lines.append("   Page text:")
-            lines.append(_extract_readable_text(page_html))
-        except Exception as exc:
-            lines.append(f"   Page fetch failed: {exc}")
+        lines.append("   Page text:")
+        lines.append(page_text)
 
     return "\n".join(lines)
