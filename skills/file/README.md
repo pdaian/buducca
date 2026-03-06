@@ -20,3 +20,16 @@ python3 -m assistant_framework.cli skill file --args '{"action":"write","paths":
 ```
 
 Use `paths` for file actions and `directories` for directory actions.
+
+## Args schema
+```ts
+{
+  action: "read" | "write" | "append" | "move" | "create_dir" | "delete_dir";
+  paths?: string[];
+  path?: string;
+  contents?: string[];
+  content?: string;
+  destination_dir?: string;
+  directories?: string[];
+}
+```

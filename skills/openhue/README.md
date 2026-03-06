@@ -37,3 +37,15 @@ You can override with args per call:
 Or via environment variables:
 - `OPENHUE_LIST_COMMAND`
 - `OPENHUE_SET_COMMAND_TEMPLATE`
+
+## Args schema
+```ts
+{
+  action: "list" | "on" | "off" | "toggle";
+  lights?: string[];
+  brightness?: number;
+  transition_ms?: number;
+  list_command?: string;
+  set_command_template?: string;
+}
+```

@@ -11,3 +11,10 @@ Lists workspace files and sizes, up to `max_items`.
 ```bash
 python3 -m assistant_framework.cli skill summarize_workspace --args '{"max_items":20}'
 ```
+
+## Args schema
+```ts
+{
+  max_items?: number;
+}
+```

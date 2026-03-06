@@ -173,7 +173,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n'
+                'ARGS_SCHEMA = "{ text: string }"\n\n'
                 'def run(workspace, args):\n    return args.get("text", "")\n',
                 encoding="utf-8",
             )
@@ -188,6 +189,8 @@ class BotTests(unittest.TestCase):
             system_prompt = bot.llm.messages[0]["content"]
             self.assertIn("Available skills", system_prompt)
             self.assertIn("echo: Echoes user text.", system_prompt)
+            self.assertIn("args schema", system_prompt)
+            self.assertIn("{ text: string }", system_prompt)
             self.assertIn('"skill_call"', system_prompt)
             self.assertIn("Available collectors and file structure", system_prompt)
             self.assertIn("collectors/telegram_recent/__init__.py", system_prompt)
