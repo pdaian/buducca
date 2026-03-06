@@ -45,7 +45,7 @@ class TaskwarriorSkillTests(unittest.TestCase):
 
             result = self.module.run(self.workspace, {"action": "list"})
 
-            run_mock.assert_called_once_with(["task", "list"], capture_output=True, text=True, check=False)
+            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "list"], capture_output=True, text=True, check=False, timeout=30)
             self.assertEqual(result, "1 Buy milk")
 
     def test_list_accepts_command_alias(self) -> None:
@@ -56,7 +56,7 @@ class TaskwarriorSkillTests(unittest.TestCase):
 
             result = self.module.run(self.workspace, {"command": "list"})
 
-            run_mock.assert_called_once_with(["task", "list"], capture_output=True, text=True, check=False)
+            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "list"], capture_output=True, text=True, check=False, timeout=30)
             self.assertEqual(result, "1 Buy milk")
 
     def test_add_calls_task_add(self) -> None:
@@ -68,7 +68,7 @@ class TaskwarriorSkillTests(unittest.TestCase):
             result = self.module.run(self.workspace, {"action": "add", "description": "Buy milk"})
 
             run_mock.assert_called_once_with(
-                ["task", "add", "Buy milk"], capture_output=True, text=True, check=False
+                ["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "add", "Buy milk"], capture_output=True, text=True, check=False, timeout=30
             )
             self.assertEqual(result, "Created task 5.")
 
@@ -89,10 +89,11 @@ class TaskwarriorSkillTests(unittest.TestCase):
             )
 
             run_mock.assert_called_once_with(
-                ["task", "add", "project:Home", "due:tomorrow", "Pay rent"],
+                ["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "add", "project:Home", "due:tomorrow", "Pay rent"],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30,
             )
             self.assertEqual(result, "Created task 6.")
 
@@ -105,10 +106,11 @@ class TaskwarriorSkillTests(unittest.TestCase):
             result = self.module.run(self.workspace, {"action": "modify", "tasks": ["3"], "project": "Ops"})
 
             run_mock.assert_called_once_with(
-                ["task", "3", "modify", "project:Ops"],
+                ["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "3", "modify", "project:Ops"],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30,
             )
             self.assertEqual(result, "Modified 1 task.")
 
@@ -124,13 +126,22 @@ class TaskwarriorSkillTests(unittest.TestCase):
             )
 
             run_mock.assert_called_once_with(
-                ["task", "3", "4", "modify", "project:Ops"],
+                ["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "3", "4", "modify", "project:Ops"],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30,
             )
             self.assertEqual(result, "Modified 2 tasks.")
 
+    def test_returns_timeout_message_when_task_cli_hangs(self) -> None:
+        with patch.object(self.module.subprocess, "run", side_effect=self.module.subprocess.TimeoutExpired(cmd=["task"], timeout=30)):
+            result = self.module.run(self.workspace, {"action": "list"})
+
+            self.assertEqual(
+                result,
+                "Taskwarrior command timed out after 30s. It may be waiting for interactive input.",
+            )
 
 if __name__ == "__main__":
     unittest.main()
