@@ -131,11 +131,13 @@ class BotRunner:
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
         payload_text = reply.strip()
+        skill_key_markers = [f'"{name}"' for name in self._skills]
         if (
             "skill_call" not in payload_text
             and '"args"' not in payload_text
             and '"name"' not in payload_text
             and '"done"' not in payload_text
+            and not any(marker in payload_text for marker in skill_key_markers)
         ):
             return None
 
@@ -165,9 +167,17 @@ class BotRunner:
                     parsed, _end = decoder.raw_decode(payload_text[match.start() :])
                 except json.JSONDecodeError:
                     continue
-                if isinstance(parsed, dict) and isinstance(parsed.get("skill_call"), dict):
+                if not isinstance(parsed, dict):
+                    continue
+                if isinstance(parsed.get("skill_call"), dict):
                     payload = parsed
                     break
+                if len(parsed) == 1:
+                    [top_level_name] = parsed.keys()
+                    top_level_payload = parsed.get(top_level_name)
+                    if isinstance(top_level_payload, dict):
+                        payload = parsed
+                        break
             if payload is None:
                 return None
 
