@@ -362,6 +362,42 @@ class BotTests(unittest.TestCase):
             },
         )
 
+    def test_skill_call_parses_web_search_args_without_name_or_done(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"web_search": {"query": "Howard Lutnick Epstein files role", "max_results": 10}}'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "web_search",
+                "args": {"query": "Howard Lutnick Epstein files role", "max_results": 10},
+                "done": True,
+            },
+        )
+
+    def test_skill_call_parses_file_create_payload_without_name_or_done(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"file": {"action": "create", "paths": ["pharmacytodo"], "contents": ["deodorant"]}}'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "file",
+                "args": {
+                    "action": "create",
+                    "paths": ["pharmacytodo"],
+                    "contents": ["deodorant"],
+                },
+                "done": True,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "telegram_llm_bot.bot.json.JSONDecoder.raw_decode"
