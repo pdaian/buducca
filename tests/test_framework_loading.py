@@ -54,6 +54,38 @@ class LoadingTests(unittest.TestCase):
             self.assertIn("demo_skill", skills)
             self.assertEqual(skills["demo_skill"].run(Workspace(Path(td) / "workspace"), {}), "package")
 
+    def test_skill_manager_reads_args_schema_from_skill_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            package = skills_dir / "demo_skill"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(
+                textwrap.dedent(
+                    '''
+                    NAME = "demo_skill"
+                    def run(workspace, args):
+                        return "ok"
+                    '''
+                ),
+                encoding="utf-8",
+            )
+            (package / "README.md").write_text(
+                textwrap.dedent(
+                    '''
+                    # Demo skill
+
+                    ## Args schema
+                    ```ts
+                    { value?: string }
+                    ```
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            skills = SkillManager(skills_dir).load()
+            self.assertEqual(skills["demo_skill"].args_schema, "{ value?: string }")
+
 
     def test_skill_manager_loads_requires_llm_response_flag(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -19,3 +19,12 @@ The skill will:
 python3 -m assistant_framework.cli skill web_search --args '{"query":"python 3.12 release notes"}'
 python3 -m assistant_framework.cli skill web_search --args '{"query":"rust tokio tutorial","max_pages_checked":30,"min_pages_returned":10}'
 ```
+
+## Args schema
+```ts
+{
+  query: string;
+  max_pages_checked?: number;
+  min_pages_returned?: number;
+}
+```

@@ -66,8 +66,13 @@ class BotRunner:
                 "Available skills:",
             ]
             for name in sorted(self._skills):
-                description = self._skills[name].description or "No description provided."
+                skill = self._skills[name]
+                description = skill.description or "No description provided."
                 skill_intro.append(f"- {name}: {description}")
+                if skill.args_schema:
+                    skill_intro.append("  args schema:")
+                    for line in skill.args_schema.splitlines():
+                        skill_intro.append(f"    {line}")
             sections.append("\n".join(skill_intro))
 
         if self._collector_manifests:
