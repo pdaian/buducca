@@ -210,7 +210,12 @@ class BotRunner:
             args = raw_args
         if not isinstance(args, dict):
             return None
-        done = skill_call_payload.get("done", payload.get("done", True))
+
+        nested_done = args.get("done") if isinstance(args.get("done"), bool) else None
+        if nested_done is not None:
+            args = {key: value for key, value in args.items() if key != "done"}
+
+        done = skill_call_payload.get("done", payload.get("done", nested_done if nested_done is not None else True))
         if not isinstance(done, bool):
             done = True
         return {"name": skill_name, "args": args, "done": done}

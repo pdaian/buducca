@@ -398,6 +398,22 @@ class BotTests(unittest.TestCase):
             },
         )
 
+    def test_skill_call_uses_nested_done_flag_inside_args(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"skill_call": {"name": "web_search", "args": {"query": "\\"Terrapin Ridge Farms\\" \\\"Scientology\\\" Mary O\'Donnell", "done": false}}}'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "web_search",
+                "args": {"query": '"Terrapin Ridge Farms" "Scientology" Mary O\'Donnell'},
+                "done": False,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "telegram_llm_bot.bot.json.JSONDecoder.raw_decode"
