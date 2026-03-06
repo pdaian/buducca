@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from assistant_framework.workspace import Workspace
 
 NAME = "web_search"
+REQUIRES_LLM_RESPONSE = True
 DESCRIPTION = (
     "Search the web with DuckDuckGo (no API key required). "
     "Args: query (required), max_results (optional, default 10, capped at 10). "
@@ -210,6 +211,10 @@ def _looks_like_code_or_noise(line: str) -> bool:
         return True
     if digits > letters * 2 and len(line) > 40:
         return True
+    if line.count("<") + line.count(">") > max(6, len(line) // 12):
+        return True
+    if re.search(r"</?[a-zA-Z][^>]*>", line):
+        return True
     return False
 
 
@@ -222,8 +227,16 @@ def _extract_readable_text(html_payload: str, max_chars: int = _DEFAULT_MAX_PAGE
     seen: set[str] = set()
     current_len = 0
     for block in parser.blocks:
-        line = block.strip()
-        if len(line) < 30:
+        raw_block = block.strip()
+        if len(raw_block) < 30:
+            continue
+        if "&lt;" in raw_block and "&gt;" in raw_block:
+            continue
+        line = raw_block
+        if re.search(r"</?[^>]+>", line):
+            continue
+        line = _normalize_text(line)
+        if not line:
             continue
         if line in seen:
             continue
@@ -283,6 +296,14 @@ def _fetch_page_html(url: str) -> str:
         method="GET",
     )
     with urlopen(request, timeout=15) as response:
+        content_type = response.headers.get("Content-Type", "").lower()
+        if content_type and not (
+            content_type.startswith("text/")
+            or "html" in content_type
+            or "xml" in content_type
+            or "json" in content_type
+        ):
+            return f"Unsupported page content type: {content_type}"
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
 

@@ -54,6 +54,28 @@ class LoadingTests(unittest.TestCase):
             self.assertIn("demo_skill", skills)
             self.assertEqual(skills["demo_skill"].run(Workspace(Path(td) / "workspace"), {}), "package")
 
+
+    def test_skill_manager_loads_requires_llm_response_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir()
+            (skills_dir / "demo.py").write_text(
+                textwrap.dedent(
+                    """
+                    NAME = "demo"
+                    REQUIRES_LLM_RESPONSE = True
+                    def run(workspace, args):
+                        return "done"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            manager = SkillManager(skills_dir)
+            skills = manager.load()
+
+            self.assertTrue(skills["demo"].requires_llm_response)
+
     def test_skill_manager_reflects_deleted_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"

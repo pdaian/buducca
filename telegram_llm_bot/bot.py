@@ -84,7 +84,8 @@ class BotRunner:
                 "Do not include any extra text before or after JSON.",
                 "Use skill_call only when user explicitly requests a skill run or task execution.",
                 "If done is false, the tool result will be provided back to you so you can choose the next step.",
-                "If done is true, the tool result is sent to the user as the final answer.",
+                "If done is true, the tool result is usually sent to the user as the final answer.",
+                "Some skills may require an additional LLM response before replying to the user.",
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
             ]
             sections.append("\n".join(skill_rules))
@@ -204,12 +205,22 @@ class BotRunner:
             done = True
         return {"name": skill_name, "args": args, "done": done}
 
-    def _continue_skill_chain_prompt(self, skill_name: str, skill_result: str) -> str:
-        return (
-            f"Skill `{skill_name}` returned:\n{skill_result}\n\n"
-            "If you need another skill call, respond with valid JSON skill_call and done=false. "
-            "If no more skills are needed, respond normally to the user."
-        )
+
+    def _skill_requires_llm_response(self, skill_name: str) -> bool:
+        skill = self._skills.get(skill_name)
+        if skill is None:
+            return False
+        return skill.requires_llm_response
+
+    def _continue_skill_chain_prompt(self, skill_name: str, skill_result: str, *, allow_follow_up_skill: bool) -> str:
+        if allow_follow_up_skill:
+            guidance = (
+                "If you need another skill call, respond with valid JSON skill_call and done=false. "
+                "If no more skills are needed, respond normally to the user."
+            )
+        else:
+            guidance = "Now reply to the user directly using this result. Do not return raw tool output or skill_call JSON."
+        return f"Skill `{skill_name}` returned:\n{skill_result}\n\n{guidance}"
 
     def _summarize_skill_result_for_context(self, skill_name: str, skill_result: str) -> str:
         if skill_name != "web_search" or "DuckDuckGo results for:" not in skill_result:
@@ -246,14 +257,20 @@ class BotRunner:
                 self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
             )
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
-            if skill_call["done"]:
+            requires_llm_response = self._skill_requires_llm_response(skill_call["name"])
+
+            if skill_call["done"] and not requires_llm_response:
                 return raw_skill_result
 
             prompt.append({"role": "assistant", "content": model_reply})
             prompt.append(
                 {
                     "role": "user",
-                    "content": self._continue_skill_chain_prompt(skill_call["name"], raw_skill_result),
+                    "content": self._continue_skill_chain_prompt(
+                        skill_call["name"],
+                        raw_skill_result,
+                        allow_follow_up_skill=not skill_call["done"],
+                    ),
                 }
             )
             if self._debug_enabled:
@@ -266,7 +283,9 @@ class BotRunner:
             model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
             if summarized_skill_result != raw_skill_result:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
-                    skill_call["name"], summarized_skill_result
+                    skill_call["name"],
+                    summarized_skill_result,
+                    allow_follow_up_skill=not skill_call["done"],
                 )
             if self._debug_enabled:
                 logging.debug(
@@ -275,6 +294,9 @@ class BotRunner:
                     _MAX_SKILL_CHAIN_STEPS,
                     model_reply,
                 )
+
+            if skill_call["done"] and requires_llm_response:
+                return model_reply
 
         logging.warning("Skill chain exceeded max steps (%s)", _MAX_SKILL_CHAIN_STEPS)
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
