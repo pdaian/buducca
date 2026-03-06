@@ -5,6 +5,14 @@ from typing import Any
 
 from assistant_framework.workspace import Workspace
 
+_TASK_TIMEOUT_SECONDS = 30
+_NON_INTERACTIVE_FLAGS = [
+    "rc.confirmation=off",
+    "rc.bulk=1000",
+    "rc.recurrence.confirmation=off",
+    "rc.dependency.confirmation=off",
+]
+
 NAME = "taskwarrior"
 DESCRIPTION = (
     "Manage Taskwarrior todos. "
@@ -16,10 +24,22 @@ DESCRIPTION = (
 
 
 def _run_task_command(command: list[str]) -> str:
+    full_command = ["task", *_NON_INTERACTIVE_FLAGS, *command[1:]] if command and command[0] == "task" else command
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            full_command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_TASK_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         return "Taskwarrior CLI not found. Please install `task` and ensure it is in PATH."
+    except subprocess.TimeoutExpired:
+        return (
+            "Taskwarrior command timed out after "
+            f"{_TASK_TIMEOUT_SECONDS}s. It may be waiting for interactive input."
+        )
 
     output = (result.stdout or "").strip()
     error = (result.stderr or "").strip()
