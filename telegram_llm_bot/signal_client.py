@@ -24,6 +24,8 @@ class SignalFrontendUnavailableError(RuntimeError):
 
 
 class SignalClient:
+    _VOICE_FILE_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"}
+
     def __init__(
         self,
         account: str,
@@ -150,8 +152,7 @@ class SignalClient:
         for attachment in attachments:
             if not isinstance(attachment, dict):
                 continue
-            content_type = str(attachment.get("contentType") or "").lower()
-            if not content_type.startswith("audio/"):
+            if not self._is_voice_attachment(attachment):
                 continue
             for field in ("storedFilename", "filename"):
                 candidate = attachment.get(field)
@@ -159,6 +160,23 @@ class SignalClient:
                     path = Path(candidate.strip())
                     return str(path if path.is_absolute() else Path.cwd() / path)
         return None
+
+    def _is_voice_attachment(self, attachment: dict[str, Any]) -> bool:
+        content_type = str(attachment.get("contentType") or "").lower()
+        if content_type.startswith("audio/"):
+            return True
+
+        voice_note_flag = attachment.get("voiceNote")
+        if voice_note_flag is True:
+            return True
+
+        for field in ("storedFilename", "filename"):
+            candidate = attachment.get(field)
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            if Path(candidate.strip()).suffix.lower() in self._VOICE_FILE_EXTENSIONS:
+                return True
+        return False
 
     def send_message(self, recipient: str, text: str) -> None:
         command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
