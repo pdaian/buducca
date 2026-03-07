@@ -13,6 +13,14 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_QR_OUTPUT = "workspace/signal_frontend_qr.txt"
 
 
+def _coerce_output(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value
+    return ""
+
+
 def _load_json(path: str) -> dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -53,8 +61,8 @@ def run_signup(config_path: str) -> int:
         output = proc.stdout or proc.stderr or ""
         return_code = int(proc.returncode)
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        stdout = _coerce_output(exc.stdout)
+        stderr = _coerce_output(exc.stderr)
         output = stdout or stderr or ""
         return_code = 124
         print(
