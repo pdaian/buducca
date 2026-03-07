@@ -231,6 +231,23 @@ class BotTests(unittest.TestCase):
             self.assertIn("collector:telegram_recent", sent)
             self.assertIn("last_success_at", sent)
 
+
+    def test_poll_frontends_handles_telegram_409_conflict(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = PollingTelegram([RuntimeError("HTTP 409 for https://api.telegram.org/bott/getUpdates: conflict")])
+
+        with self.assertLogs(level="WARNING") as logs:
+            bot._poll_frontends_once()
+
+        self.assertTrue(any("polling conflict" in line.lower() for line in logs.output))
+
+    def test_poll_frontends_reraises_non_conflict_runtime_error(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = PollingTelegram([RuntimeError("HTTP 500 for https://api.telegram.org/bott/getUpdates: server")])
+
+        with self.assertRaises(RuntimeError):
+            bot._poll_frontends_once()
+
     def test_system_prompt_includes_skills(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
