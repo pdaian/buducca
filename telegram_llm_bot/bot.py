@@ -641,10 +641,17 @@ class BotRunner:
                 return True
 
             if self._is_signal_self_sender(sender_id):
-                logging.warning(
-                    "Blocked message from signal account sender_id=%s because it is not in signal.allowed_sender_ids",
-                    sender_id,
-                )
+                if signal_group_id:
+                    logging.warning(
+                        "Blocked message from signal account sender_id=%s because it is not in signal.allowed_sender_ids group_id=%s",
+                        sender_id,
+                        signal_group_id,
+                    )
+                else:
+                    logging.warning(
+                        "Blocked message from signal account sender_id=%s because it is not in signal.allowed_sender_ids",
+                        sender_id,
+                    )
                 return False
 
             logging.warning(
