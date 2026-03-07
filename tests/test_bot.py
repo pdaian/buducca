@@ -242,6 +242,11 @@ class BotTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            Path(td, "learnings").write_text(
+                "User prefers concise responses.\nRemember to include timezone info.\n",
+                encoding="utf-8",
+            )
+
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
             bot = self.make_bot(runtime=runtime)
             bot.telegram = DummyTelegram()
@@ -257,6 +262,10 @@ class BotTests(unittest.TestCase):
             self.assertIn('"skill_call"', system_prompt)
             self.assertIn("Available collectors and file structure", system_prompt)
             self.assertIn("collectors/telegram_recent/__init__.py", system_prompt)
+            self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
+            self.assertIn("These are long-term learnings for future prompts", system_prompt)
+            self.assertIn("- User prefers concise responses.", system_prompt)
+            self.assertIn("save them with the learn skill as a concise one-line learning", system_prompt)
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
 

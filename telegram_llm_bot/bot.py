@@ -104,6 +104,18 @@ class BotRunner:
                 collector_lines.append(f"- {manifest.name}: {paths}")
             sections.append("\n".join(collector_lines))
 
+        learnings_lines = [
+            "Persistent learnings (from workspace/learnings):",
+            "These are long-term learnings for future prompts. Reuse them whenever relevant.",
+        ]
+        learnings_text = self._workspace.read_text("learnings", default="")
+        saved_learnings = [line.strip() for line in learnings_text.splitlines() if line.strip()]
+        if saved_learnings:
+            learnings_lines.extend(f"- {line}" for line in saved_learnings)
+        else:
+            learnings_lines.append("- No learnings recorded yet.")
+        sections.append("\n".join(learnings_lines))
+
         if self._skills:
             skill_rules = [
                 "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
@@ -114,6 +126,7 @@ class BotRunner:
                 "If done is true, the tool result is usually sent to the user as the final answer.",
                 "Some skills may require an additional LLM response before replying to the user.",
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
+                "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
             ]
             sections.append("\n".join(skill_rules))
 
