@@ -237,6 +237,33 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
+    def test_signal_sender_not_allowed_in_direct_message_even_when_group_allowlist_exists(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=[],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="+15169418131",
+                sender_id="+15169418131",
+                text="note to self",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
+
     def test_signal_update_from_unauthorized_sender_allowed_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(
