@@ -31,6 +31,8 @@ python3 run_bot.py --config config.json
 - Configure both to accept messages on either backend and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 
+- ⚠️ **Signal shared-account caveat:** if `collectors.signal_messages` and `signal.account` point at the same Signal identity, enabling attachment ignore mode (default) can lose voice/attachment context. Shared-account mode is unsupported unless you explicitly configure collector attachment handling.
+
 ## Plugin layout (skills + collectors)
 
 To keep the main README focused, each skill and collector now has its own README in its own subfolder:
