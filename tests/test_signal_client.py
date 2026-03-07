@@ -100,7 +100,7 @@ class SignalClientTests(unittest.TestCase):
 
     def test_parses_group_data_message_using_group_conversation_id(self) -> None:
         stdout = (
-            '{"envelope":{"source":"+15550001","dataMessage":{"groupInfo":{"groupId":"group-123"},"message":"hi group"}}}'
+            '{"envelope":{"source":"+15550001","dataMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"hi group"}}}'
         )
 
         with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
@@ -112,13 +112,13 @@ class SignalClientTests(unittest.TestCase):
                 updates = client.get_updates()
 
         self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0].conversation_id, "group:group-123")
+        self.assertEqual(updates[0].conversation_id, "group:Family Chat|group-123")
         self.assertEqual(updates[0].sender_id, "+15550001")
         self.assertEqual(updates[0].text, "hi group")
 
     def test_parses_sync_sent_group_message_using_group_conversation_id(self) -> None:
         stdout = (
-            '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"groupInfo":{"groupId":"group-123"},"message":"group note"}}}}'
+            '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"group note"}}}}'
         )
 
         with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
@@ -130,7 +130,7 @@ class SignalClientTests(unittest.TestCase):
                 updates = client.get_updates()
 
         self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0].conversation_id, "group:group-123")
+        self.assertEqual(updates[0].conversation_id, "group:Family Chat|group-123")
         self.assertEqual(updates[0].sender_id, "+15551230000")
         self.assertEqual(updates[0].text, "group note")
 
@@ -151,6 +151,21 @@ class SignalClientTests(unittest.TestCase):
         )
 
     def test_send_message_supports_group_conversation_id(self) -> None:
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            run.return_value.stderr = ""
+            client = SignalClient(account="+15551230000")
+            client.send_message("group:Family Chat|group-123", "hello group")
+
+        run.assert_called_once_with(
+            ["signal-cli", "-a", "+15551230000", "send", "-m", "hello group", "-g", "group-123"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_send_message_still_supports_raw_group_conversation_id(self) -> None:
         with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = ""
