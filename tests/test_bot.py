@@ -137,6 +137,27 @@ class BotTests(unittest.TestCase):
 
         self.assertTrue(any("Filtered <think> block(s) from llm output" in line for line in logs.output))
 
+
+    def test_frontend_history_files_created_and_written(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(IncomingMessage(update_id=1, chat_id=1, text="hi"))
+
+            telegram_history = Path(td) / "logs" / "telegram.history"
+            signal_history = Path(td) / "logs" / "signal.history"
+            self.assertTrue(telegram_history.exists())
+            self.assertTrue(signal_history.exists())
+
+            events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[0]["direction"], "incoming")
+            self.assertEqual(events[0]["text"], "hi")
+            self.assertEqual(events[-1]["direction"], "outgoing")
+            self.assertEqual(events[-1]["text"], "hello")
+
     def test_status_command_uses_collector_status_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             ws = Path(td) / "workspace"

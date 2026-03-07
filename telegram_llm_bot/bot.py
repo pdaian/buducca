@@ -62,6 +62,9 @@ class BotRunner:
             lambda: deque(maxlen=self.config.llm.history_messages * 2)
         )
         self._workspace = Workspace(self.config.runtime.workspace_dir)
+        self._workspace.create_dir("logs")
+        self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
+        self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
         self._collector_manifests = CollectorManager(self.config.runtime.collectors_dir).load_manifests()
 
@@ -509,13 +512,47 @@ class BotRunner:
             if not self.telegram:
                 raise RuntimeError("Telegram frontend is not configured")
             self.telegram.send_message(int(conversation_id), text)
+            self._append_frontend_log(
+                backend="telegram",
+                direction="outgoing",
+                conversation_id=conversation_id,
+                sender_id="bot",
+                text=text,
+            )
             return
         if backend == "signal":
             if not self.signal:
                 raise RuntimeError("Signal frontend is not configured")
             self.signal.send_message(conversation_id, text)
+            self._append_frontend_log(
+                backend="signal",
+                direction="outgoing",
+                conversation_id=conversation_id,
+                sender_id="bot",
+                text=text,
+            )
             return
         raise RuntimeError(f"Unsupported backend: {backend}")
+
+    def _append_frontend_log(
+        self,
+        *,
+        backend: str,
+        direction: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+    ) -> None:
+        history_file = f"logs/{backend}.history"
+        payload = {
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+            "backend": backend,
+            "direction": direction,
+            "conversation_id": conversation_id,
+            "sender_id": sender_id,
+            "text": text,
+        }
+        self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _handle_update(self, update: IncomingMessage) -> None:
         backend = getattr(update, "backend", "telegram")
@@ -523,6 +560,13 @@ class BotRunner:
         sender_id = getattr(update, "sender_id", conversation_id)
 
         if update.text:
+            self._append_frontend_log(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=update.text,
+            )
             self._handle_message(backend, conversation_id, sender_id, update.text)
             return
 

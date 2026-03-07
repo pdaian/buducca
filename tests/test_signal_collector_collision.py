@@ -59,6 +59,38 @@ class SignalCollectorCollisionTests(unittest.TestCase):
 
             self.assertNotIn("--ignore-attachments", called_commands[0])
 
+    def test_prefers_frontend_history_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text(
+                "logs/signal.history",
+                json.dumps(
+                    {
+                        "logged_at": "2024-01-01T00:00:00+00:00",
+                        "backend": "signal",
+                        "direction": "incoming",
+                        "conversation_id": "+15559990000",
+                        "sender_id": "+15559990000",
+                        "text": "hi from signal frontend",
+                    }
+                )
+                + "\n",
+            )
+            collector = create_collector({"device_name": "+15550001111"})
+
+            called_commands = []
+
+            def fake_run(command, timeout_seconds=60.0, cwd=None):
+                called_commands.append(command)
+                return 0, "", ""
+
+            with patch("collectors.signal_messages.run_command", fake_run):
+                collector["run"](workspace)
+
+            output = workspace.read_text("signal.messages.recent")
+            self.assertIn('"source": "frontend_log"', output)
+            self.assertEqual(called_commands, [])
+
     def test_warns_on_shared_account_collision_when_attachments_ignored(self) -> None:
         collector_config = {
             "signal_messages": {
