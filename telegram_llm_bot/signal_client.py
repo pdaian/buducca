@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from shutil import which
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ class IncomingMessage:
     sender_id: str
     text: str | None = None
     voice_file_path: str | None = None
+
+
+class SignalFrontendUnavailableError(RuntimeError):
+    """Raised when Signal frontend is not runnable in current environment."""
 
 
 class SignalClient:
@@ -40,8 +45,38 @@ class SignalClient:
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
         self._update_counter = 0
 
+    def _is_receive_json_configured(self) -> bool:
+        command = self.receive_command
+        for idx, token in enumerate(command):
+            if token == "-o" and idx + 1 < len(command) and command[idx + 1].lower() == "json":
+                return True
+            if token.lower().startswith("--output=") and token.split("=", 1)[1].lower() == "json":
+                return True
+        return False
+
+    def _validate_receive_command(self) -> None:
+        if not self.receive_command:
+            raise SignalFrontendUnavailableError("Signal frontend disabled: receive command is empty")
+
+        executable = self.receive_command[0]
+        if "/" not in executable and which(executable) is None:
+            raise SignalFrontendUnavailableError(
+                f"Signal frontend disabled: executable {executable!r} was not found in PATH"
+            )
+
+        if not self._is_receive_json_configured():
+            raise SignalFrontendUnavailableError(
+                "Signal frontend disabled: receive command must enable JSON output (for example `-o json`)"
+            )
+
     def get_updates(self) -> list[IncomingMessage]:
-        proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
+        self._validate_receive_command()
+        try:
+            proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise SignalFrontendUnavailableError(
+                f"Signal frontend disabled: executable {exc.filename!r} was not found"
+            ) from exc
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"Signal receive command failed: {stderr}")
