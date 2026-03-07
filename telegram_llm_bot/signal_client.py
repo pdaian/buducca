@@ -98,13 +98,9 @@ class SignalClient:
                 continue
 
             envelope = payload.get("envelope") or {}
-            data_message = envelope.get("dataMessage") or {}
-            sender = str(envelope.get("source") or "").strip()
-            if not sender:
+            conversation_id, sender, text, voice_file_path = self._extract_message_fields(envelope)
+            if not conversation_id or not sender:
                 continue
-
-            text = data_message.get("message")
-            voice_file_path = self._find_voice_attachment_path(data_message)
             if not text and not voice_file_path:
                 continue
 
@@ -113,13 +109,35 @@ class SignalClient:
                 IncomingMessage(
                     update_id=self._update_counter,
                     backend="signal",
-                    conversation_id=sender,
+                    conversation_id=conversation_id,
                     sender_id=sender,
                     text=text,
                     voice_file_path=voice_file_path,
                 )
             )
         return messages
+
+    def _extract_message_fields(self, envelope: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
+        sender = str(envelope.get("source") or "").strip()
+        data_message = envelope.get("dataMessage") or {}
+        if isinstance(data_message, dict):
+            text = data_message.get("message")
+            voice_file_path = self._find_voice_attachment_path(data_message)
+            if sender and (text or voice_file_path):
+                return sender, sender, text, voice_file_path
+
+        sync_message = envelope.get("syncMessage") or {}
+        if not isinstance(sync_message, dict):
+            return "", "", None, None
+        sent_message = sync_message.get("sentMessage") or {}
+        if not isinstance(sent_message, dict):
+            return "", "", None, None
+
+        destination = str(sent_message.get("destination") or "").strip() or self.account
+        source = sender or self.account
+        text = sent_message.get("message")
+        voice_file_path = self._find_voice_attachment_path(sent_message)
+        return destination, source, text, voice_file_path
 
     def _is_registration_error(self, stderr: str) -> bool:
         normalized = stderr.lower()
