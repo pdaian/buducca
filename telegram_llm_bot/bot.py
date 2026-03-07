@@ -631,13 +631,15 @@ class BotRunner:
                 )
                 return False
             signal_group_id = self._extract_signal_group_id(conversation_id)
-            if not signal_group_id or signal_group_id not in self._allowed_signal_group_ids_when_sender_not_allowed:
-                logging.warning(
-                    "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
-                    sender_id,
-                    conversation_id,
-                )
-                return False
+            if signal_group_id and signal_group_id in self._allowed_signal_group_ids_when_sender_not_allowed:
+                return True
+
+            logging.warning(
+                "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
+                sender_id,
+                conversation_id,
+            )
+            return False
         return True
 
     def _is_signal_self_sender(self, sender_id: str) -> bool:
