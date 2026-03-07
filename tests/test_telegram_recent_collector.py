@@ -63,6 +63,48 @@ class TelegramRecentCollectorTests(unittest.TestCase):
 
             self.assertEqual(bot.offset, 99)
 
+    def test_prefers_frontend_history_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text(
+                "logs/telegram.history",
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "logged_at": "2024-01-01T00:00:00+00:00",
+                                "backend": "telegram",
+                                "direction": "incoming",
+                                "conversation_id": "100",
+                                "sender_id": "100",
+                                "text": "hello from frontend",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "logged_at": "2024-01-01T00:00:01+00:00",
+                                "backend": "telegram",
+                                "direction": "outgoing",
+                                "conversation_id": "100",
+                                "sender_id": "bot",
+                                "text": "hello back",
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+            )
+
+            bot = _FakeBotClient()
+            collector = create_collector({"_bot_client": bot, "max_messages": 10})
+            collector["run"](workspace)
+
+            lines = [json.loads(line) for line in workspace.read_text("telegram.recent").splitlines()]
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(lines[0]["source"], "frontend_log")
+            self.assertEqual(lines[0]["text"], "hello from frontend")
+            self.assertFalse(hasattr(bot, "offset"))
+
     def test_prefers_collector_bot_token_over_legacy_bot_token(self) -> None:
         created_tokens = []
 

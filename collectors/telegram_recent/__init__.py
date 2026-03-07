@@ -13,6 +13,7 @@ NAME = "telegram_recent"
 INTERVAL_SECONDS = 60
 STATE_FILE = "collectors/telegram_recent.offset"
 OUTPUT_FILE = "telegram.recent"
+HISTORY_FILE = "logs/telegram.history"
 FILE_STRUCTURE = ["collectors/telegram_recent/__init__.py", "collectors/telegram_recent/README.md"]
 
 
@@ -23,22 +24,26 @@ def _normalize_token(raw: Any) -> str:
 def _parse_state(raw: str) -> dict[str, Any]:
     stripped = raw.strip()
     if not stripped:
-        return {"accounts": {"default": {"bot_offset": None, "user_last_ts": None}}}
+        return {"accounts": {"default": {"bot_offset": None, "user_last_ts": None}}, "history_pos": 0}
 
     try:
         parsed = json.loads(stripped)
         if isinstance(parsed, dict):
+            parsed.setdefault("history_pos", 0)
             if "accounts" in parsed:
                 return parsed
             if "bot_offset" in parsed or "user_last_ts" in parsed:
-                return {"accounts": {"default": {"bot_offset": parsed.get("bot_offset"), "user_last_ts": parsed.get("user_last_ts")}}}
+                return {
+                    "accounts": {"default": {"bot_offset": parsed.get("bot_offset"), "user_last_ts": parsed.get("user_last_ts")}},
+                    "history_pos": parsed.get("history_pos", 0),
+                }
     except json.JSONDecodeError:
         pass
 
     try:
-        return {"accounts": {"default": {"bot_offset": int(stripped), "user_last_ts": None}}}
+        return {"accounts": {"default": {"bot_offset": int(stripped), "user_last_ts": None}}, "history_pos": 0}
     except ValueError:
-        return {"accounts": {"default": {"bot_offset": None, "user_last_ts": None}}}
+        return {"accounts": {"default": {"bot_offset": None, "user_last_ts": None}}, "history_pos": 0}
 
 
 def _build_account(account_cfg: dict, timeout_seconds: float, default_bot_token: str) -> dict[str, Any]:
@@ -90,6 +95,44 @@ def _validate_frontend_token_not_reused(config: dict, accounts_cfg: list[dict[st
                 )
 
 
+def _collect_from_history(workspace: Workspace, state: dict[str, Any], max_messages: int) -> list[str]:
+    raw_history = workspace.read_text(HISTORY_FILE, default="")
+    if not raw_history.strip():
+        return []
+
+    history_pos = int(state.get("history_pos", 0))
+    all_lines = raw_history.splitlines()
+    if history_pos > len(all_lines):
+        history_pos = 0
+
+    new_lines = all_lines[history_pos:]
+    parsed: list[str] = []
+    for raw in new_lines[-max_messages:]:
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if event.get("backend") != "telegram":
+            continue
+        parsed.append(
+            json.dumps(
+                {
+                    "source": "frontend_log",
+                    "account": "default",
+                    "received_at": event.get("logged_at"),
+                    "direction": event.get("direction"),
+                    "conversation_id": event.get("conversation_id"),
+                    "sender_id": event.get("sender_id"),
+                    "text": event.get("text"),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    state["history_pos"] = len(all_lines)
+    return parsed
+
+
 def create_collector(config: dict):
     timeout_seconds = float(config.get("timeout_seconds", 30))
     max_messages = int(config.get("max_messages", 50))
@@ -104,6 +147,13 @@ def create_collector(config: dict):
 
     def _run(workspace: Workspace) -> None:
         state = _parse_state(workspace.read_text(STATE_FILE, default=""))
+
+        history_lines = _collect_from_history(workspace, state, max_messages=max_messages)
+        if history_lines:
+            workspace.write_text(OUTPUT_FILE, "\n".join(history_lines) + "\n")
+            workspace.write_text(STATE_FILE, json.dumps(state))
+            return
+
         account_state = state.setdefault("accounts", {})
         now_iso = datetime.now(timezone.utc).isoformat()
 
