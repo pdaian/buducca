@@ -604,11 +604,31 @@ class BotRunner:
         }
         self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
+    def _is_authorized_frontend_sender(self, backend: str, conversation_id: str, sender_id: str) -> bool:
+        if backend == "telegram" and self._allowed_chat_ids and int(sender_id) not in self._allowed_chat_ids:
+            logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
+            return False
+
+        if backend == "signal" and self._allowed_signal_sender_ids and sender_id not in self._allowed_signal_sender_ids:
+            signal_group_id = self._extract_signal_group_id(conversation_id)
+            if not signal_group_id or signal_group_id not in self._allowed_signal_group_ids_when_sender_not_allowed:
+                logging.warning(
+                    "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
+                    sender_id,
+                    conversation_id,
+                )
+                return False
+        return True
+
     def _handle_update(self, update: IncomingMessage) -> None:
         backend = getattr(update, "backend", "telegram")
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
         sender_id = getattr(update, "sender_id", conversation_id)
         sender_name = getattr(update, "sender_name", None)
+
+        if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
+            return
+
         sender_contact = sender_id
         if backend == "signal" and sender_name:
             sender_contact = f"{sender_name} <{sender_id}>"
@@ -677,14 +697,8 @@ class BotRunner:
             text = str(args[3])
         else:
             raise TypeError("_handle_message expects (chat_id, text) or (backend, conversation_id, sender_id, text)")
-        if backend == "telegram" and self._allowed_chat_ids and int(sender_id) not in self._allowed_chat_ids:
-            logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
+        if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
             return
-        if backend == "signal" and self._allowed_signal_sender_ids and sender_id not in self._allowed_signal_sender_ids:
-            signal_group_id = self._extract_signal_group_id(conversation_id)
-            if not signal_group_id or signal_group_id not in self._allowed_signal_group_ids_when_sender_not_allowed:
-                logging.warning("Blocked message from unauthorized signal sender_id=%s", sender_id)
-                return
 
         conversation_key = self._history_key(backend, conversation_id)
 
