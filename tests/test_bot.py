@@ -372,6 +372,63 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
+    def test_signal_self_sender_blocked_warning_includes_group_id_for_group_messages(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=[],
+                allowed_group_ids_when_sender_not_allowed=[],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        with self.assertLogs(level="WARNING") as logs:
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="signal",
+                    conversation_id="group:Family|DifferentGroupId==",
+                    sender_id="+15550001",
+                    text="self note",
+                )
+            )
+
+        self.assertTrue(any("group_id=DifferentGroupId==" in line for line in logs.output))
+
+    def test_signal_self_sender_blocked_warning_omits_group_id_for_direct_messages(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=[],
+                allowed_group_ids_when_sender_not_allowed=[],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        with self.assertLogs(level="WARNING") as logs:
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="signal",
+                    conversation_id="+15550001",
+                    sender_id="+15550001",
+                    text="self note",
+                )
+            )
+
+        self.assertTrue(any("signal.allowed_sender_ids" in line for line in logs.output))
+        self.assertFalse(any("group_id=" in line for line in logs.output))
+
 
     def test_signal_non_group_sender_blocked_when_allowed_sender_list_is_empty(self) -> None:
         cfg = BotConfig(
