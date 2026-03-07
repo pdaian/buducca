@@ -7,6 +7,28 @@ from telegram_llm_bot.config import load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_requires_at_least_one_frontend(self) -> None:
+        data = {
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_signal_only_config_is_valid(self) -> None:
+        data = {
+            "signal": {"account": "+15550001"},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.signal)
+            self.assertIsNone(config.telegram)
+
     def test_invalid_missing_token(self) -> None:
         data = {
             "telegram": {"bot_token": "", "long_poll_timeout_seconds": 10},

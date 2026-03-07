@@ -9,9 +9,20 @@ from .http import HttpClient
 @dataclass
 class IncomingMessage:
     update_id: int
-    chat_id: int
+    backend: str = "telegram"
+    conversation_id: str = ""
+    sender_id: str = ""
+    chat_id: int | None = None
     text: str | None = None
     voice_file_id: str | None = None
+    voice_file_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.chat_id is not None:
+            if not self.conversation_id:
+                self.conversation_id = str(self.chat_id)
+            if not self.sender_id:
+                self.sender_id = str(self.chat_id)
 
 
 class TelegramClient:
@@ -40,6 +51,9 @@ class TelegramClient:
             messages.append(
                 IncomingMessage(
                     update_id=update["update_id"],
+                    backend="telegram",
+                    conversation_id=str(chat["id"]),
+                    sender_id=str(chat["id"]),
                     chat_id=int(chat["id"]),
                     text=text,
                     voice_file_id=voice_file_id,

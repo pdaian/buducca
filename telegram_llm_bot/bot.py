@@ -19,9 +19,9 @@ from assistant_framework import CollectorManager, SkillManager, Workspace
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
 from .llm_client import OpenAICompatibleClient
+from .signal_client import SignalClient
 from .telegram_client import IncomingMessage, TelegramClient
 
-_TELEGRAM_MAX_MESSAGE_LEN = 4096
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
@@ -33,20 +33,32 @@ _TYPING_ACTION_INTERVAL_SECONDS = 4
 class BotRunner:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
+        assert config.llm is not None
 
         http_client = HttpClient(timeout_seconds=config.runtime.request_timeout_seconds)
-        self.telegram = TelegramClient(bot_token=config.telegram.bot_token, http_client=http_client)
+        self.telegram = (
+            TelegramClient(bot_token=config.telegram.bot_token, http_client=http_client)
+            if config.telegram
+            else None
+        )
+        self.signal = SignalClient(
+            account=config.signal.account,
+            receive_command=config.signal.receive_command,
+            send_command=config.signal.send_command,
+        ) if config.signal else None
         self.llm = OpenAICompatibleClient(
             config=config.llm,
             http_client=http_client,
             debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
         )
 
-        self._allowed_chat_ids = set(config.telegram.allowed_chat_ids)
+        self._allowed_chat_ids = set(config.telegram.allowed_chat_ids) if config.telegram else set()
+        self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
+        self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
-        self._history: dict[int, Deque[dict[str, str]]] = defaultdict(
+        self._history: dict[Any, Deque[dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=self.config.llm.history_messages * 2)
         )
         self._workspace = Workspace(self.config.runtime.workspace_dir)
@@ -107,19 +119,7 @@ class BotRunner:
         logging.info("Bot started. Waiting for messages...")
         while True:
             try:
-                if self._offset is None and not self.config.telegram.process_pending_updates_on_startup:
-                    pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
-                    if pending_updates:
-                        self._offset = pending_updates[-1].update_id + 1
-                        logging.info("Skipped %s pending update(s) from before startup", len(pending_updates))
-
-                updates = self.telegram.get_updates(
-                    offset=self._offset,
-                    timeout_seconds=self.config.telegram.long_poll_timeout_seconds,
-                )
-                for update in updates:
-                    self._offset = update.update_id + 1
-                    self._handle_update(update)
+                self._poll_frontends_once()
             except KeyboardInterrupt:
                 logging.info("Bot interrupted. Exiting.")
                 return
@@ -129,13 +129,44 @@ class BotRunner:
                 logging.exception("Error while polling or handling message")
                 time.sleep(2)
 
-            time.sleep(self.config.telegram.poll_interval_seconds)
+            poll_interval = 0.0
+            if self.config.telegram:
+                poll_interval = max(poll_interval, self.config.telegram.poll_interval_seconds)
+            if self.config.signal:
+                poll_interval = max(poll_interval, self.config.signal.poll_interval_seconds)
+            time.sleep(poll_interval)
 
-    def _build_messages(self, chat_id: int, text: str) -> list[dict[str, str]]:
+    def _poll_frontends_once(self) -> None:
+        if self.telegram and self.config.telegram:
+            if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
+                self._telegram_offset = self._offset
+                pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
+                if pending_updates:
+                    self._telegram_offset = pending_updates[-1].update_id + 1
+                    self._offset = self._telegram_offset
+                    logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
+
+            telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
+            updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
+            for update in updates:
+                self._telegram_offset = update.update_id + 1
+                self._offset = self._telegram_offset
+                self._handle_update(update)
+
+        if self.signal:
+            for update in self.signal.get_updates():
+                self._handle_update(update)
+
+    def _build_messages(self, conversation_key: str, text: str) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
-        messages.extend(self._history[chat_id])
+        messages.extend(self._history[conversation_key])
         messages.append({"role": "user", "content": text})
         return messages
+
+    def _history_key(self, backend: str, conversation_id: str) -> Any:
+        if backend == "telegram" and conversation_id.lstrip("-").isdigit():
+            return int(conversation_id)
+        return f"{backend}:{conversation_id}"
 
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
@@ -337,15 +368,19 @@ class BotRunner:
             return f"Skill '{name}' failed: {exc}"
 
     def _split_for_telegram(self, text: str) -> list[str]:
-        if len(text) <= _TELEGRAM_MAX_MESSAGE_LEN:
+        return self._split_reply(text)
+
+    def _split_reply(self, text: str) -> list[str]:
+        max_len = self.config.runtime.max_reply_chunk_chars
+        if len(text) <= max_len:
             return [text]
 
         chunks: list[str] = []
         start = 0
         while start < len(text):
-            chunk = text[start : start + _TELEGRAM_MAX_MESSAGE_LEN]
+            chunk = text[start : start + max_len]
             chunks.append(chunk)
-            start += _TELEGRAM_MAX_MESSAGE_LEN
+            start += max_len
         return chunks
 
     def _strip_think_blocks(self, text: str, *, source: str) -> str:
@@ -447,82 +482,145 @@ class BotRunner:
                             break
             return transcript or None
 
+    def _transcribe_voice_file_path(self, voice_file_path: str) -> str | None:
+        if not self.config.runtime.enable_voice_notes:
+            return None
+
+        input_path = Path(voice_file_path)
+        if not input_path.exists():
+            raise RuntimeError(f"Voice file does not exist: {voice_file_path}")
+
+        command_template = self.config.runtime.voice_transcribe_command
+        command = [
+            part.replace("{input}", str(input_path)).replace("{input_dir}", str(input_path.parent))
+            for part in command_template
+        ]
+        if not any("{input}" in part for part in command_template):
+            command.append(str(input_path))
+        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or "no stderr"
+            raise RuntimeError(f"voice transcription command failed: {stderr}")
+        transcript = proc.stdout.strip()
+        return transcript or None
+
+    def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
+        if backend == "telegram":
+            if not self.telegram:
+                raise RuntimeError("Telegram frontend is not configured")
+            self.telegram.send_message(int(conversation_id), text)
+            return
+        if backend == "signal":
+            if not self.signal:
+                raise RuntimeError("Signal frontend is not configured")
+            self.signal.send_message(conversation_id, text)
+            return
+        raise RuntimeError(f"Unsupported backend: {backend}")
+
     def _handle_update(self, update: IncomingMessage) -> None:
+        backend = getattr(update, "backend", "telegram")
+        conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
+        sender_id = getattr(update, "sender_id", conversation_id)
+
         if update.text:
-            self._handle_message(update.chat_id, update.text)
+            self._handle_message(backend, conversation_id, sender_id, update.text)
             return
 
-        if not update.voice_file_id:
+        voice_file_id = getattr(update, "voice_file_id", None)
+        voice_file_path = getattr(update, "voice_file_path", None)
+        if not voice_file_id and not voice_file_path:
             return
 
         try:
-            transcript = self._transcribe_voice_note(update.voice_file_id)
+            transcript = self._transcribe_voice_note(voice_file_id) if voice_file_id else self._transcribe_voice_file_path(voice_file_path)
         except Exception:
-            logging.exception("Failed to transcribe voice note for chat_id=%s", update.chat_id)
-            self.telegram.send_message(update.chat_id, "I could not transcribe that voice note locally.")
+            logging.exception("Failed to transcribe voice note for backend=%s conversation=%s", backend, conversation_id)
+            self._send_message(backend, conversation_id, "I could not transcribe that voice note locally.")
             return
 
         if not transcript:
-            self.telegram.send_message(update.chat_id, "I received your voice note but could not extract text.")
+            self._send_message(backend, conversation_id, "I received your voice note but could not extract text.")
             return
 
-        self._handle_message(update.chat_id, f"[Voice note transcript]\n{transcript}")
+        self._handle_message(backend, conversation_id, sender_id, f"[Voice note transcript]\n{transcript}")
 
-    def _handle_message(self, chat_id: int, text: str) -> None:
-        if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:
-            logging.warning("Blocked message from unauthorized chat_id=%s", chat_id)
+    def _handle_message(self, *args: Any) -> None:
+        if len(args) == 2:
+            backend = "telegram"
+            conversation_id = str(args[0])
+            sender_id = str(args[0])
+            text = args[1]
+        elif len(args) == 4:
+            backend = str(args[0])
+            conversation_id = str(args[1])
+            sender_id = str(args[2])
+            text = str(args[3])
+        else:
+            raise TypeError("_handle_message expects (chat_id, text) or (backend, conversation_id, sender_id, text)")
+        if backend == "telegram" and self._allowed_chat_ids and int(sender_id) not in self._allowed_chat_ids:
+            logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
             return
+        if backend == "signal" and self._allowed_signal_sender_ids and sender_id not in self._allowed_signal_sender_ids:
+            logging.warning("Blocked message from unauthorized signal sender_id=%s", sender_id)
+            return
+
+        conversation_key = self._history_key(backend, conversation_id)
 
         self._handled_messages_count += 1
-        logging.info("Incoming message from chat_id=%s", chat_id)
+        logging.info("Incoming message from %s conversation=%s", backend, conversation_id)
 
         if text.strip().lower() == "/status":
             reply = self._build_status_message()
         else:
-            with self._typing_indicator(chat_id):
-                prompt = self._build_messages(chat_id, text)
+            with self._typing_indicator(backend, conversation_id):
+                prompt = self._build_messages(conversation_key, text)
                 try:
                     model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
                     reply = self._resolve_llm_reply(prompt, model_reply)
                 except RequestTimeoutError:
-                    logging.warning("LLM request timed out for chat_id=%s", chat_id)
-                    self.telegram.send_message(
-                        chat_id,
+                    logging.warning("LLM request timed out for %s conversation=%s", backend, conversation_id)
+                    self._send_message(
+                        backend,
+                        conversation_id,
                         "The language model request timed out "
                         f"after {self.config.runtime.request_timeout_seconds:g}s. "
                         "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
                     )
                     return
                 except Exception:
-                    logging.exception("Failed to generate or parse LLM response for chat_id=%s", chat_id)
-                    self.telegram.send_message(
-                        chat_id,
+                    logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
+                    self._send_message(
+                        backend,
+                        conversation_id,
                         "I ran into an internal error while handling that request. "
                         "Please try again.",
                     )
                     return
-            self._history[chat_id].append({"role": "user", "content": text})
-            self._history[chat_id].append(
+            self._history[conversation_key].append({"role": "user", "content": text})
+            self._history[conversation_key].append(
                 {
                     "role": "assistant",
                     "content": self._summarize_skill_result_for_context("web_search", reply),
                 }
             )
 
-        for chunk in self._split_for_telegram(reply):
-            self.telegram.send_message(chat_id, chunk)
-        logging.info("Replied to chat_id=%s", chat_id)
+        for chunk in self._split_reply(reply):
+            self._send_message(backend, conversation_id, chunk)
+        logging.info("Replied to %s conversation=%s", backend, conversation_id)
 
     @contextmanager
-    def _typing_indicator(self, chat_id: int):
+    def _typing_indicator(self, backend: str, conversation_id: str):
+        if backend != "telegram" or not self.telegram:
+            yield
+            return
         stop_event = threading.Event()
 
         def _send_typing_actions() -> None:
             while not stop_event.is_set():
                 try:
-                    self.telegram.send_typing_action(chat_id)
+                    self.telegram.send_typing_action(int(conversation_id))
                 except Exception:
-                    logging.debug("Failed to send typing action for chat_id=%s", chat_id, exc_info=True)
+                    logging.debug("Failed to send typing action for chat_id=%s", conversation_id, exc_info=True)
                     return
                 stop_event.wait(_TYPING_ACTION_INTERVAL_SECONDS)
 
