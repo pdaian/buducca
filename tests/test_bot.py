@@ -257,8 +257,116 @@ class BotTests(unittest.TestCase):
                 update_id=1,
                 backend="signal",
                 conversation_id="group:Family|AQi7f+/4S3mQv6s5hN2xwQ==",
+                sender_id="+15553334444",
+                text="group note",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 1)
+
+    def test_signal_self_sender_not_allowed_even_in_configured_group(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=["+15551112222"],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="group:Family|AQi7f+/4S3mQv6s5hN2xwQ==",
                 sender_id="+15550001",
                 text="self note in group",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
+
+    def test_signal_self_sender_with_different_number_format_not_allowed(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+1 555 0001",
+                allowed_sender_ids=["+15551112222"],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="group:Family|AQi7f+/4S3mQv6s5hN2xwQ==",
+                sender_id="+15550001",
+                text="self note in group",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
+
+    def test_signal_self_sender_blocked_when_allowed_sender_list_is_empty(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=[],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="+15550001",
+                sender_id="+15550001",
+                text="self note",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
+
+    def test_signal_sender_allowlist_supports_number_normalization(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=["+1 555 111 2222"],
+                allowed_group_ids_when_sender_not_allowed=[],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="+15551112222",
+                sender_id="+15551112222",
+                text="hello",
             )
         )
 
