@@ -13,7 +13,8 @@
     "system_prompt": "You are a concise and helpful assistant.",
     "temperature": 0.2,
     "max_tokens": 400,
-    "history_messages": 8
+    "history_messages": 8,
+    "system_prompt_timezone": "America/New_York"
   },
   "runtime": {
     "request_timeout_seconds": 300,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 
@@ -25,6 +26,7 @@ class LLMConfig:
     temperature: float = 0.2
     max_tokens: int = 400
     history_messages: int = 8
+    system_prompt_timezone: str = "America/New_York"
 
 
 @dataclass
@@ -67,6 +69,12 @@ def _validate(config: BotConfig) -> None:
         raise ValueError("llm.model must be set")
     if config.llm.history_messages < 0:
         raise ValueError("llm.history_messages must be >= 0")
+    if not config.llm.system_prompt_timezone.strip():
+        raise ValueError("llm.system_prompt_timezone must be set")
+    try:
+        ZoneInfo(config.llm.system_prompt_timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("llm.system_prompt_timezone must be a valid IANA timezone") from exc
     if config.runtime.request_timeout_seconds <= 0:
         raise ValueError("runtime.request_timeout_seconds must be > 0")
     if config.runtime.enable_voice_notes and not config.runtime.voice_transcribe_command:

@@ -194,6 +194,8 @@ class BotTests(unittest.TestCase):
             self.assertIn('"skill_call"', system_prompt)
             self.assertIn("Available collectors and file structure", system_prompt)
             self.assertIn("collectors/telegram_recent/__init__.py", system_prompt)
+            self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
+            self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
 
     def test_skill_call_output_executes_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:

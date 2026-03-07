@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Deque
 
@@ -58,7 +59,12 @@ class BotRunner:
 
     def _build_system_prompt(self) -> str:
         base_prompt = self.config.llm.system_prompt.strip()
-        sections: list[str] = []
+        configured_timezone = self.config.llm.system_prompt_timezone
+        now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
+        sections: list[str] = [
+            f"Current date/time ({configured_timezone}, accurate to the minute): "
+            + now_in_timezone.strftime("%Y-%m-%d %H:%M %Z")
+        ]
 
         if self._skills:
             skill_intro = [
@@ -95,8 +101,6 @@ class BotRunner:
             ]
             sections.append("\n".join(skill_rules))
 
-        if not sections:
-            return base_prompt
         return f"{base_prompt}\n\n" + "\n\n".join(sections)
 
     def run_forever(self) -> None:
