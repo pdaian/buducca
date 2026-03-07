@@ -8,7 +8,7 @@ from collectors.signal_messages import signup
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run one-time Signal second-device QR signup for collector")
+    parser = argparse.ArgumentParser(description="Signal setup guidance for collector")
     parser.add_argument("--config", default="agent_config.json", help="Agent config JSON file")
     return parser.parse_args()
 

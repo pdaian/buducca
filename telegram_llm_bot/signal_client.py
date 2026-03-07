@@ -82,7 +82,7 @@ class SignalClient:
             if self._is_registration_error(stderr):
                 raise SignalFrontendUnavailableError(
                     "Signal frontend disabled: Signal account is not registered. "
-                    "Complete the QR signup flow first: `python3 -m telegram_llm_bot.signal_signup --config config.json` "
+                    "Set up signal-cli registration/linking first (phone number or QR). You can run `python3 -m telegram_llm_bot.signal_signup --config config.json` for docs. "
                     "(see README.md: 'Additional collector/signup commands')."
                 )
             raise RuntimeError(f"Signal receive command failed: {stderr}")
