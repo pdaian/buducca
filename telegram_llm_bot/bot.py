@@ -28,6 +28,8 @@ _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 _MAX_SKILL_CHAIN_STEPS = 12
 _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
 _TYPING_ACTION_INTERVAL_SECONDS = 4
+_TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS = 5.0
+_TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS = 60.0
 
 
 class BotRunner:
@@ -60,6 +62,8 @@ class BotRunner:
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
+        self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
+        self._telegram_retry_after: float | None = None
         self._signal_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
@@ -159,39 +163,49 @@ class BotRunner:
 
     def _poll_frontends_once(self) -> None:
         if self.telegram and self.config.telegram:
-            try:
-                if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
-                    self._telegram_offset = self._offset
-                    pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
-                    if pending_updates:
-                        self._telegram_offset = pending_updates[-1].update_id + 1
-                        self._offset = self._telegram_offset
-                        logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
+            if self._telegram_retry_after is not None and time.time() < self._telegram_retry_after:
+                logging.debug("Telegram polling is in conflict backoff; skipping this cycle")
+            else:
+                try:
+                    if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
+                        self._telegram_offset = self._offset
+                        pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
+                        if pending_updates:
+                            self._telegram_offset = pending_updates[-1].update_id + 1
+                            self._offset = self._telegram_offset
+                            logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
 
-                telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
-                updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
-            except RuntimeError as exc:
-                if self._is_telegram_conflict_error(exc):
-                    now = time.time()
-                    if (
-                        self._telegram_conflict_logged_at is None
-                        or now - self._telegram_conflict_logged_at >= 60
-                    ):
-                        logging.warning(
-                            "Telegram polling conflict (HTTP 409): another bot instance is already using getUpdates. "
-                            "Will keep retrying."
+                    telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
+                    updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
+                except RuntimeError as exc:
+                    if self._is_telegram_conflict_error(exc):
+                        now = time.time()
+                        if (
+                            self._telegram_conflict_logged_at is None
+                            or now - self._telegram_conflict_logged_at >= 60
+                        ):
+                            logging.warning(
+                                "Telegram polling conflict (HTTP 409): another bot instance is already using getUpdates. "
+                                "Will keep retrying with backoff."
+                            )
+                            self._telegram_conflict_logged_at = now
+                        else:
+                            logging.debug("Telegram polling conflict (HTTP 409); retrying with backoff")
+                        self._telegram_retry_after = now + self._telegram_conflict_backoff_seconds
+                        self._telegram_conflict_backoff_seconds = min(
+                            self._telegram_conflict_backoff_seconds * 2,
+                            _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS,
                         )
-                        self._telegram_conflict_logged_at = now
-                    else:
-                        logging.debug("Telegram polling conflict (HTTP 409); retrying")
-                    return
-                raise
+                        return
+                    raise
 
-            self._telegram_conflict_logged_at = None
-            for update in updates:
-                self._telegram_offset = update.update_id + 1
-                self._offset = self._telegram_offset
-                self._handle_update(update)
+                self._telegram_conflict_logged_at = None
+                self._telegram_retry_after = None
+                self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
+                for update in updates:
+                    self._telegram_offset = update.update_id + 1
+                    self._offset = self._telegram_offset
+                    self._handle_update(update)
 
         if self.signal and not self._signal_frontend_disabled:
             try:
