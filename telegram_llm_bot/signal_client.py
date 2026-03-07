@@ -39,6 +39,7 @@ class SignalClient:
         groups_command: list[str] | None = None,
         contacts_cache_ttl_seconds: int = 300,
         poll_timeout_seconds: int = 1,
+        debug: bool = False,
     ) -> None:
         self.account = account
         self.receive_command = receive_command or [
@@ -61,6 +62,7 @@ class SignalClient:
         self._group_names: dict[str, str] = {}
         self._contact_names_loaded_at = 0.0
         self._group_names_loaded_at = 0.0
+        self._debug = debug
 
     def _is_receive_json_configured(self) -> bool:
         command = self.receive_command
@@ -119,8 +121,29 @@ class SignalClient:
             envelope = payload.get("envelope") or {}
             conversation_id, sender, text, voice_file_path = self._extract_message_fields(envelope)
             if not conversation_id or not sender:
+                if self._debug:
+                    logging.debug(
+                        "Signal envelope skipped due to missing conversation or sender: envelope_keys=%s source=%s sourceNumber=%s sourceUuid=%s",
+                        sorted(envelope.keys()) if isinstance(envelope, dict) else type(envelope).__name__,
+                        envelope.get("source") if isinstance(envelope, dict) else None,
+                        envelope.get("sourceNumber") if isinstance(envelope, dict) else None,
+                        envelope.get("sourceUuid") if isinstance(envelope, dict) else None,
+                    )
                 continue
             if not text and not voice_file_path:
+                if self._debug:
+                    data_message = envelope.get("dataMessage") if isinstance(envelope, dict) else None
+                    sync_message = envelope.get("syncMessage") if isinstance(envelope, dict) else None
+                    attachments = data_message.get("attachments") if isinstance(data_message, dict) else None
+                    sent = sync_message.get("sentMessage") if isinstance(sync_message, dict) else None
+                    sync_attachments = sent.get("attachments") if isinstance(sent, dict) else None
+                    logging.debug(
+                        "Signal message had no text/voice after parsing: conversation_id=%s sender=%s data_message_attachments=%s sync_message_attachments=%s",
+                        conversation_id,
+                        sender,
+                        attachments,
+                        sync_attachments,
+                    )
                 continue
             sender_name = self._extract_sender_name(envelope, sender)
 
@@ -344,17 +367,46 @@ class SignalClient:
     def _find_voice_attachment_path(self, data_message: dict[str, Any]) -> str | None:
         attachments = data_message.get("attachments") or []
         if not isinstance(attachments, list):
+            if self._debug:
+                logging.debug(
+                    "Signal attachments payload is not a list: type=%s value=%r",
+                    type(attachments).__name__,
+                    attachments,
+                )
             return None
+        if self._debug:
+            logging.debug("Signal attachments candidate dump (count=%s): %s", len(attachments), attachments)
         for attachment in attachments:
             if not isinstance(attachment, dict):
+                if self._debug:
+                    logging.debug("Signal attachment skipped because item is not object: %r", attachment)
                 continue
             if not self._is_voice_attachment(attachment):
+                if self._debug:
+                    logging.debug("Signal attachment is not voice-like: %s", attachment)
                 continue
             for field in ("storedFilename", "filename"):
                 candidate = attachment.get(field)
                 if isinstance(candidate, str) and candidate.strip():
                     path = Path(candidate.strip())
-                    return str(path if path.is_absolute() else Path.cwd() / path)
+                    resolved = str(path if path.is_absolute() else Path.cwd() / path)
+                    if self._debug:
+                        resolved_path = Path(resolved)
+                        exists = resolved_path.exists()
+                        size_bytes = resolved_path.stat().st_size if exists else None
+                        logging.debug(
+                            "Signal voice attachment path selected: field=%s raw=%s resolved=%s exists=%s size_bytes=%s contentType=%s voiceNote=%s",
+                            field,
+                            candidate,
+                            resolved,
+                            exists,
+                            size_bytes,
+                            attachment.get("contentType"),
+                            attachment.get("voiceNote"),
+                        )
+                    return resolved
+            if self._debug:
+                logging.debug("Signal attachment looked like voice but had no filename fields: %s", attachment)
         return None
 
     def _is_voice_attachment(self, attachment: dict[str, Any]) -> bool:
