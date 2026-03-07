@@ -379,6 +379,27 @@ class BotTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             bot._poll_frontends_once()
 
+
+    def test_poll_frontends_uses_backoff_after_telegram_409_conflict(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = PollingTelegram([RuntimeError("HTTP 409 for https://api.telegram.org/bott/getUpdates: conflict")])
+
+        bot._poll_frontends_once()
+
+        self.assertIsNotNone(bot._telegram_retry_after)
+        self.assertEqual(bot._telegram_conflict_backoff_seconds, 10.0)
+
+    def test_poll_frontends_resets_backoff_after_successful_telegram_poll(self) -> None:
+        bot = self.make_bot()
+        bot._telegram_conflict_backoff_seconds = 20.0
+        bot._telegram_retry_after = 0.0
+        bot.telegram = PollingTelegram([[], []])
+
+        bot._poll_frontends_once()
+
+        self.assertIsNone(bot._telegram_retry_after)
+        self.assertEqual(bot._telegram_conflict_backoff_seconds, 5.0)
+
     def test_system_prompt_includes_skills(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
