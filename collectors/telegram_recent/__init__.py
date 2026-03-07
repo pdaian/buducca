@@ -77,8 +77,6 @@ def _resolve_collector_bot_token(account_cfg: dict[str, Any], default_bot_token:
         _normalize_token(account_cfg.get("collector_bot_token"))
         or _normalize_token(account_cfg.get("bot_token"))
         or _normalize_token(default_bot_token)
-        or _normalize_token(os.environ.get("TELEGRAM_COLLECTOR_BOT_TOKEN", ""))
-        or _normalize_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     )
 
 

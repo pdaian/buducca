@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
@@ -48,7 +47,6 @@ class RuntimeConfig:
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
-    collector_config_path: str = "agent_config.json"
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
@@ -75,9 +73,7 @@ def _resolve_collector_bot_token(account_cfg: dict[str, Any], default_bot_token:
     return (
         _normalize_token(account_cfg.get("collector_bot_token"))
         or _normalize_token(account_cfg.get("bot_token"))
-        or default_bot_token
-        or _normalize_token(os.environ.get("TELEGRAM_COLLECTOR_BOT_TOKEN"))
-        or _normalize_token(os.environ.get("TELEGRAM_BOT_TOKEN"))
+        or _normalize_token(default_bot_token)
     )
 
 
@@ -89,9 +85,7 @@ def _validate_telegram_collector_token_ownership(config: BotConfig, *, config_pa
     if not frontend_token:
         return
 
-    collector_config_path = Path(config.runtime.collector_config_path)
-    if not collector_config_path.is_absolute():
-        collector_config_path = config_path.parent / collector_config_path
+    collector_config_path = config_path.parent / "agent_config.json"
     if not collector_config_path.exists():
         return
 
@@ -121,21 +115,11 @@ def _validate_telegram_collector_token_ownership(config: BotConfig, *, config_pa
         if not isinstance(account_cfg, dict):
             continue
         account_name = str(account_cfg.get("name") or "default")
-        token_field = "collector_bot_token"
-        if _normalize_token(account_cfg.get("collector_bot_token")):
-            token_field = "collector_bot_token"
-        elif _normalize_token(account_cfg.get("bot_token")):
-            token_field = "bot_token"
-        elif default_bot_token:
-            token_field = "<inherited top-level collector_bot_token/bot_token>"
-        else:
-            token_field = "<env TELEGRAM_COLLECTOR_BOT_TOKEN/TELEGRAM_BOT_TOKEN>"
-
         effective_bot_token = _resolve_collector_bot_token(account_cfg, default_bot_token)
         if effective_bot_token and effective_bot_token == frontend_token:
             raise ValueError(
                 "Invalid Telegram token setup: telegram.bot_token in frontend config matches "
-                f"collectors.telegram_recent.accounts[{account_name!r}] token source {token_field}. "
+                f"collectors.telegram_recent.accounts[{account_name!r}] collector_bot_token/bot_token. "
                 "Only one getUpdates consumer may own a token. "
                 "Use user_client.enabled=true or a separate collector_bot_token for the collector."
             )
