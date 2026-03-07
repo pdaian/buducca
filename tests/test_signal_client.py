@@ -136,6 +136,21 @@ class SignalClientTests(unittest.TestCase):
 
 
 
+    def test_default_contacts_command_uses_json_output_flag(self) -> None:
+        message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = [
+                Mock(returncode=0, stdout='[]', stderr=""),
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
+            ]
+            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                client.get_updates()
+
+        self.assertEqual(run.call_args_list[0].args[0], ["signal-cli", "-o", "json", "-a", "+15551230000", "listContacts"])
+
+
     def test_uses_cached_contact_name_when_message_lacks_name(self) -> None:
         contacts_stdout = '[{"number":"+15550001","name":"Alice"}]'
         message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'

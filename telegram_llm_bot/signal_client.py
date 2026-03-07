@@ -51,7 +51,7 @@ class SignalClient:
             str(poll_timeout_seconds),
         ]
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
-        self.contacts_command = contacts_command or ["signal-cli", "-a", account, "listContacts", "--output", "json"]
+        self.contacts_command = contacts_command or ["signal-cli", "-o", "json", "-a", account, "listContacts"]
         self.contacts_cache_ttl_seconds = max(0, contacts_cache_ttl_seconds)
         self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
