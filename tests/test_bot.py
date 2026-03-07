@@ -8,6 +8,7 @@ from telegram_llm_bot.bot import BotRunner
 from telegram_llm_bot.http import RequestTimeoutError
 from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
 from telegram_llm_bot.telegram_client import IncomingMessage
+from telegram_llm_bot.signal_client import SignalFrontendUnavailableError
 
 
 class DummyTelegram:
@@ -77,6 +78,21 @@ class PollingTelegram:
         self.calls.append((offset, timeout_seconds))
         if not self.responses:
             raise KeyboardInterrupt
+        result = self.responses.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+class PollingSignal:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def get_updates(self):
+        self.calls += 1
+        if not self.responses:
+            return []
         result = self.responses.pop(0)
         if isinstance(result, BaseException):
             raise result
@@ -600,6 +616,20 @@ class BotTests(unittest.TestCase):
         bot.run_forever()
 
         self.assertEqual(bot.telegram.calls[0], (None, bot.config.telegram.long_poll_timeout_seconds))
+
+    def test_poll_frontends_disables_signal_when_unavailable(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = None
+        bot.signal = PollingSignal(
+            responses=[SignalFrontendUnavailableError("signal-cli missing"), []]
+        )
+
+        with self.assertLogs(level="WARNING") as logs:
+            bot._poll_frontends_once()
+            bot._poll_frontends_once()
+
+        self.assertEqual(bot.signal.calls, 1)
+        self.assertTrue(any("continuing with telegram-only frontend" in line for line in logs.output))
 
     def test_handle_voice_update_replies_on_transcription_error(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))

@@ -19,7 +19,7 @@ from assistant_framework import CollectorManager, SkillManager, Workspace
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
 from .llm_client import OpenAICompatibleClient
-from .signal_client import SignalClient
+from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import IncomingMessage, TelegramClient
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -56,6 +56,7 @@ class BotRunner:
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
         self._telegram_offset: int | None = None
         self._offset: int | None = None
+        self._signal_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
         self._history: dict[Any, Deque[dict[str, str]]] = defaultdict(
@@ -156,9 +157,13 @@ class BotRunner:
                 self._offset = self._telegram_offset
                 self._handle_update(update)
 
-        if self.signal:
-            for update in self.signal.get_updates():
-                self._handle_update(update)
+        if self.signal and not self._signal_frontend_disabled:
+            try:
+                for update in self.signal.get_updates():
+                    self._handle_update(update)
+            except SignalFrontendUnavailableError as exc:
+                self._signal_frontend_disabled = True
+                logging.warning("%s; continuing with telegram-only frontend", exc)
 
     def _build_messages(self, conversation_key: str, text: str) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
