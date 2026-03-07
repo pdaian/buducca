@@ -25,6 +25,7 @@ class SignalFrontendUnavailableError(RuntimeError):
 
 class SignalClient:
     GROUP_CONVERSATION_PREFIX = "group:"
+    GROUP_ID_DELIMITER = "|"
     _VOICE_FILE_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"}
 
     def __init__(
@@ -131,7 +132,7 @@ class SignalClient:
         if isinstance(data_message, dict):
             group_id = self._extract_group_id(data_message)
             conversation_id = (
-                f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+                self._build_group_conversation_id(data_message)
                 if group_id
                 else sender
             )
@@ -149,7 +150,7 @@ class SignalClient:
 
         group_id = self._extract_group_id(sent_message)
         if group_id:
-            destination = f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+            destination = self._build_group_conversation_id(sent_message)
         else:
             destination = (
                 self._first_non_empty_string(
@@ -169,6 +170,34 @@ class SignalClient:
         if not isinstance(group_info, dict):
             return ""
         return self._first_non_empty_string(group_info.get("groupId"), group_info.get("groupID"), group_info.get("id"))
+
+    def _extract_group_title(self, message: dict[str, Any]) -> str:
+        group_info = message.get("groupInfo")
+        if not isinstance(group_info, dict):
+            return ""
+        return self._first_non_empty_string(group_info.get("title"), group_info.get("name"))
+
+    def _build_group_conversation_id(self, message: dict[str, Any]) -> str:
+        group_id = self._extract_group_id(message)
+        if not group_id:
+            return ""
+
+        title = self._extract_group_title(message)
+        if title:
+            return f"{self.GROUP_CONVERSATION_PREFIX}{title}{self.GROUP_ID_DELIMITER}{group_id}"
+        return f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+
+    def _extract_group_id_from_recipient(self, recipient: str) -> str:
+        if not recipient.startswith(self.GROUP_CONVERSATION_PREFIX):
+            return ""
+
+        payload = recipient[len(self.GROUP_CONVERSATION_PREFIX) :].strip()
+        if not payload:
+            return ""
+
+        if self.GROUP_ID_DELIMITER in payload:
+            return payload.rsplit(self.GROUP_ID_DELIMITER, 1)[1].strip()
+        return payload
 
     def _first_non_empty_string(self, *candidates: Any) -> str:
         for candidate in candidates:
@@ -217,9 +246,7 @@ class SignalClient:
         return False
 
     def send_message(self, recipient: str, text: str) -> None:
-        group_id = ""
-        if recipient.startswith(self.GROUP_CONVERSATION_PREFIX):
-            group_id = recipient[len(self.GROUP_CONVERSATION_PREFIX) :].strip()
+        group_id = self._extract_group_id_from_recipient(recipient)
 
         if group_id:
             template = self.send_command if any("{group_id}" in part for part in self.send_command) else self.group_send_command
