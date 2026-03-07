@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,10 @@ def _build_signup_settings(config: dict[str, Any]) -> tuple[list[str], float, st
     signal_cfg = config.get("signal") if isinstance(config.get("signal"), dict) else {}
 
     device_name = str(signal_cfg.get("device_name") or DEFAULT_DEVICE_NAME)
-    timeout_seconds = float(signal_cfg.get("signup_timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+    raw_timeout = signal_cfg.get("signup_timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    timeout_seconds = float(raw_timeout)
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        timeout_seconds = DEFAULT_TIMEOUT_SECONDS
     qr_output = str(signal_cfg.get("qr_output") or DEFAULT_QR_OUTPUT)
 
     link_command = signal_cfg.get("link_command")
@@ -35,14 +39,28 @@ def run_signup(config_path: str) -> int:
     config = _load_json(config_path)
     link_command, timeout_seconds, qr_output = _build_signup_settings(config)
 
-    proc = subprocess.run(
-        link_command,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout_seconds,
-    )
-    output = proc.stdout or proc.stderr or ""
+    print(f"Running Signal signup command: {' '.join(link_command)}")
+    print(f"Waiting up to {int(timeout_seconds)} seconds for provisioning output...")
+
+    try:
+        proc = subprocess.run(
+            link_command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+        output = proc.stdout or proc.stderr or ""
+        return_code = int(proc.returncode)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        output = stdout or stderr or ""
+        return_code = 124
+        print(
+            "Signal signup timed out before command completed. "
+            "If a provisioning link was emitted, it was still captured to the output file."
+        )
 
     qr_file = Path(qr_output)
     qr_file.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +68,7 @@ def run_signup(config_path: str) -> int:
 
     print(f"Signal QR output saved to: {qr_output}")
     print("Open the file and scan the QR/provisioning link with Signal > Linked Devices.")
-    return int(proc.returncode)
+    return return_code
 
 
 def parse_args() -> argparse.Namespace:
