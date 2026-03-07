@@ -56,6 +56,11 @@ class BotRunner:
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids) if config.telegram else set()
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
+        self._allowed_signal_sender_ids_normalized = {
+            self._normalize_signal_identifier(sender_id)
+            for sender_id in self._allowed_signal_sender_ids
+            if self._normalize_signal_identifier(sender_id)
+        }
         self._allowed_signal_group_ids_when_sender_not_allowed = (
             set(config.signal.allowed_group_ids_when_sender_not_allowed) if config.signal else set()
         )
@@ -623,7 +628,14 @@ class BotRunner:
             logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
             return False
 
-        if backend == "signal" and self._allowed_signal_sender_ids and sender_id not in self._allowed_signal_sender_ids:
+        if backend == "signal" and self.config.signal:
+            normalized_sender_id = self._normalize_signal_identifier(sender_id)
+            sender_is_allowed = sender_id in self._allowed_signal_sender_ids or (
+                bool(normalized_sender_id) and normalized_sender_id in self._allowed_signal_sender_ids_normalized
+            )
+            if sender_is_allowed:
+                return True
+
             if self._is_signal_self_sender(sender_id):
                 logging.warning(
                     "Blocked message from signal account sender_id=%s because it is not in signal.allowed_sender_ids",

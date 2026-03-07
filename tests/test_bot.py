@@ -345,7 +345,7 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
-    def test_signal_self_sender_with_different_number_format_allowed_in_configured_group(self) -> None:
+    def test_signal_self_sender_with_different_number_format_blocked_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(
                 account="+1 555 0001",
@@ -370,7 +370,7 @@ class BotTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(bot.llm.calls, 1)
+        self.assertEqual(bot.llm.calls, 0)
 
     def test_signal_self_sender_blocked_when_allowed_sender_list_is_empty(self) -> None:
         cfg = BotConfig(
