@@ -97,6 +97,28 @@ class SignalSignupTests(unittest.TestCase):
             self.assertEqual(code, 124)
             self.assertEqual(qr_path.read_text(encoding="utf-8"), "partial-link")
 
+    def test_timeout_with_bytes_output_is_decoded(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config_path = Path(td) / "config.json"
+            qr_path = Path(td) / "signal_qr.txt"
+            config_path.write_text(
+                json.dumps({"signal": {"qr_output": str(qr_path)}}),
+                encoding="utf-8",
+            )
+
+            timeout_exc = subprocess.TimeoutExpired(
+                cmd=["signal-cli", "link", "-n", "buducca"],
+                timeout=120,
+                output=b"partial-link-from-bytes",
+                stderr=b"",
+            )
+
+            with patch("telegram_llm_bot.signal_signup.subprocess.run", side_effect=timeout_exc):
+                code = run_signup(str(config_path))
+
+            self.assertEqual(code, 124)
+            self.assertEqual(qr_path.read_text(encoding="utf-8"), "partial-link-from-bytes")
+
     def test_invalid_timeout_falls_back_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config_path = Path(td) / "config.json"
