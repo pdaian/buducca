@@ -13,17 +13,22 @@ INTERVAL_SECONDS = 120
 STATE_FILE = "collectors/signal_messages.state.json"
 OUTPUT_FILE = "signal.messages.recent"
 FILE_STRUCTURE = ["collectors/signal_messages/__init__.py", "collectors/signal_messages/README.md"]
+IGNORE_ATTACHMENTS_DEFAULT = True
 
 
-def _default_command(device_name: str) -> list[str]:
-    return ["signal-cli", "-o", "json", "-a", device_name, "receive", "--ignore-attachments"]
+def _default_command(device_name: str, ignore_attachments: bool = IGNORE_ATTACHMENTS_DEFAULT) -> list[str]:
+    command = ["signal-cli", "-o", "json", "-a", device_name, "receive"]
+    if ignore_attachments:
+        command.append("--ignore-attachments")
+    return command
 
 
 def create_collector(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     timeout = float(config.get("timeout_seconds", 60))
     device_name = str(config.get("device_name") or os.environ.get("SIGNAL_DEVICE_NAME", ""))
-    command = config.get("command") or _default_command(device_name)
+    ignore_attachments = bool(config.get("ignore_attachments", IGNORE_ATTACHMENTS_DEFAULT))
+    command = config.get("command") or _default_command(device_name, ignore_attachments=ignore_attachments)
     accounts = config.get("accounts") or [{"name": config.get("account_name", "default"), "device_name": device_name, "command": command}]
 
     def _run(workspace: Workspace) -> None:
@@ -35,7 +40,13 @@ def create_collector(config: dict):
         for account in accounts:
             account_name = str(account.get("name") or "default")
             account_device = str(account.get("device_name") or "")
-            account_command = account.get("command") or _default_command(account_device)
+            account_ignore_attachments = account.get("ignore_attachments")
+            if account_ignore_attachments is None:
+                account_ignore_attachments = ignore_attachments
+            account_command = account.get("command") or _default_command(
+                account_device,
+                ignore_attachments=bool(account_ignore_attachments),
+            )
             if not account_device:
                 continue
 
