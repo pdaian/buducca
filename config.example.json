@@ -7,6 +7,15 @@
   },
   "signal": {
     "account": "+15551234567",
+    "device_name": "buducca",
+    "signup_timeout_seconds": 120,
+    "qr_output": "workspace/signal_frontend_qr.txt",
+    "link_command": [
+      "signal-cli",
+      "link",
+      "-n",
+      "buducca"
+    ],
     "poll_interval_seconds": 0.5,
     "allowed_sender_ids": [],
     "receive_command": [
