@@ -32,6 +32,19 @@ class SignalClientTests(unittest.TestCase):
             with self.assertRaises(SignalFrontendUnavailableError):
                 client.get_updates()
 
+
+    def test_registration_error_is_treated_as_frontend_unavailable(self) -> None:
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 1
+            run.return_value.stdout = ""
+            run.return_value.stderr = "User +15551230000 is not registered."
+            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                with self.assertRaises(SignalFrontendUnavailableError) as exc:
+                    client.get_updates()
+
+        self.assertIn("signal_signup", str(exc.exception))
+
     def test_raises_when_json_output_not_configured(self) -> None:
         client = SignalClient(account="+15551230000", receive_command=["signal-cli", "-a", "+15551230000", "receive"])
 

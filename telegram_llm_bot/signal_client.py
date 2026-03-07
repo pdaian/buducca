@@ -79,6 +79,12 @@ class SignalClient:
             ) from exc
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
+            if self._is_registration_error(stderr):
+                raise SignalFrontendUnavailableError(
+                    "Signal frontend disabled: Signal account is not registered. "
+                    "Complete the QR signup flow first: `python3 -m telegram_llm_bot.signal_signup --config config.json` "
+                    "(see README.md: 'Additional collector/signup commands')."
+                )
             raise RuntimeError(f"Signal receive command failed: {stderr}")
 
         messages: list[IncomingMessage] = []
@@ -114,6 +120,10 @@ class SignalClient:
                 )
             )
         return messages
+
+    def _is_registration_error(self, stderr: str) -> bool:
+        normalized = stderr.lower()
+        return "not registered" in normalized
 
     def _find_voice_attachment_path(self, data_message: dict[str, Any]) -> str | None:
         attachments = data_message.get("attachments") or []
