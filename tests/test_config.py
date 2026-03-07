@@ -56,6 +56,33 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(path)
 
+    def test_llm_timezone_defaults_to_new_york(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertEqual(config.llm.system_prompt_timezone, "America/New_York")
+
+    def test_llm_timezone_must_be_valid(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "base_url": "https://x",
+                "api_key": "k",
+                "model": "m",
+                "system_prompt_timezone": "Mars/Olympus_Mons",
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()
