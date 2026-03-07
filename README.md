@@ -4,7 +4,7 @@
 
 # BUDUCCA — Private, local-first personal assistant 🤖
 
-Run your own Telegram assistant with a tiny, understandable Python stack.
+Run your own Telegram and/or Signal assistant with a tiny, understandable Python stack.
 
 ## Why BUDUCCA
 
@@ -22,6 +22,14 @@ cp agent_config.example.json agent_config.json
 python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
 python3 run_bot.py --config config.json
 ```
+
+
+## Frontends
+
+- Configure `telegram` in `config.json` to run the bot on Telegram.
+- Configure `signal` to run the bot on Signal (`signal-cli`).
+- Configure both to accept messages on either backend and reply on the same backend that received the message.
+- Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 
 ## Plugin layout (skills + collectors)
 
