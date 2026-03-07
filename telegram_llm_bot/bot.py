@@ -47,6 +47,7 @@ class BotRunner:
             account=config.signal.account,
             receive_command=config.signal.receive_command,
             send_command=config.signal.send_command,
+            debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
         ) if config.signal else None
         self.llm = OpenAICompatibleClient(
             config=config.llm,
@@ -543,6 +544,15 @@ class BotRunner:
         file_path = self.telegram.get_file_path(voice_file_id)
         voice_bytes = self.telegram.download_file(file_path)
 
+        if self._debug_enabled:
+            logging.debug(
+                "Voice transcription input (telegram): file_id=%s file_path=%s bytes=%s command_template=%s",
+                voice_file_id,
+                file_path,
+                len(voice_bytes),
+                command_template,
+            )
+
         with tempfile.TemporaryDirectory() as td:
             input_path = Path(td) / "voice_note.ogg"
             input_path.write_bytes(voice_bytes)
@@ -555,6 +565,18 @@ class BotRunner:
                 command.append(str(input_path))
 
             proc = subprocess.run(command, capture_output=True, text=True, check=False)
+            if self._debug_enabled:
+                txt_candidates = sorted(str(candidate) for candidate in input_path.parent.glob("*.txt"))
+                json_candidates = sorted(str(candidate) for candidate in input_path.parent.glob("*.json"))
+                logging.debug(
+                    "Voice transcription command finished (telegram): command=%s returncode=%s stdout_len=%s stderr=%s txt_candidates=%s json_candidates=%s",
+                    command,
+                    proc.returncode,
+                    len(proc.stdout or ""),
+                    (proc.stderr or "").strip(),
+                    txt_candidates,
+                    json_candidates,
+                )
             if proc.returncode != 0:
                 stderr = proc.stderr.strip() or "no stderr"
                 raise RuntimeError(f"voice transcription command failed: {stderr}")
@@ -582,6 +604,13 @@ class BotRunner:
                         transcript = payload["text"].strip()
                         if transcript:
                             break
+            if self._debug_enabled:
+                logging.debug(
+                    "Voice transcription parsed result (telegram): file_id=%s transcript_present=%s transcript_length=%s",
+                    voice_file_id,
+                    bool(transcript),
+                    len(transcript) if transcript else 0,
+                )
             return transcript or None
 
     def _transcribe_voice_file_path(self, voice_file_path: str) -> str | None:
@@ -592,6 +621,15 @@ class BotRunner:
         if not input_path.exists():
             raise RuntimeError(f"Voice file does not exist: {voice_file_path}")
 
+        if self._debug_enabled:
+            logging.debug(
+                "Voice transcription input (signal): voice_file_path=%s exists=%s size_bytes=%s suffix=%s",
+                voice_file_path,
+                input_path.exists(),
+                input_path.stat().st_size if input_path.exists() else None,
+                input_path.suffix,
+            )
+
         command_template = self.config.runtime.voice_transcribe_command
         command = [
             part.replace("{input}", str(input_path)).replace("{input_dir}", str(input_path.parent))
@@ -600,10 +638,25 @@ class BotRunner:
         if not any("{input}" in part for part in command_template):
             command.append(str(input_path))
         proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        if self._debug_enabled:
+            logging.debug(
+                "Voice transcription command finished (signal): command=%s returncode=%s stdout_len=%s stderr=%s",
+                command,
+                proc.returncode,
+                len(proc.stdout or ""),
+                (proc.stderr or "").strip(),
+            )
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"voice transcription command failed: {stderr}")
         transcript = proc.stdout.strip()
+        if self._debug_enabled:
+            logging.debug(
+                "Voice transcription parsed result (signal): voice_file_path=%s transcript_present=%s transcript_length=%s",
+                voice_file_path,
+                bool(transcript),
+                len(transcript) if transcript else 0,
+            )
         return transcript or None
 
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
@@ -742,6 +795,17 @@ class BotRunner:
         voice_file_path = getattr(update, "voice_file_path", None)
         if not voice_file_id and not voice_file_path:
             return
+
+        if self._debug_enabled:
+            logging.debug(
+                "Voice update received: backend=%s conversation=%s sender=%s voice_file_id=%s voice_file_path=%s path_exists=%s",
+                backend,
+                conversation_id,
+                sender_id,
+                voice_file_id,
+                voice_file_path,
+                Path(voice_file_path).exists() if voice_file_path else None,
+            )
 
         try:
             transcript = self._transcribe_voice_note(voice_file_id) if voice_file_id else self._transcribe_voice_file_path(voice_file_path)
