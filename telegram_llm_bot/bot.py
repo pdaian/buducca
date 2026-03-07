@@ -30,7 +30,7 @@ _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
 _TYPING_ACTION_INTERVAL_SECONDS = 4
 
 
-class BotRunner:
+class FrontendBotRunner:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
         assert config.llm is not None
@@ -68,6 +68,7 @@ class BotRunner:
         self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
         self._collector_manifests = CollectorManager(self.config.runtime.collectors_dir).load_manifests()
+
 
     @property
     def _debug_enabled(self) -> bool:
@@ -688,3 +689,7 @@ class BotRunner:
         finally:
             stop_event.set()
             worker.join(timeout=0.2)
+
+
+# Backwards-compatible alias for historical imports.
+BotRunner = FrontendBotRunner
