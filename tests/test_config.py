@@ -177,7 +177,7 @@ class ConfigTests(unittest.TestCase):
                 "expected collision warning when override is enabled",
             )
 
-    def test_signal_collector_collision_uses_runtime_agent_config_path(self) -> None:
+    def test_signal_collector_collision_uses_explicit_agent_config_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmpdir = Path(td)
             config_path = tmpdir / "config.json"
@@ -190,7 +190,6 @@ class ConfigTests(unittest.TestCase):
                     {
                         "signal": {"account": "+15550001111"},
                         "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
-                        "runtime": {"agent_config_path": "configs/custom_agent_config.json"},
                     }
                 ),
                 encoding="utf-8",
@@ -209,7 +208,7 @@ class ConfigTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "collectors.signal_messages.accounts"):
-                load_config(config_path)
+                load_config(config_path, agent_config_path="configs/custom_agent_config.json")
 
 
 if __name__ == "__main__":

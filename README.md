@@ -20,7 +20,7 @@ Run your own Telegram and/or Signal assistant with a tiny, understandable Python
 cp config.example.json config.json
 cp agent_config.example.json agent_config.json
 python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
-python3 run_bot.py --config config.json
+python3 run_bot.py --config config.json --agent-config agent_config.json
 ```
 
 

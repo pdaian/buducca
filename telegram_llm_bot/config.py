@@ -48,7 +48,6 @@ class RuntimeConfig:
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
-    agent_config_path: str = "agent_config.json"
     allow_signal_collector_device_collision: bool = False
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
@@ -63,14 +62,19 @@ class BotConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 
-def _read_collector_device_names(agent_config_path: Path) -> list[str]:
+def _read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _read_signal_collector_device_names(agent_config_path: Path) -> list[str]:
     if not agent_config_path.exists():
         return []
 
     try:
         raw = _read_json(agent_config_path)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Failed to parse runtime.agent_config_path at '{agent_config_path}': {exc}") from exc
+        raise ValueError(f"Failed to parse agent config at '{agent_config_path}': {exc}") from exc
 
     collectors = raw.get("collectors")
     if not isinstance(collectors, dict):
@@ -92,11 +96,6 @@ def _read_collector_device_names(agent_config_path: Path) -> list[str]:
         if isinstance(device_name, str) and device_name.strip():
             devices.append(device_name.strip())
     return devices
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _validate(config: BotConfig) -> None:
@@ -141,20 +140,12 @@ def _validate(config: BotConfig) -> None:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
 
 
-def _validate_signal_frontend_collector_collision(config_path: Path, config: BotConfig) -> None:
+def _validate_signal_frontend_collector_collision(config: BotConfig, collector_devices: list[str]) -> None:
     if not config.signal:
         return
 
     frontend_account = config.signal.account.strip()
-    if not frontend_account:
-        return
-
-    agent_config_path = Path(config.runtime.agent_config_path)
-    if not agent_config_path.is_absolute():
-        agent_config_path = (config_path.parent / agent_config_path).resolve()
-
-    collector_devices = _read_collector_device_names(agent_config_path)
-    if frontend_account not in collector_devices:
+    if not frontend_account or frontend_account not in collector_devices:
         return
 
     risk_message = (
@@ -170,7 +161,7 @@ def _validate_signal_frontend_collector_collision(config_path: Path, config: Bot
     raise ValueError(risk_message)
 
 
-def load_config(path: str | Path) -> BotConfig:
+def load_config(path: str | Path, *, agent_config_path: str | Path = "agent_config.json") -> BotConfig:
     config_path = Path(path)
     raw = _read_json(config_path)
 
@@ -183,5 +174,11 @@ def load_config(path: str | Path) -> BotConfig:
 
     config = BotConfig(telegram=telegram, signal=signal, llm=llm, runtime=runtime)
     _validate(config)
-    _validate_signal_frontend_collector_collision(config_path, config)
+
+    resolved_agent_config_path = Path(agent_config_path)
+    if not resolved_agent_config_path.is_absolute():
+        resolved_agent_config_path = (config_path.parent / resolved_agent_config_path).resolve()
+    collector_devices = _read_signal_collector_device_names(resolved_agent_config_path)
+    _validate_signal_frontend_collector_collision(config, collector_devices)
+
     return config

@@ -14,12 +14,17 @@ def parse_args() -> argparse.Namespace:
         default="config.json",
         help="Path to the bot configuration file (JSON)",
     )
+    parser.add_argument(
+        "--agent-config",
+        default="agent_config.json",
+        help="Path to the agent collector configuration file (JSON)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    config = load_config(args.config)
+    config = load_config(args.config, agent_config_path=args.agent_config)
 
     configured_level = getattr(logging, config.runtime.log_level.upper(), logging.INFO)
     logging.basicConfig(

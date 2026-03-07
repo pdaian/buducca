@@ -59,7 +59,6 @@
     ],
     "max_reply_chunk_chars": 4096,
     "debug": false,
-    "agent_config_path": "agent_config.json",
     "allow_signal_collector_device_collision": false
   }
 }
