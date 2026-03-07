@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +74,59 @@ class SignalSignupTests(unittest.TestCase):
                 timeout=120.0,
             )
             self.assertEqual(qr_path.read_text(encoding="utf-8"), "fallback-output")
+
+    def test_timeout_returns_124_and_writes_partial_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config_path = Path(td) / "config.json"
+            qr_path = Path(td) / "signal_qr.txt"
+            config_path.write_text(
+                json.dumps({"signal": {"qr_output": str(qr_path)}}),
+                encoding="utf-8",
+            )
+
+            timeout_exc = subprocess.TimeoutExpired(
+                cmd=["signal-cli", "link", "-n", "buducca"],
+                timeout=120,
+                output="partial-link",
+                stderr="",
+            )
+
+            with patch("telegram_llm_bot.signal_signup.subprocess.run", side_effect=timeout_exc):
+                code = run_signup(str(config_path))
+
+            self.assertEqual(code, 124)
+            self.assertEqual(qr_path.read_text(encoding="utf-8"), "partial-link")
+
+    def test_invalid_timeout_falls_back_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config_path = Path(td) / "config.json"
+            qr_path = Path(td) / "signal_qr.txt"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "signal": {
+                            "signup_timeout_seconds": "inf",
+                            "qr_output": str(qr_path),
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("telegram_llm_bot.signal_signup.subprocess.run") as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = "ok"
+                run.return_value.stderr = ""
+
+                run_signup(str(config_path))
+
+            run.assert_called_once_with(
+                ["signal-cli", "link", "-n", "buducca"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120.0,
+            )
 
 
 if __name__ == "__main__":
