@@ -16,6 +16,8 @@ class IncomingMessage:
     text: str | None = None
     voice_file_id: str | None = None
     voice_file_path: str | None = None
+    sender_name: str | None = None
+    sender_contact: str | None = None
 
     def __post_init__(self) -> None:
         if self.chat_id is not None:
@@ -45,9 +47,12 @@ class TelegramClient:
             text = message.get("text")
             voice = message.get("voice", {})
             chat = message.get("chat", {})
+            sender = message.get("from", {})
             voice_file_id = voice.get("file_id") if isinstance(voice, dict) else None
             if (not text and not voice_file_id) or "id" not in chat:
                 continue
+            sender_name = self._extract_sender_name(sender)
+            sender_contact = self._extract_sender_contact(sender, sender_name)
             messages.append(
                 IncomingMessage(
                     update_id=update["update_id"],
@@ -57,9 +62,40 @@ class TelegramClient:
                     chat_id=int(chat["id"]),
                     text=text,
                     voice_file_id=voice_file_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
                 )
             )
         return messages
+
+    @staticmethod
+    def _extract_sender_name(sender: Any) -> str | None:
+        if not isinstance(sender, dict):
+            return None
+        first_name = str(sender.get("first_name") or "").strip()
+        last_name = str(sender.get("last_name") or "").strip()
+        full_name = " ".join(part for part in [first_name, last_name] if part)
+        if full_name:
+            return full_name
+        username = str(sender.get("username") or "").strip()
+        return username or None
+
+    @staticmethod
+    def _extract_sender_contact(sender: Any, sender_name: str | None) -> str | None:
+        if not isinstance(sender, dict):
+            return sender_name
+
+        sender_id = sender.get("id")
+        username = str(sender.get("username") or "").strip()
+        if username:
+            if sender_name and sender_name != username:
+                return f"{sender_name} (@{username})"
+            return f"@{username}"
+        if sender_id is not None:
+            if sender_name:
+                return f"{sender_name} <id:{sender_id}>"
+            return f"id:{sender_id}"
+        return sender_name
 
     def get_file_path(self, file_id: str) -> str:
         data = self.http_client.post_json(f"{self.base_url}/getFile", {"file_id": file_id})

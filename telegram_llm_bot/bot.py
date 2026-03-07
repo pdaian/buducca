@@ -225,10 +225,44 @@ class BotRunner:
         message = str(exc)
         return "HTTP 409" in message and "/getUpdates" in message
 
-    def _build_messages(self, conversation_key: str, text: str) -> list[dict[str, str]]:
+    def _build_messages(
+        self,
+        conversation_key: str,
+        text: str,
+        *,
+        backend: str,
+        conversation_id: str,
+        sender_id: str,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
+    ) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[conversation_key])
-        messages.append({"role": "user", "content": text})
+
+        sender_identity = sender_contact or sender_name or sender_id
+        if backend == "telegram":
+            sender_context = (
+                "[Sender context]\n"
+                f"- frontend: telegram\n"
+                f"- chat_id: {conversation_id}\n"
+                f"- telegram_account: {sender_identity}"
+            )
+        elif backend == "signal":
+            sender_context = (
+                "[Sender context]\n"
+                f"- frontend: signal\n"
+                f"- conversation_id: {conversation_id}\n"
+                f"- signal_identity: {sender_identity}"
+            )
+        else:
+            sender_context = (
+                "[Sender context]\n"
+                f"- frontend: {backend}\n"
+                f"- conversation_id: {conversation_id}\n"
+                f"- sender: {sender_identity}"
+            )
+
+        messages.append({"role": "user", "content": f"{sender_context}\n\n{text}"})
         return messages
 
     def _history_key(self, backend: str, conversation_id: str) -> Any:
@@ -681,13 +715,15 @@ class BotRunner:
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
         sender_id = getattr(update, "sender_id", conversation_id)
         sender_name = getattr(update, "sender_name", None)
+        sender_contact = getattr(update, "sender_contact", None)
 
         if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
             return
 
-        sender_contact = sender_id
-        if backend == "signal" and sender_name:
-            sender_contact = f"{sender_name} <{sender_id}>"
+        if not sender_contact:
+            sender_contact = sender_id
+            if backend == "signal" and sender_name:
+                sender_contact = f"{sender_name} <{sender_id}>"
 
         if update.text:
             self._append_frontend_log(
@@ -699,7 +735,7 @@ class BotRunner:
                 sender_name=sender_name,
                 sender_contact=sender_contact,
             )
-            self._handle_message(backend, conversation_id, sender_id, update.text)
+            self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
@@ -728,7 +764,7 @@ class BotRunner:
             sender_name=sender_name,
             sender_contact=sender_contact,
         )
-        self._handle_message(backend, conversation_id, sender_id, transcript_text)
+        self._handle_message(backend, conversation_id, sender_id, transcript_text, sender_name, sender_contact)
 
     def _extract_signal_group_id(self, conversation_id: str) -> str:
         if not conversation_id.startswith(SignalClient.GROUP_CONVERSATION_PREFIX):
@@ -741,6 +777,8 @@ class BotRunner:
         return group_part
 
     def _handle_message(self, *args: Any) -> None:
+        sender_name: str | None = None
+        sender_contact: str | None = None
         if len(args) == 2:
             backend = "telegram"
             conversation_id = str(args[0])
@@ -751,21 +789,39 @@ class BotRunner:
             conversation_id = str(args[1])
             sender_id = str(args[2])
             text = str(args[3])
+        elif len(args) == 6:
+            backend = str(args[0])
+            conversation_id = str(args[1])
+            sender_id = str(args[2])
+            text = str(args[3])
+            sender_name = str(args[4]) if args[4] is not None else None
+            sender_contact = str(args[5]) if args[5] is not None else None
         else:
-            raise TypeError("_handle_message expects (chat_id, text) or (backend, conversation_id, sender_id, text)")
+            raise TypeError(
+                "_handle_message expects (chat_id, text), (backend, conversation_id, sender_id, text), "
+                "or (backend, conversation_id, sender_id, text, sender_name, sender_contact)"
+            )
         if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
             return
 
         conversation_key = self._history_key(backend, conversation_id)
 
         self._handled_messages_count += 1
-        logging.info("Incoming message from %s conversation=%s", backend, conversation_id)
+        logging.info("Incoming message from %s conversation=%s sender=%s", backend, conversation_id, sender_contact or sender_name or sender_id)
 
         if text.strip().lower() == "/status":
             reply = self._build_status_message()
         else:
             with self._typing_indicator(backend, conversation_id):
-                prompt = self._build_messages(conversation_key, text)
+                prompt = self._build_messages(
+                    conversation_key,
+                    text,
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                )
                 try:
                     model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
                     reply = self._resolve_llm_reply(prompt, model_reply)
