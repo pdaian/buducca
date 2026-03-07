@@ -56,6 +56,7 @@ class BotRunner:
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
         self._telegram_offset: int | None = None
         self._offset: int | None = None
+        self._telegram_conflict_logged_at: float | None = None
         self._signal_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
@@ -155,16 +156,35 @@ class BotRunner:
 
     def _poll_frontends_once(self) -> None:
         if self.telegram and self.config.telegram:
-            if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
-                self._telegram_offset = self._offset
-                pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
-                if pending_updates:
-                    self._telegram_offset = pending_updates[-1].update_id + 1
-                    self._offset = self._telegram_offset
-                    logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
+            try:
+                if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
+                    self._telegram_offset = self._offset
+                    pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
+                    if pending_updates:
+                        self._telegram_offset = pending_updates[-1].update_id + 1
+                        self._offset = self._telegram_offset
+                        logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
 
-            telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
-            updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
+                telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
+                updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
+            except RuntimeError as exc:
+                if self._is_telegram_conflict_error(exc):
+                    now = time.time()
+                    if (
+                        self._telegram_conflict_logged_at is None
+                        or now - self._telegram_conflict_logged_at >= 60
+                    ):
+                        logging.warning(
+                            "Telegram polling conflict (HTTP 409): another bot instance is already using getUpdates. "
+                            "Will keep retrying."
+                        )
+                        self._telegram_conflict_logged_at = now
+                    else:
+                        logging.debug("Telegram polling conflict (HTTP 409); retrying")
+                    return
+                raise
+
+            self._telegram_conflict_logged_at = None
             for update in updates:
                 self._telegram_offset = update.update_id + 1
                 self._offset = self._telegram_offset
@@ -177,6 +197,11 @@ class BotRunner:
             except SignalFrontendUnavailableError as exc:
                 self._signal_frontend_disabled = True
                 logging.warning("%s; continuing with telegram-only frontend", exc)
+
+    @staticmethod
+    def _is_telegram_conflict_error(exc: RuntimeError) -> bool:
+        message = str(exc)
+        return "HTTP 409" in message and "/getUpdates" in message
 
     def _build_messages(self, conversation_key: str, text: str) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
