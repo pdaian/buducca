@@ -18,6 +18,9 @@
     ],
     "poll_interval_seconds": 0.5,
     "allowed_sender_ids": [],
+    "allowed_group_ids_when_sender_not_allowed": [
+      "AQi7f+/4S3mQv6s5hN2xwQ=="
+    ],
     "receive_command": [
       "signal-cli",
       "-o",
