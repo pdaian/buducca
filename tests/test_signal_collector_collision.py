@@ -71,6 +71,8 @@ class SignalCollectorCollisionTests(unittest.TestCase):
                         "direction": "incoming",
                         "conversation_id": "+15559990000",
                         "sender_id": "+15559990000",
+                        "sender_name": "Alice",
+                        "sender_contact": "Alice <+15559990000>",
                         "text": "hi from signal frontend",
                     }
                 )
@@ -89,6 +91,8 @@ class SignalCollectorCollisionTests(unittest.TestCase):
 
             output = workspace.read_text("signal.messages.recent")
             self.assertIn('"source": "frontend_log"', output)
+            self.assertIn('"sender_name": "Alice"', output)
+            self.assertIn('"sender_contact": "Alice <+15559990000>"', output)
             self.assertEqual(called_commands, [["signal-cli", "-o", "json", "-a", "+15550001111", "receive", "--ignore-attachments"]])
 
     def test_warns_on_shared_account_collision_when_attachments_ignored(self) -> None:

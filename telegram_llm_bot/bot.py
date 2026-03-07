@@ -547,6 +547,8 @@ class BotRunner:
         conversation_id: str,
         sender_id: str,
         text: str,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
     ) -> None:
         history_file = f"logs/{backend}.history"
         payload = {
@@ -555,6 +557,8 @@ class BotRunner:
             "direction": direction,
             "conversation_id": conversation_id,
             "sender_id": sender_id,
+            "sender_name": sender_name,
+            "sender_contact": sender_contact,
             "text": text,
         }
         self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
@@ -563,6 +567,10 @@ class BotRunner:
         backend = getattr(update, "backend", "telegram")
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
         sender_id = getattr(update, "sender_id", conversation_id)
+        sender_name = getattr(update, "sender_name", None)
+        sender_contact = sender_id
+        if backend == "signal" and sender_name:
+            sender_contact = f"{sender_name} <{sender_id}>"
 
         if update.text:
             self._append_frontend_log(
@@ -571,6 +579,8 @@ class BotRunner:
                 conversation_id=conversation_id,
                 sender_id=sender_id,
                 text=update.text,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
             )
             self._handle_message(backend, conversation_id, sender_id, update.text)
             return
@@ -598,6 +608,8 @@ class BotRunner:
             conversation_id=conversation_id,
             sender_id=sender_id,
             text=transcript_text,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
         )
         self._handle_message(backend, conversation_id, sender_id, transcript_text)
 

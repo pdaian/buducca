@@ -50,6 +50,8 @@ def _collect_from_history(workspace: Workspace, state: dict, max_messages: int) 
                 "direction": event.get("direction"),
                 "conversation_id": event.get("conversation_id"),
                 "sender": event.get("sender_id"),
+                "sender_name": event.get("sender_name"),
+                "sender_contact": event.get("sender_contact") or event.get("sender_id"),
                 "text": event.get("text"),
             }
         )
@@ -114,6 +116,8 @@ def create_collector(config: dict):
                         "account": account_name,
                         "timestamp": timestamp,
                         "sender": envelope.get("source"),
+                        "sender_name": envelope.get("sourceName"),
+                        "sender_contact": (f"{envelope.get('sourceName')} <{envelope.get('source')}>" if envelope.get("sourceName") and envelope.get("source") else envelope.get("source")),
                         "text": text,
                     }
                 )

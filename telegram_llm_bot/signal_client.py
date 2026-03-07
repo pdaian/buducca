@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 from shutil import which
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ class IncomingMessage:
     sender_id: str
     text: str | None = None
     voice_file_path: str | None = None
+    sender_name: str | None = None
 
 
 class SignalFrontendUnavailableError(RuntimeError):
@@ -33,6 +35,8 @@ class SignalClient:
         account: str,
         receive_command: list[str] | None = None,
         send_command: list[str] | None = None,
+        contacts_command: list[str] | None = None,
+        contacts_cache_ttl_seconds: int = 300,
         poll_timeout_seconds: int = 1,
     ) -> None:
         self.account = account
@@ -47,8 +51,12 @@ class SignalClient:
             str(poll_timeout_seconds),
         ]
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
+        self.contacts_command = contacts_command or ["signal-cli", "-a", account, "listContacts", "--output", "json"]
+        self.contacts_cache_ttl_seconds = max(0, contacts_cache_ttl_seconds)
         self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
+        self._contact_names: dict[str, str] = {}
+        self._contact_names_loaded_at = 0.0
 
     def _is_receive_json_configured(self) -> bool:
         command = self.receive_command
@@ -76,6 +84,7 @@ class SignalClient:
 
     def get_updates(self) -> list[IncomingMessage]:
         self._validate_receive_command()
+        self._refresh_contact_cache_if_needed()
         try:
             proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
@@ -108,6 +117,7 @@ class SignalClient:
                 continue
             if not text and not voice_file_path:
                 continue
+            sender_name = self._extract_sender_name(envelope, sender)
 
             self._update_counter += 1
             messages.append(
@@ -118,9 +128,69 @@ class SignalClient:
                     sender_id=sender,
                     text=text,
                     voice_file_path=voice_file_path,
+                    sender_name=sender_name,
                 )
             )
         return messages
+
+    def _refresh_contact_cache_if_needed(self) -> None:
+        if not self.contacts_command:
+            return
+
+        now = time.monotonic()
+        if self._contact_names and now - self._contact_names_loaded_at < self.contacts_cache_ttl_seconds:
+            return
+
+        try:
+            proc = subprocess.run(self.contacts_command, capture_output=True, text=True, check=False)
+        except OSError:
+            logging.debug("Unable to refresh signal contacts cache", exc_info=True)
+            return
+
+        if proc.returncode != 0:
+            logging.debug("Signal contacts command failed: %s", proc.stderr.strip() or "no stderr")
+            return
+
+        parsed = self._parse_contacts_output(proc.stdout)
+        if parsed:
+            self._contact_names = parsed
+            self._contact_names_loaded_at = now
+
+    def _parse_contacts_output(self, output: str) -> dict[str, str]:
+        contacts: dict[str, str] = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(payload, dict):
+                self._parse_contact_payload(payload, contacts)
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        self._parse_contact_payload(item, contacts)
+        return contacts
+
+    def _parse_contact_payload(self, payload: dict[str, Any], contacts: dict[str, str]) -> None:
+        number = self._first_non_empty_string(payload.get("number"), payload.get("recipient"), payload.get("uuid"))
+        if not number:
+            return
+        name = self._first_non_empty_string(payload.get("name"), payload.get("profileName"), payload.get("givenName"))
+        if name:
+            contacts[number] = name
+
+    def _extract_sender_name(self, envelope: dict[str, Any], sender: str) -> str | None:
+        profile = envelope.get("sourceProfile")
+        profile_name = profile.get("name") if isinstance(profile, dict) else None
+        sender_name = self._first_non_empty_string(envelope.get("sourceName"), profile_name)
+        if sender_name:
+            self._contact_names[sender] = sender_name
+            return sender_name
+        return self._contact_names.get(sender)
 
     def _extract_message_fields(self, envelope: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
         sender = self._first_non_empty_string(

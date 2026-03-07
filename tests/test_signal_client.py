@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from telegram_llm_bot.signal_client import SignalClient, SignalFrontendUnavailableError
 
@@ -134,6 +134,44 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].sender_id, "+15551230000")
         self.assertEqual(updates[0].text, "group note")
 
+
+
+    def test_uses_cached_contact_name_when_message_lacks_name(self) -> None:
+        contacts_stdout = '[{"number":"+15550001","name":"Alice"}]'
+        message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = [
+                Mock(returncode=0, stdout=contacts_stdout, stderr=""),
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
+            ]
+            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sender_name, "Alice")
+
+    def test_refreshes_contact_cache_after_ttl(self) -> None:
+        contacts_first = '[{"number":"+15550001","name":"Alice"}]'
+        contacts_second = '[{"number":"+15550001","name":"Alicia"}]'
+        message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = [
+                Mock(returncode=0, stdout=contacts_first, stderr=""),
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
+                Mock(returncode=0, stdout=contacts_second, stderr=""),
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
+            ]
+            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000", contacts_cache_ttl_seconds=10)
+                with patch("telegram_llm_bot.signal_client.time.monotonic", side_effect=[0.0, 20.0]):
+                    first = client.get_updates()
+                    second = client.get_updates()
+
+        self.assertEqual(first[0].sender_name, "Alice")
+        self.assertEqual(second[0].sender_name, "Alicia")
 
     def test_send_message_supports_note_to_self_recipient(self) -> None:
         with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
