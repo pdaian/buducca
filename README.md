@@ -28,7 +28,7 @@ python3 run_bot.py --config config.json
 
 - Configure `telegram` in `config.json` to run the bot on Telegram.
 - Configure `signal` to run the bot on Signal (`signal-cli`).
-- Signal frontend registration is QR-based: run `python3 -m telegram_llm_bot.signal_signup --config config.json`, then scan the saved provisioning link/QR from Signal > Linked Devices.
+- Signal frontend registration must be done directly in `signal-cli` (phone number or linked-device QR), then BUDUCCA can use that configured account.
 - Configure both to accept messages on either backend and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 
@@ -157,10 +157,10 @@ Some integrations need one-time auth outside the main runtime loops:
 
 ```bash
 # Signal frontend (config.json > signal) QR flow
-python3 -m telegram_llm_bot.signal_signup --config config.json
+python3 -m telegram_llm_bot.signal_signup --config config.json  # prints setup docs and exits
 
 # Signal collector second-device QR flow
-python3 -m collectors.signal_messages.signup --config agent_config.json
+python3 -m collectors.signal_messages.signup --config agent_config.json  # prints setup docs and exits
 
 # WhatsApp Web QR flow
 python3 -m collectors.whatsapp_messages.signup --config agent_config.json

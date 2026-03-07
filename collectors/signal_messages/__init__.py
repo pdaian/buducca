@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from assistant_framework.collector_shell import run_command
 from assistant_framework.workspace import Workspace
@@ -128,11 +127,11 @@ def create_collector(config: dict):
 
 
 def signup(config: dict) -> int:
-    timeout = float(config.get("timeout_seconds", 120))
-    qr_output = config.get("qr_output", "workspace/collectors/signal_qr.txt")
-    link_command = config.get("link_command") or ["signal-cli", "link", "-n", str(config.get("device_name", "buducca"))]
-    code, stdout, stderr = run_command(link_command, timeout_seconds=timeout)
-    output = stdout or stderr
-    Path(qr_output).parent.mkdir(parents=True, exist_ok=True)
-    Path(qr_output).write_text(output, encoding="utf-8")
-    return code
+    _ = config
+    print(
+        "Signal signup is no longer automated by this collector.\n"
+        "Set up signal-cli with your preferred method (phone number or QR linked-device flow), then rerun collectors.\n"
+        "Docs: https://github.com/AsamK/signal-cli/wiki and "
+        "https://github.com/AsamK/signal-cli/wiki/Registration-with-signal-cli"
+    )
+    return 0
