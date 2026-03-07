@@ -264,7 +264,7 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 1)
 
-    def test_signal_self_sender_not_allowed_even_in_configured_group(self) -> None:
+    def test_signal_self_sender_allowed_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(
                 account="+15550001",
@@ -289,9 +289,9 @@ class BotTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(bot.llm.calls, 0)
+        self.assertEqual(bot.llm.calls, 1)
 
-    def test_signal_self_sender_with_different_number_format_not_allowed(self) -> None:
+    def test_signal_self_sender_with_different_number_format_allowed_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(
                 account="+1 555 0001",
@@ -316,7 +316,7 @@ class BotTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(bot.llm.calls, 0)
+        self.assertEqual(bot.llm.calls, 1)
 
     def test_signal_self_sender_blocked_when_allowed_sender_list_is_empty(self) -> None:
         cfg = BotConfig(
@@ -340,6 +340,34 @@ class BotTests(unittest.TestCase):
                 conversation_id="+15550001",
                 sender_id="+15550001",
                 text="self note",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
+
+
+    def test_signal_non_group_sender_blocked_when_allowed_sender_list_is_empty(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=[],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="+15556667777",
+                sender_id="+15556667777",
+                text="hello",
             )
         )
 
@@ -417,8 +445,12 @@ class BotTests(unittest.TestCase):
 
     def test_signal_incoming_log_includes_sender_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            runtime = RuntimeConfig(workspace_dir=td)
-            bot = self.make_bot(runtime=runtime)
+            cfg = BotConfig(
+                signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550001"]),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
             bot.signal = object()
             bot.llm = DummyLLM("hello")
             bot._send_message = lambda backend, conversation_id, text: None

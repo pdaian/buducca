@@ -624,22 +624,19 @@ class BotRunner:
             return False
 
         if backend == "signal":
-            sender_is_allowlisted = self._is_signal_sender_allowlisted(sender_id)
-            if self._is_signal_self_sender(sender_id) and not sender_is_allowlisted:
-                logging.warning(
-                    "Blocked message from signal account sender_id=%s because it is not in signal.allowed_sender_ids",
-                    sender_id,
-                )
-                return False
-            if self._allowed_signal_sender_ids and not sender_is_allowlisted:
-                signal_group_id = self._extract_signal_group_id(conversation_id)
-                if not signal_group_id or signal_group_id not in self._allowed_signal_group_ids_when_sender_not_allowed:
-                    logging.warning(
-                        "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
-                        sender_id,
-                        conversation_id,
-                    )
-                    return False
+            if self._is_signal_sender_allowlisted(sender_id):
+                return True
+
+            signal_group_id = self._extract_signal_group_id(conversation_id)
+            if signal_group_id and signal_group_id in self._allowed_signal_group_ids_when_sender_not_allowed:
+                return True
+
+            logging.warning(
+                "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
+                sender_id,
+                conversation_id,
+            )
+            return False
         return True
 
     def _is_signal_sender_allowlisted(self, sender_id: str) -> bool:
@@ -652,16 +649,6 @@ class BotRunner:
             normalized_sender == self._normalize_signal_identifier(candidate)
             for candidate in self._allowed_signal_sender_ids
         )
-
-    def _is_signal_self_sender(self, sender_id: str) -> bool:
-        if not self.config.signal:
-            return False
-        account = self.config.signal.account
-        if sender_id == account:
-            return True
-        normalized_sender = self._normalize_signal_identifier(sender_id)
-        normalized_account = self._normalize_signal_identifier(account)
-        return bool(normalized_sender and normalized_sender == normalized_account)
 
     @staticmethod
     def _normalize_signal_identifier(identifier: str) -> str:
