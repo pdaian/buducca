@@ -48,6 +48,7 @@ To keep the main README focused, each skill and collector now has its own README
 ### Available skills
 
 - `file` → `skills/file/README.md`
+- `learn` → `skills/learn/README.md`
 - `summarize_workspace` → `skills/summarize_workspace/README.md`
 - `taskwarrior` → `skills/taskwarrior/README.md`
 - `web_search` → `skills/web_search/README.md`
