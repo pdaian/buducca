@@ -106,5 +106,21 @@ class ConfigTests(unittest.TestCase):
                 load_config(path)
 
 
+    def test_signal_group_sender_override_ids_load(self) -> None:
+        data = {
+            "signal": {
+                "account": "+15550001",
+                "allowed_sender_ids": ["+15551112222"],
+                "allowed_group_ids_when_sender_not_allowed": ["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.signal)
+            self.assertEqual(config.signal.allowed_group_ids_when_sender_not_allowed, ["AQi7f+/4S3mQv6s5hN2xwQ=="])
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,9 @@ class BotRunner:
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids) if config.telegram else set()
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
+        self._allowed_signal_group_ids_when_sender_not_allowed = (
+            set(config.signal.allowed_group_ids_when_sender_not_allowed) if config.signal else set()
+        )
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
@@ -651,6 +654,16 @@ class BotRunner:
         )
         self._handle_message(backend, conversation_id, sender_id, transcript_text)
 
+    def _extract_signal_group_id(self, conversation_id: str) -> str:
+        if not conversation_id.startswith(SignalClient.GROUP_CONVERSATION_PREFIX):
+            return ""
+        group_part = conversation_id[len(SignalClient.GROUP_CONVERSATION_PREFIX):]
+        if not group_part:
+            return ""
+        if SignalClient.GROUP_ID_DELIMITER in group_part:
+            return group_part.rsplit(SignalClient.GROUP_ID_DELIMITER, 1)[-1]
+        return group_part
+
     def _handle_message(self, *args: Any) -> None:
         if len(args) == 2:
             backend = "telegram"
@@ -668,8 +681,10 @@ class BotRunner:
             logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
             return
         if backend == "signal" and self._allowed_signal_sender_ids and sender_id not in self._allowed_signal_sender_ids:
-            logging.warning("Blocked message from unauthorized signal sender_id=%s", sender_id)
-            return
+            signal_group_id = self._extract_signal_group_id(conversation_id)
+            if not signal_group_id or signal_group_id not in self._allowed_signal_group_ids_when_sender_not_allowed:
+                logging.warning("Blocked message from unauthorized signal sender_id=%s", sender_id)
+                return
 
         conversation_key = self._history_key(backend, conversation_id)
 

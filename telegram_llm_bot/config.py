@@ -21,6 +21,7 @@ class SignalConfig:
     account: str
     poll_interval_seconds: float = 1.0
     allowed_sender_ids: list[str] = field(default_factory=list)
+    allowed_group_ids_when_sender_not_allowed: list[str] = field(default_factory=list)
     receive_command: list[str] = field(default_factory=list)
     send_command: list[str] = field(default_factory=list)
 

@@ -31,6 +31,7 @@ python3 run_bot.py --config config.json
 - Signal frontend registration must be done directly in `signal-cli` (phone number or linked-device QR), then BUDUCCA can use that configured account.
 - Configure both to accept messages on either backend and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
+- Signal allowlist override: set `signal.allowed_group_ids_when_sender_not_allowed` to raw Signal group IDs (the `groupInfo.groupId` value from `signal-cli` JSON output, not the `group:<title>|...` conversation label). Example: `"AQi7f+/4S3mQv6s5hN2xwQ=="`.
 
 - ⚠️ **Signal shared-account caveat:** if `collectors.signal_messages` and `signal.account` point at the same Signal identity, enabling attachment ignore mode (default) can lose voice/attachment context. Shared-account mode is unsupported unless you explicitly configure collector attachment handling.
 

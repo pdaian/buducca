@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from telegram_llm_bot.bot import BotRunner
 from telegram_llm_bot.http import RequestTimeoutError
-from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
+from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig
 from telegram_llm_bot.telegram_client import IncomingMessage
 from telegram_llm_bot.signal_client import SignalFrontendUnavailableError
 
@@ -132,6 +132,54 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.telegram.sent, [(1, "hello")])
         self.assertEqual(bot.telegram.typing, [1])
         self.assertEqual(len(bot._history[1]), 2)
+
+    def test_signal_sender_allowed_in_configured_group(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=["+15551112222"],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message(
+            "signal",
+            "group:Family|AQi7f+/4S3mQv6s5hN2xwQ==",
+            "+15553334444",
+            "hi",
+        )
+
+        self.assertEqual(bot.llm.calls, 1)
+
+    def test_signal_sender_not_allowed_outside_configured_group(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=["+15551112222"],
+                allowed_group_ids_when_sender_not_allowed=["AQi7f+/4S3mQv6s5hN2xwQ=="],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message(
+            "signal",
+            "group:Work|DifferentGroupId==",
+            "+15553334444",
+            "hi",
+        )
+
+        self.assertEqual(bot.llm.calls, 0)
 
     def test_handle_message_strips_think_blocks_from_reply_and_history(self) -> None:
         bot = self.make_bot()
