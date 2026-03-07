@@ -63,7 +63,7 @@ class TelegramRecentCollectorTests(unittest.TestCase):
 
             self.assertEqual(bot.offset, 99)
 
-    def test_prefers_frontend_history_when_available(self) -> None:
+    def test_merges_frontend_history_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             workspace.write_text(
@@ -100,10 +100,12 @@ class TelegramRecentCollectorTests(unittest.TestCase):
             collector["run"](workspace)
 
             lines = [json.loads(line) for line in workspace.read_text("telegram.recent").splitlines()]
-            self.assertEqual(len(lines), 2)
+            self.assertEqual(len(lines), 4)
             self.assertEqual(lines[0]["source"], "frontend_log")
             self.assertEqual(lines[0]["text"], "hello from frontend")
-            self.assertFalse(hasattr(bot, "offset"))
+            self.assertEqual(lines[2]["source"], "bot")
+            self.assertEqual(lines[3]["source"], "bot")
+            self.assertEqual(bot.offset, None)
 
     def test_prefers_collector_bot_token_over_legacy_bot_token(self) -> None:
         created_tokens = []

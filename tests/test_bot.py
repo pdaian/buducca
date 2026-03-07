@@ -574,6 +574,26 @@ class BotTests(unittest.TestCase):
         bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
 
         self.assertEqual(bot.telegram.sent, [(1, "heard")])
+
+    def test_handle_voice_update_logs_transcript_to_frontend_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime = RuntimeConfig(
+                workspace_dir=td,
+                enable_voice_notes=True,
+                voice_transcribe_command=["cat", "{input}"],
+            )
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("heard")
+            bot._transcribe_voice_note = lambda _fid: "turn on lights"
+
+            bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
+
+            telegram_history = Path(td) / "logs" / "telegram.history"
+            events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[0]["direction"], "incoming")
+            self.assertEqual(events[0]["text"], "[Voice note transcript]\nturn on lights")
+
         self.assertIn("Voice note transcript", bot.llm.messages[-1]["content"])
 
 

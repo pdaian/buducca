@@ -59,7 +59,7 @@ class SignalCollectorCollisionTests(unittest.TestCase):
 
             self.assertNotIn("--ignore-attachments", called_commands[0])
 
-    def test_prefers_frontend_history_when_available(self) -> None:
+    def test_merges_frontend_history_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             workspace.write_text(
@@ -89,7 +89,7 @@ class SignalCollectorCollisionTests(unittest.TestCase):
 
             output = workspace.read_text("signal.messages.recent")
             self.assertIn('"source": "frontend_log"', output)
-            self.assertEqual(called_commands, [])
+            self.assertEqual(called_commands, [["signal-cli", "-o", "json", "-a", "+15550001111", "receive", "--ignore-attachments"]])
 
     def test_warns_on_shared_account_collision_when_attachments_ignored(self) -> None:
         collector_config = {
