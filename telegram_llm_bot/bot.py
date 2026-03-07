@@ -591,7 +591,15 @@ class BotRunner:
             self._send_message(backend, conversation_id, "I received your voice note but could not extract text.")
             return
 
-        self._handle_message(backend, conversation_id, sender_id, f"[Voice note transcript]\n{transcript}")
+        transcript_text = f"[Voice note transcript]\n{transcript}"
+        self._append_frontend_log(
+            backend=backend,
+            direction="incoming",
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            text=transcript_text,
+        )
+        self._handle_message(backend, conversation_id, sender_id, transcript_text)
 
     def _handle_message(self, *args: Any) -> None:
         if len(args) == 2:

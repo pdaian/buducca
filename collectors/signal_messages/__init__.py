@@ -73,14 +73,10 @@ def create_collector(config: dict):
         state.setdefault("history_pos", 0)
 
         history_lines = _collect_from_history(workspace, state, max_messages=max_messages)
-        if history_lines:
-            workspace.write_text(OUTPUT_FILE, "\n".join(json.dumps(i, ensure_ascii=False) for i in history_lines) + "\n")
-            workspace.write_text(STATE_FILE, json.dumps(state))
-            return
 
         account_state = state.setdefault("accounts", {})
         now = datetime.now(timezone.utc).isoformat()
-        lines = []
+        lines = list(history_lines)
 
         for account in accounts:
             account_name = str(account.get("name") or "default")

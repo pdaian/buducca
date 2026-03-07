@@ -149,15 +149,10 @@ def create_collector(config: dict):
         state = _parse_state(workspace.read_text(STATE_FILE, default=""))
 
         history_lines = _collect_from_history(workspace, state, max_messages=max_messages)
-        if history_lines:
-            workspace.write_text(OUTPUT_FILE, "\n".join(history_lines) + "\n")
-            workspace.write_text(STATE_FILE, json.dumps(state))
-            return
-
         account_state = state.setdefault("accounts", {})
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        lines = []
+        lines = list(history_lines)
         for account_name, clients in accounts.items():
             current = account_state.setdefault(account_name, {"bot_offset": None, "user_last_ts": None})
             bot_client = clients["bot_client"]
