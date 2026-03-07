@@ -16,6 +16,10 @@ OUTPUT_FILE = "telegram.recent"
 FILE_STRUCTURE = ["collectors/telegram_recent/__init__.py", "collectors/telegram_recent/README.md"]
 
 
+def _normalize_token(raw: Any) -> str:
+    return str(raw or "").strip()
+
+
 def _parse_state(raw: str) -> dict[str, Any]:
     stripped = raw.strip()
     if not stripped:
@@ -68,12 +72,41 @@ def _build_account(account_cfg: dict, timeout_seconds: float, default_bot_token:
     return {"bot_client": bot_client, "user_client": user_client}
 
 
+def _resolve_collector_bot_token(account_cfg: dict[str, Any], default_bot_token: str) -> str:
+    return (
+        _normalize_token(account_cfg.get("collector_bot_token"))
+        or _normalize_token(account_cfg.get("bot_token"))
+        or _normalize_token(default_bot_token)
+        or _normalize_token(os.environ.get("TELEGRAM_COLLECTOR_BOT_TOKEN", ""))
+        or _normalize_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    )
+
+
+def _validate_frontend_token_not_reused(config: dict, accounts_cfg: list[dict[str, Any]]) -> None:
+    frontend_token = _normalize_token(config.get("frontend_bot_token"))
+    if not frontend_token:
+        return
+
+    default_bot_token = _normalize_token(config.get("collector_bot_token") or config.get("bot_token"))
+    for account_cfg in accounts_cfg:
+        account_name = str(account_cfg.get("name") or "default")
+        effective_bot_token = _resolve_collector_bot_token(account_cfg, default_bot_token)
+        if effective_bot_token and effective_bot_token == frontend_token:
+            raise ValueError(
+                "telegram_recent collector account "
+                f"'{account_name}' reuses the frontend telegram bot token. "
+                "Only one getUpdates consumer may own a bot token. "
+                "Use user_client.enabled=true or a separate collector_bot_token."
+            )
+
+
 def create_collector(config: dict):
     timeout_seconds = float(config.get("timeout_seconds", 30))
     max_messages = int(config.get("max_messages", 50))
 
     default_bot_token = config.get("collector_bot_token") or config.get("bot_token")
     accounts_cfg = config.get("accounts") or [{"name": config.get("account_name", "default"), **config}]
+    _validate_frontend_token_not_reused(config, accounts_cfg)
     accounts: dict[str, dict[str, Any]] = {}
     for account_cfg in accounts_cfg:
         account_name = str(account_cfg.get("name") or "default")

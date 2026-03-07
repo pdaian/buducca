@@ -126,6 +126,15 @@ Example command array for `config.json`:
 ]
 ```
 
+## Telegram token ownership safety
+
+Do **not** reuse the frontend Telegram bot token (`config.json` → `telegram.bot_token`) for `collectors.telegram_recent` bot polling (`collector_bot_token` / `bot_token`, including top-level inherited defaults). Telegram only allows one `getUpdates` consumer per token.
+
+Use one of these alternatives:
+
+- Prefer collector user-client mode: `collectors.telegram_recent.accounts[*].user_client.enabled = true`
+- Or configure a separate collector bot token: `collectors.telegram_recent.accounts[*].collector_bot_token`
+
 ## Optional: Telegram user-account collection (QR login)
 
 If you need messages a normal bot token cannot access:

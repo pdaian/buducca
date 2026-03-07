@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
@@ -47,6 +48,7 @@ class RuntimeConfig:
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
+    collector_config_path: str = "agent_config.json"
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
@@ -65,7 +67,81 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def _validate(config: BotConfig) -> None:
+def _normalize_token(raw: Any) -> str:
+    return str(raw or "").strip()
+
+
+def _resolve_collector_bot_token(account_cfg: dict[str, Any], default_bot_token: str) -> str:
+    return (
+        _normalize_token(account_cfg.get("collector_bot_token"))
+        or _normalize_token(account_cfg.get("bot_token"))
+        or default_bot_token
+        or _normalize_token(os.environ.get("TELEGRAM_COLLECTOR_BOT_TOKEN"))
+        or _normalize_token(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    )
+
+
+def _validate_telegram_collector_token_ownership(config: BotConfig, *, config_path: Path) -> None:
+    if not config.telegram:
+        return
+
+    frontend_token = _normalize_token(config.telegram.bot_token)
+    if not frontend_token:
+        return
+
+    collector_config_path = Path(config.runtime.collector_config_path)
+    if not collector_config_path.is_absolute():
+        collector_config_path = config_path.parent / collector_config_path
+    if not collector_config_path.exists():
+        return
+
+    collector_raw = _read_json(collector_config_path)
+    collectors_config = collector_raw.get("collectors")
+    if not isinstance(collectors_config, dict):
+        return
+
+    telegram_recent_config = collectors_config.get("telegram_recent")
+    if not isinstance(telegram_recent_config, dict):
+        legacy = collectors_config.get("telegram_recent_collector")
+        telegram_recent_config = legacy if isinstance(legacy, dict) else None
+    if not isinstance(telegram_recent_config, dict):
+        return
+
+    default_bot_token = (
+        _normalize_token(telegram_recent_config.get("collector_bot_token"))
+        or _normalize_token(telegram_recent_config.get("bot_token"))
+    )
+
+    accounts = telegram_recent_config.get("accounts")
+    accounts_cfg = accounts if isinstance(accounts, list) else []
+    if not accounts_cfg:
+        accounts_cfg = [{"name": telegram_recent_config.get("account_name", "default"), **telegram_recent_config}]
+
+    for account_cfg in accounts_cfg:
+        if not isinstance(account_cfg, dict):
+            continue
+        account_name = str(account_cfg.get("name") or "default")
+        token_field = "collector_bot_token"
+        if _normalize_token(account_cfg.get("collector_bot_token")):
+            token_field = "collector_bot_token"
+        elif _normalize_token(account_cfg.get("bot_token")):
+            token_field = "bot_token"
+        elif default_bot_token:
+            token_field = "<inherited top-level collector_bot_token/bot_token>"
+        else:
+            token_field = "<env TELEGRAM_COLLECTOR_BOT_TOKEN/TELEGRAM_BOT_TOKEN>"
+
+        effective_bot_token = _resolve_collector_bot_token(account_cfg, default_bot_token)
+        if effective_bot_token and effective_bot_token == frontend_token:
+            raise ValueError(
+                "Invalid Telegram token setup: telegram.bot_token in frontend config matches "
+                f"collectors.telegram_recent.accounts[{account_name!r}] token source {token_field}. "
+                "Only one getUpdates consumer may own a token. "
+                "Use user_client.enabled=true or a separate collector_bot_token for the collector."
+            )
+
+
+def _validate(config: BotConfig, *, config_path: Path) -> None:
     if not config.telegram and not config.signal:
         raise ValueError("At least one frontend must be configured: telegram or signal")
 
@@ -106,6 +182,8 @@ def _validate(config: BotConfig) -> None:
     if config.runtime.max_reply_chunk_chars <= 0:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
 
+    _validate_telegram_collector_token_ownership(config, config_path=config_path)
+
 
 def load_config(path: str | Path) -> BotConfig:
     config_path = Path(path)
@@ -119,5 +197,5 @@ def load_config(path: str | Path) -> BotConfig:
     runtime = RuntimeConfig(**raw.get("runtime", {}))
 
     config = BotConfig(telegram=telegram, signal=signal, llm=llm, runtime=runtime)
-    _validate(config)
+    _validate(config, config_path=config_path)
     return config

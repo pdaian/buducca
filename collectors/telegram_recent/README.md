@@ -13,3 +13,11 @@ Collects recent Telegram messages into `workspace/telegram.recent` and stores st
 ## File structure
 - `collectors/telegram_recent/__init__.py`
 - `collectors/telegram_recent/README.md`
+
+## Token ownership safety (important)
+- Do **not** reuse the same Telegram bot token for both the frontend bot (`config.json` → `telegram.bot_token`) and this collector in bot-polling mode (`collector_bot_token` / `bot_token`, including inherited top-level defaults).
+- Telegram allows only one `getUpdates` consumer per token; sharing it causes dropped updates and race conditions.
+- Use one of these alternatives:
+  - Prefer Telegram user-client mode for collectors (`user_client.enabled=true`).
+  - Or use a separate dedicated collector bot token (`collector_bot_token`).
+
