@@ -527,6 +527,44 @@ class BotTests(unittest.TestCase):
             self.assertEqual(events[-1]["text"], "hello")
 
 
+    def test_telegram_incoming_log_includes_sender_contact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            update = SimpleNamespace(
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                sender_name="Alice",
+                sender_contact="Alice (@alice_tg)",
+                text="hi",
+                voice_file_id=None,
+                voice_file_path=None,
+            )
+            bot._handle_update(update)
+
+            telegram_history = Path(td) / "logs" / "telegram.history"
+            events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[0]["sender_name"], "Alice")
+            self.assertEqual(events[0]["sender_contact"], "Alice (@alice_tg)")
+
+    def test_sender_context_is_added_to_llm_prompt(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        llm = DummyLLM("hello")
+        bot.llm = llm
+
+        bot._handle_message("telegram", "1", "1", "hi", "Alice", "Alice (@alice_tg)")
+
+        prompt = llm.messages
+        self.assertEqual(prompt[-1]["role"], "user")
+        self.assertIn("[Sender context]", prompt[-1]["content"])
+        self.assertIn("telegram_account: Alice (@alice_tg)", prompt[-1]["content"])
+        self.assertTrue(prompt[-1]["content"].endswith("\n\nhi"))
+
     def test_signal_incoming_log_includes_sender_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(

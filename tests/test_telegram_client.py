@@ -13,7 +13,7 @@ class FakeHttp:
             return {
                 "ok": True,
                 "result": [
-                    {"update_id": 1, "message": {"chat": {"id": 9}, "text": "hello"}},
+                    {"update_id": 1, "message": {"chat": {"id": 9}, "from": {"id": 123, "first_name": "Alice", "username": "alice_tg"}, "text": "hello"}},
                     {
                         "update_id": 2,
                         "message": {"chat": {"id": 9}, "voice": {"file_id": "voice-id"}},
@@ -38,6 +38,8 @@ class TelegramClientTests(unittest.TestCase):
         self.assertEqual(len(updates), 2)
         self.assertEqual(updates[0].text, "hello")
         self.assertEqual(updates[1].voice_file_id, "voice-id")
+        self.assertEqual(updates[0].sender_name, "Alice")
+        self.assertEqual(updates[0].sender_contact, "Alice (@alice_tg)")
 
     def test_get_file_and_download(self) -> None:
         http = FakeHttp()
