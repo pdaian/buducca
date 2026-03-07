@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -173,6 +174,31 @@ class BotTests(unittest.TestCase):
             self.assertEqual(events[0]["text"], "hi")
             self.assertEqual(events[-1]["direction"], "outgoing")
             self.assertEqual(events[-1]["text"], "hello")
+
+
+    def test_signal_incoming_log_includes_sender_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.signal = object()
+            bot.llm = DummyLLM("hello")
+            bot._send_message = lambda backend, conversation_id, text: None
+
+            update = SimpleNamespace(
+                backend="signal",
+                conversation_id="+15550001",
+                sender_id="+15550001",
+                sender_name="Alice",
+                text="hi",
+                voice_file_id=None,
+                voice_file_path=None,
+            )
+            bot._handle_update(update)
+
+            signal_history = Path(td) / "logs" / "signal.history"
+            events = [json.loads(line) for line in signal_history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[0]["sender_name"], "Alice")
+            self.assertEqual(events[0]["sender_contact"], "Alice <+15550001>")
 
     def test_status_command_uses_collector_status_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
