@@ -120,7 +120,11 @@ class SignalClient:
         return messages
 
     def _extract_message_fields(self, envelope: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
-        sender = str(envelope.get("source") or "").strip()
+        sender = self._first_non_empty_string(
+            envelope.get("sourceNumber"),
+            envelope.get("source"),
+            envelope.get("sourceUuid"),
+        )
         data_message = envelope.get("dataMessage") or {}
         if isinstance(data_message, dict):
             text = data_message.get("message")
@@ -135,11 +139,27 @@ class SignalClient:
         if not isinstance(sent_message, dict):
             return "", "", None, None
 
-        destination = str(sent_message.get("destination") or "").strip() or self.account
+        destination = (
+            self._first_non_empty_string(
+                sent_message.get("destinationNumber"),
+                sent_message.get("destination"),
+                sent_message.get("destinationUuid"),
+            )
+            or self.account
+        )
         source = sender or self.account
         text = sent_message.get("message")
         voice_file_path = self._find_voice_attachment_path(sent_message)
         return destination, source, text, voice_file_path
+
+    def _first_non_empty_string(self, *candidates: Any) -> str:
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            value = candidate.strip()
+            if value:
+                return value
+        return ""
 
     def _is_registration_error(self, stderr: str) -> bool:
         normalized = stderr.lower()
