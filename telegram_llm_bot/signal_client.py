@@ -36,6 +36,7 @@ class SignalClient:
         receive_command: list[str] | None = None,
         send_command: list[str] | None = None,
         contacts_command: list[str] | None = None,
+        groups_command: list[str] | None = None,
         contacts_cache_ttl_seconds: int = 300,
         poll_timeout_seconds: int = 1,
     ) -> None:
@@ -52,11 +53,14 @@ class SignalClient:
         ]
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
         self.contacts_command = contacts_command or ["signal-cli", "-o", "json", "-a", account, "listContacts"]
+        self.groups_command = groups_command or ["signal-cli", "-o", "json", "-a", account, "listGroups"]
         self.contacts_cache_ttl_seconds = max(0, contacts_cache_ttl_seconds)
         self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
         self._contact_names: dict[str, str] = {}
+        self._group_names: dict[str, str] = {}
         self._contact_names_loaded_at = 0.0
+        self._group_names_loaded_at = 0.0
 
     def _is_receive_json_configured(self) -> bool:
         command = self.receive_command
@@ -85,6 +89,7 @@ class SignalClient:
     def get_updates(self) -> list[IncomingMessage]:
         self._validate_receive_command()
         self._refresh_contact_cache_if_needed()
+        self._refresh_group_cache_if_needed()
         try:
             proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
@@ -245,17 +250,71 @@ class SignalClient:
         group_info = message.get("groupInfo")
         if not isinstance(group_info, dict):
             return ""
-        return self._first_non_empty_string(group_info.get("title"), group_info.get("name"))
+        group_title = self._first_non_empty_string(group_info.get("title"), group_info.get("name"))
+        group_id = self._extract_group_id(message)
+        if group_id and group_title:
+            self._group_names[group_id] = group_title
+        return group_title
 
     def _build_group_conversation_id(self, message: dict[str, Any]) -> str:
         group_id = self._extract_group_id(message)
         if not group_id:
             return ""
 
-        title = self._extract_group_title(message)
+        title = self._extract_group_title(message) or self._group_names.get(group_id, "")
         if title:
             return f"{self.GROUP_CONVERSATION_PREFIX}{title}{self.GROUP_ID_DELIMITER}{group_id}"
         return f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+
+    def _refresh_group_cache_if_needed(self) -> None:
+        if not self.groups_command:
+            return
+
+        now = time.monotonic()
+        if self._group_names and now - self._group_names_loaded_at < self.contacts_cache_ttl_seconds:
+            return
+
+        try:
+            proc = subprocess.run(self.groups_command, capture_output=True, text=True, check=False)
+        except OSError:
+            logging.debug("Unable to refresh signal groups cache", exc_info=True)
+            return
+
+        if proc.returncode != 0:
+            logging.debug("Signal groups command failed: %s", proc.stderr.strip() or "no stderr")
+            return
+
+        parsed = self._parse_groups_output(proc.stdout)
+        if parsed:
+            self._group_names = parsed
+            self._group_names_loaded_at = now
+
+    def _parse_groups_output(self, output: str) -> dict[str, str]:
+        groups: dict[str, str] = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(payload, dict):
+                self._parse_group_payload(payload, groups)
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        self._parse_group_payload(item, groups)
+        return groups
+
+    def _parse_group_payload(self, payload: dict[str, Any], groups: dict[str, str]) -> None:
+        group_id = self._first_non_empty_string(payload.get("id"), payload.get("groupId"), payload.get("groupID"))
+        if not group_id:
+            return
+        group_name = self._first_non_empty_string(payload.get("name"), payload.get("title"), payload.get("description"))
+        if group_name:
+            groups[group_id] = group_name
 
     def _extract_group_id_from_recipient(self, recipient: str) -> str:
         if not recipient.startswith(self.GROUP_CONVERSATION_PREFIX):
