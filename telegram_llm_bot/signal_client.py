@@ -24,6 +24,7 @@ class SignalFrontendUnavailableError(RuntimeError):
 
 
 class SignalClient:
+    GROUP_CONVERSATION_PREFIX = "group:"
     _VOICE_FILE_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"}
 
     def __init__(
@@ -45,6 +46,7 @@ class SignalClient:
             str(poll_timeout_seconds),
         ]
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
+        self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
 
     def _is_receive_json_configured(self) -> bool:
@@ -127,10 +129,16 @@ class SignalClient:
         )
         data_message = envelope.get("dataMessage") or {}
         if isinstance(data_message, dict):
+            group_id = self._extract_group_id(data_message)
+            conversation_id = (
+                f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+                if group_id
+                else sender
+            )
             text = data_message.get("message")
             voice_file_path = self._find_voice_attachment_path(data_message)
-            if sender and (text or voice_file_path):
-                return sender, sender, text, voice_file_path
+            if sender and conversation_id and (text or voice_file_path):
+                return conversation_id, sender, text, voice_file_path
 
         sync_message = envelope.get("syncMessage") or {}
         if not isinstance(sync_message, dict):
@@ -139,18 +147,28 @@ class SignalClient:
         if not isinstance(sent_message, dict):
             return "", "", None, None
 
-        destination = (
-            self._first_non_empty_string(
-                sent_message.get("destinationNumber"),
-                sent_message.get("destination"),
-                sent_message.get("destinationUuid"),
+        group_id = self._extract_group_id(sent_message)
+        if group_id:
+            destination = f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
+        else:
+            destination = (
+                self._first_non_empty_string(
+                    sent_message.get("destinationNumber"),
+                    sent_message.get("destination"),
+                    sent_message.get("destinationUuid"),
+                )
+                or self.account
             )
-            or self.account
-        )
         source = sender or self.account
         text = sent_message.get("message")
         voice_file_path = self._find_voice_attachment_path(sent_message)
         return destination, source, text, voice_file_path
+
+    def _extract_group_id(self, message: dict[str, Any]) -> str:
+        group_info = message.get("groupInfo")
+        if not isinstance(group_info, dict):
+            return ""
+        return self._first_non_empty_string(group_info.get("groupId"), group_info.get("groupID"), group_info.get("id"))
 
     def _first_non_empty_string(self, *candidates: Any) -> str:
         for candidate in candidates:
@@ -199,7 +217,19 @@ class SignalClient:
         return False
 
     def send_message(self, recipient: str, text: str) -> None:
-        command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
+        group_id = ""
+        if recipient.startswith(self.GROUP_CONVERSATION_PREFIX):
+            group_id = recipient[len(self.GROUP_CONVERSATION_PREFIX) :].strip()
+
+        if group_id:
+            template = self.send_command if any("{group_id}" in part for part in self.send_command) else self.group_send_command
+        else:
+            template = self.send_command
+
+        command = [
+            part.replace("{recipient}", recipient).replace("{message}", text).replace("{group_id}", group_id)
+            for part in template
+        ]
         proc = subprocess.run(command, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
