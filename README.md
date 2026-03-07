@@ -28,6 +28,7 @@ python3 run_bot.py --config config.json
 
 - Configure `telegram` in `config.json` to run the bot on Telegram.
 - Configure `signal` to run the bot on Signal (`signal-cli`).
+- **Important:** do not reuse the same Signal identity/device in both `config.signal.account` and `collectors.signal_messages.accounts[*].device_name` unless you explicitly set `runtime.allow_signal_collector_device_collision=true`. Shared consumers can contend for the same incoming messages.
 - Configure both to accept messages on either backend and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 
@@ -146,6 +147,10 @@ Some collectors need one-time auth outside the main collector loop:
 ```bash
 # Signal second-device QR flow
 python3 -m collectors.signal_messages.signup --config agent_config.json
+
+# Recommended: link a separate Signal device for collector ingestion.
+# If you run Signal frontend and signal_messages collector for the same human account,
+# use different linked device identities (or disable that collector account).
 
 # WhatsApp Web QR flow
 python3 -m collectors.whatsapp_messages.signup --config agent_config.json

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -47,6 +48,8 @@ class RuntimeConfig:
     collector_status_file: str = "collector_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
+    agent_config_path: str = "agent_config.json"
+    allow_signal_collector_device_collision: bool = False
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
@@ -58,6 +61,37 @@ class BotConfig:
     signal: SignalConfig | None = None
     llm: LLMConfig | None = None
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+
+
+def _read_collector_device_names(agent_config_path: Path) -> list[str]:
+    if not agent_config_path.exists():
+        return []
+
+    try:
+        raw = _read_json(agent_config_path)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Failed to parse runtime.agent_config_path at '{agent_config_path}': {exc}") from exc
+
+    collectors = raw.get("collectors")
+    if not isinstance(collectors, dict):
+        return []
+
+    signal_cfg = collectors.get("signal_messages")
+    if not isinstance(signal_cfg, dict):
+        return []
+
+    accounts = signal_cfg.get("accounts")
+    if not isinstance(accounts, list):
+        return []
+
+    devices: list[str] = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        device_name = account.get("device_name")
+        if isinstance(device_name, str) and device_name.strip():
+            devices.append(device_name.strip())
+    return devices
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -107,6 +141,35 @@ def _validate(config: BotConfig) -> None:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
 
 
+def _validate_signal_frontend_collector_collision(config_path: Path, config: BotConfig) -> None:
+    if not config.signal:
+        return
+
+    frontend_account = config.signal.account.strip()
+    if not frontend_account:
+        return
+
+    agent_config_path = Path(config.runtime.agent_config_path)
+    if not agent_config_path.is_absolute():
+        agent_config_path = (config_path.parent / agent_config_path).resolve()
+
+    collector_devices = _read_collector_device_names(agent_config_path)
+    if frontend_account not in collector_devices:
+        return
+
+    risk_message = (
+        "signal.account must not match collectors.signal_messages.accounts[*].device_name by default; "
+        "sharing one Signal identity/device between frontend and collector can cause consumer contention "
+        "and dropped or missing messages. "
+        "Use a separately linked Signal device for the collector, disable the collector for that account, "
+        "or set runtime.allow_signal_collector_device_collision=true to override this check."
+    )
+    if config.runtime.allow_signal_collector_device_collision:
+        warnings.warn(risk_message, RuntimeWarning, stacklevel=2)
+        return
+    raise ValueError(risk_message)
+
+
 def load_config(path: str | Path) -> BotConfig:
     config_path = Path(path)
     raw = _read_json(config_path)
@@ -120,4 +183,5 @@ def load_config(path: str | Path) -> BotConfig:
 
     config = BotConfig(telegram=telegram, signal=signal, llm=llm, runtime=runtime)
     _validate(config)
+    _validate_signal_frontend_collector_collision(config_path, config)
     return config
