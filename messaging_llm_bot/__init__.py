@@ -1,4 +1,4 @@
-"""Minimal Telegram bot framework backed by an OpenAI-compatible endpoint."""
+"""Minimal multi-frontend messaging bot framework backed by an OpenAI-compatible endpoint."""
 
 from .bot import BotRunner
 from .config import BotConfig, load_config

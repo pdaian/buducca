@@ -33,16 +33,6 @@
         }
       ]
     },
-    "whatsapp_messages": {
-      "accounts": [
-        {
-          "name": "phone_a",
-          "session_file": "workspace/collectors/whatsapp/session_a.json",
-          "command": "python3 scripts/export_whatsapp_recent_a.py"
-        }
-      ],
-      "qr_command": "python3 scripts/whatsapp_qr_login.py"
-    },
     "google_calendar": {
       "accounts": [
         "primary@example.com",

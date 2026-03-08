@@ -18,7 +18,7 @@
 > 2. Open the group in Telegram.
 > 3. Say hi and tell us what you want from a private, local-first assistant.
 
-Run your own Telegram and/or Signal assistant with a tiny, understandable Python stack.
+Run your own Telegram, Signal, and/or WhatsApp assistant with a tiny, understandable Python stack.
 
 ## Why BUDUCCA
 
@@ -29,6 +29,9 @@ Run your own Telegram and/or Signal assistant with a tiny, understandable Python
 - 🐣 **Useful with tiny local models:** built for practical automation, not giant cloud-only setups.
 
 ## Quick start
+
+> [!WARNING]
+> Messages that go through third-party messaging frontends are visible to those platform operators in transit and metadata, and are not end-to-end encrypted between you and the model runtime. This includes **Telegram bot mode**, **Telegram user mode via Telethon**, and any **WhatsApp frontend using WhatsApp Web/API bridge commands** configured in BUDUCCA.
 
 ```bash
 cp config.example.json config.json
@@ -43,14 +46,15 @@ python3 run_bot.py --config config.json
 - Configure `telegram` in `config.json` to run Telegram in bot mode (`telegram.mode: "bot"`) or full-account user mode (`telegram.mode: "user"` with Telethon session).
 - Configure `signal` to run the bot on Signal (`signal-cli`).
 - Signal frontend registration must be done directly in `signal-cli` (phone number or linked-device QR), then BUDUCCA can use that configured account.
-- Configure both to accept messages on either backend and reply on the same backend that received the message.
+- Configure `whatsapp` to run the bot on WhatsApp using external receive/send JSON commands.
+- Configure any subset of frontends to accept messages and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 - Signal allowlist override: set `signal.allowed_group_ids_when_sender_not_allowed` to raw Signal group IDs (the `groupInfo.groupId` value from `signal-cli` JSON output, not the `group:<title>|...` conversation label). Example: `"AQi7f+/4S3mQv6s5hN2xwQ=="`.
 
 - Telegram sender/group allowlist override (similar to Signal): set `telegram.allowed_sender_ids` to allow specific senders, and set `telegram.allowed_group_ids_when_sender_not_allowed` to allow specific chat/group IDs even when sender is not allowlisted.
 
-- `telegram.read_only` / `signal.read_only` can be set to `true` to run a frontend in collector-only mode (receives messages, sends no replies).
-- `telegram.store_unanswered_messages` / `signal.store_unanswered_messages` control whether unanswered/non-agent messages are persisted to `workspace/telegram.recent` or `workspace/signal.messages.recent` (default: `false`).
+- `telegram.read_only` / `signal.read_only` / `whatsapp.read_only` can be set to `true` to run a frontend in collector-only mode (receives messages, sends no replies).
+- `telegram.store_unanswered_messages` / `signal.store_unanswered_messages` / `whatsapp.store_unanswered_messages` control whether unanswered/non-agent messages are persisted to `workspace/telegram.recent`, `workspace/signal.messages.recent`, or `workspace/whatsapp.messages.recent` (default: `false`).
 - Replied interactions are logged to `workspace/logs/agenta_queries.history`.
 
 ## Plugin layout (skills + collectors)
@@ -78,7 +82,6 @@ To keep the main README focused, each skill and collector now has its own README
 - `gmail` → `collectors/gmail/README.md`
 - `slack` → `collectors/slack/README.md`
 - `twitter_recent` → `collectors/twitter_recent/README.md`
-- `whatsapp_messages` → `collectors/whatsapp_messages/README.md`
 - `google_calendar` → `collectors/google_calendar/README.md`
 
 ### Dynamic loading and optional removal
@@ -171,8 +174,6 @@ Some integrations need one-time auth outside the main runtime loops:
 # Signal frontend (config.json > signal) QR flow
 python3 -m messaging_llm_bot.signal_signup --config config.json  # prints setup docs and exits
 
-# WhatsApp Web QR flow
-python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 ```
 
 ## Data locations
@@ -184,7 +185,7 @@ python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 - `workspace/slack.recent` — Slack message snapshots
 - `workspace/twitter.following.recent` — X/Twitter posts from following timeline
 - `workspace/twitter.dms.recent` — X/Twitter direct messages
-- `workspace/whatsapp.messages.recent` — WhatsApp message snapshots
+- `workspace/whatsapp.messages.recent` — WhatsApp frontend message snapshots
 - `workspace/google_calendar/<account>.<month>.events.jsonl` — Google Calendar events per account/month
 
 That's it: one local workspace, one small backend, one assistant you control. 🔐

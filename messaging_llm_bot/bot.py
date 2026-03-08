@@ -23,6 +23,7 @@ from .llm_client import OpenAICompatibleClient
 from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import IncomingMessage, TelegramClient
 from .telegram_user_client import TelegramUserClient
+from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
@@ -56,6 +57,10 @@ class BotRunner:
             send_command=config.signal.send_command,
             debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
         ) if config.signal else None
+        self.whatsapp = WhatsAppClient(
+            receive_command=config.whatsapp.receive_command,
+            send_command=config.whatsapp.send_command,
+        ) if config.whatsapp else None
         self.llm = OpenAICompatibleClient(
             config=config.llm,
             http_client=http_client,
@@ -74,12 +79,17 @@ class BotRunner:
         self._allowed_signal_group_ids_when_sender_not_allowed = (
             set(config.signal.allowed_group_ids_when_sender_not_allowed) if config.signal else set()
         )
+        self._allowed_whatsapp_sender_ids = set(config.whatsapp.allowed_sender_ids) if config.whatsapp else set()
+        self._allowed_whatsapp_group_ids_when_sender_not_allowed = (
+            set(config.whatsapp.allowed_group_ids_when_sender_not_allowed) if config.whatsapp else set()
+        )
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
         self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
         self._telegram_retry_after: float | None = None
         self._signal_frontend_disabled = False
+        self._whatsapp_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
         self._history: dict[Any, Deque[dict[str, str]]] = defaultdict(
@@ -89,9 +99,11 @@ class BotRunner:
         self._workspace.create_dir("logs")
         self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
         self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
+        self._workspace.write_text("logs/whatsapp.history", self._workspace.read_text("logs/whatsapp.history", default=""))
         self._workspace.write_text("logs/agenta_queries.history", self._workspace.read_text("logs/agenta_queries.history", default=""))
         self._workspace.write_text("telegram.recent", self._workspace.read_text("telegram.recent", default=""))
         self._workspace.write_text("signal.messages.recent", self._workspace.read_text("signal.messages.recent", default=""))
+        self._workspace.write_text("whatsapp.messages.recent", self._workspace.read_text("whatsapp.messages.recent", default=""))
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
 
     @property
@@ -169,6 +181,8 @@ class BotRunner:
                 poll_interval = max(poll_interval, self.config.telegram.poll_interval_seconds)
             if self.config.signal:
                 poll_interval = max(poll_interval, self.config.signal.poll_interval_seconds)
+            if self.config.whatsapp:
+                poll_interval = max(poll_interval, self.config.whatsapp.poll_interval_seconds)
             time.sleep(poll_interval)
 
     def _poll_frontends_once(self) -> None:
@@ -224,6 +238,14 @@ class BotRunner:
             except SignalFrontendUnavailableError as exc:
                 self._signal_frontend_disabled = True
                 logging.warning("%s; continuing with telegram-only frontend", exc)
+
+        if self.whatsapp and not self._whatsapp_frontend_disabled:
+            try:
+                for update in self.whatsapp.get_updates():
+                    self._handle_update(update)
+            except WhatsAppFrontendUnavailableError as exc:
+                self._whatsapp_frontend_disabled = True
+                logging.warning("%s; continuing without whatsapp frontend", exc)
 
     @staticmethod
     def _is_telegram_conflict_error(exc: RuntimeError) -> bool:
@@ -725,6 +747,8 @@ class BotRunner:
             return bool(self.config.telegram.read_only)
         if backend == "signal" and self.config.signal:
             return bool(self.config.signal.read_only)
+        if backend == "whatsapp" and self.config.whatsapp:
+            return bool(self.config.whatsapp.read_only)
         return False
 
     def _backend_stores_unanswered_messages(self, backend: str) -> bool:
@@ -732,6 +756,8 @@ class BotRunner:
             return bool(self.config.telegram.store_unanswered_messages)
         if backend == "signal" and self.config.signal:
             return bool(self.config.signal.store_unanswered_messages)
+        if backend == "whatsapp" and self.config.whatsapp:
+            return bool(self.config.whatsapp.store_unanswered_messages)
         return False
 
     def _append_unanswered_collector_log(
@@ -773,6 +799,21 @@ class BotRunner:
                 "text": text,
             }
             self._workspace.append_text("signal.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            return
+
+        if backend == "whatsapp":
+            payload = {
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "source": "frontend_log",
+                "account": self.config.whatsapp.account if self.config.whatsapp else "default",
+                "direction": "incoming",
+                "conversation_id": conversation_id,
+                "sender": sender_id,
+                "sender_name": sender_name,
+                "sender_contact": sender_contact or sender_id,
+                "text": text,
+            }
+            self._workspace.append_text("whatsapp.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _append_agenta_query_log(
         self,
@@ -819,6 +860,18 @@ class BotRunner:
             self.signal.send_message(conversation_id, text)
             self._append_frontend_log(
                 backend="signal",
+                direction="outgoing",
+                conversation_id=conversation_id,
+                sender_id="bot",
+                text=text,
+            )
+            return
+        if backend == "whatsapp":
+            if not self.whatsapp:
+                raise RuntimeError("WhatsApp frontend is not configured")
+            self.whatsapp.send_message(conversation_id, text)
+            self._append_frontend_log(
+                backend="whatsapp",
                 direction="outgoing",
                 conversation_id=conversation_id,
                 sender_id="bot",
@@ -898,6 +951,21 @@ class BotRunner:
 
             logging.warning(
                 "Blocked message from unauthorized signal sender_id=%s conversation_id=%s",
+                sender_id,
+                conversation_id,
+            )
+            return False
+
+        if backend == "whatsapp" and self.config.whatsapp:
+            if not self._allowed_whatsapp_sender_ids:
+                return True
+            if sender_id in self._allowed_whatsapp_sender_ids:
+                return True
+            whatsapp_group_id = self._extract_whatsapp_group_id(conversation_id)
+            if whatsapp_group_id and whatsapp_group_id in self._allowed_whatsapp_group_ids_when_sender_not_allowed:
+                return True
+            logging.warning(
+                "Blocked message from unauthorized whatsapp sender_id=%s conversation_id=%s",
                 sender_id,
                 conversation_id,
             )
@@ -1003,6 +1071,16 @@ class BotRunner:
             return ""
         if SignalClient.GROUP_ID_DELIMITER in group_part:
             return group_part.rsplit(SignalClient.GROUP_ID_DELIMITER, 1)[-1]
+        return group_part
+
+    def _extract_whatsapp_group_id(self, conversation_id: str) -> str:
+        if not conversation_id.startswith(WhatsAppClient.GROUP_CONVERSATION_PREFIX):
+            return ""
+        group_part = conversation_id[len(WhatsAppClient.GROUP_CONVERSATION_PREFIX):]
+        if not group_part:
+            return ""
+        if WhatsAppClient.GROUP_ID_DELIMITER in group_part:
+            return group_part.rsplit(WhatsAppClient.GROUP_ID_DELIMITER, 1)[-1]
         return group_part
 
     def _handle_message(self, *args: Any) -> bool:

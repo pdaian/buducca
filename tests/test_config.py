@@ -150,6 +150,39 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
             self.assertIsNotNone(config.telegram)
             self.assertEqual(config.telegram.mode, "user")
+    def test_whatsapp_only_config_is_valid(self) -> None:
+        data = {
+            "whatsapp": {
+                "account": "personal",
+                "receive_command": ["python3", "recv.py"],
+                "send_command": ["python3", "send.py", "{recipient}", "{message}"],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.whatsapp)
+            self.assertIsNone(config.telegram)
+            self.assertIsNone(config.signal)
+
+    def test_whatsapp_poll_interval_must_be_non_negative(self) -> None:
+        data = {
+            "whatsapp": {
+                "account": "personal",
+                "poll_interval_seconds": -1,
+                "receive_command": ["python3", "recv.py"],
+                "send_command": ["python3", "send.py", "{recipient}", "{message}"],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

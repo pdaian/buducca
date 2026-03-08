@@ -37,6 +37,18 @@ class SignalConfig:
 
 
 @dataclass
+class WhatsAppConfig:
+    account: str = "default"
+    poll_interval_seconds: float = 1.0
+    allowed_sender_ids: list[str] = field(default_factory=list)
+    allowed_group_ids_when_sender_not_allowed: list[str] = field(default_factory=list)
+    receive_command: list[str] = field(default_factory=list)
+    send_command: list[str] = field(default_factory=list)
+    read_only: bool = False
+    store_unanswered_messages: bool = False
+
+
+@dataclass
 class LLMConfig:
     base_url: str
     api_key: str
@@ -68,6 +80,7 @@ class RuntimeConfig:
 class BotConfig:
     telegram: TelegramConfig | None = None
     signal: SignalConfig | None = None
+    whatsapp: WhatsAppConfig | None = None
     llm: LLMConfig | None = None
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
@@ -78,8 +91,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
-    if not config.telegram and not config.signal:
-        raise ValueError("At least one frontend must be configured: telegram or signal")
+    if not config.telegram and not config.signal and not config.whatsapp:
+        raise ValueError("At least one frontend must be configured: telegram, signal, or whatsapp")
 
     if config.telegram:
         mode = config.telegram.mode.strip().lower()
@@ -105,6 +118,12 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
             raise ValueError("signal.account must be set")
         if config.signal.poll_interval_seconds < 0:
             raise ValueError("signal.poll_interval_seconds must be >= 0")
+
+    if config.whatsapp:
+        if not config.whatsapp.account.strip():
+            raise ValueError("whatsapp.account must be set")
+        if config.whatsapp.poll_interval_seconds < 0:
+            raise ValueError("whatsapp.poll_interval_seconds must be >= 0")
 
     if not config.llm:
         raise ValueError("llm must be set")
@@ -138,11 +157,13 @@ def load_config(path: str | Path) -> BotConfig:
 
     telegram_raw = raw.get("telegram")
     signal_raw = raw.get("signal")
+    whatsapp_raw = raw.get("whatsapp")
     telegram = TelegramConfig(**telegram_raw) if isinstance(telegram_raw, dict) else None
     signal = SignalConfig(**signal_raw) if isinstance(signal_raw, dict) else None
+    whatsapp = WhatsAppConfig(**whatsapp_raw) if isinstance(whatsapp_raw, dict) else None
     llm = LLMConfig(**raw["llm"])
     runtime = RuntimeConfig(**raw.get("runtime", {}))
 
-    config = BotConfig(telegram=telegram, signal=signal, llm=llm, runtime=runtime)
+    config = BotConfig(telegram=telegram, signal=signal, whatsapp=whatsapp, llm=llm, runtime=runtime)
     _validate(config, config_path=config_path)
     return config
