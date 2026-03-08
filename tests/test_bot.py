@@ -1109,6 +1109,55 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(transcript, "json transcript")
 
+    def test_transcribe_voice_file_path_reads_whisper_txt_output(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import sys; from pathlib import Path; p = Path(sys.argv[1]); "
+                        "Path(sys.argv[2], p.stem + '.txt').write_text('signal txt transcript', encoding='utf-8')"
+                    ),
+                    "{input}",
+                    "{input_dir}",
+                ],
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            voice_path = Path(td) / "note.mp3"
+            voice_path.write_bytes(b"voice")
+
+            transcript = bot._transcribe_voice_file_path(str(voice_path))
+
+        self.assertEqual(transcript, "signal txt transcript")
+
+    def test_transcribe_voice_file_path_reads_json_text_payload(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import json, sys; from pathlib import Path; out = Path(sys.argv[1]); "
+                        "(out / 'transcript.json').write_text(json.dumps({'text': 'signal json transcript'}), encoding='utf-8')"
+                    ),
+                    "{input_dir}",
+                ],
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            voice_path = Path(td) / "note.mp3"
+            voice_path.write_bytes(b"voice")
+
+            transcript = bot._transcribe_voice_file_path(str(voice_path))
+
+        self.assertEqual(transcript, "signal json transcript")
+
     def test_handle_voice_update_uses_transcript(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
         bot.telegram = DummyTelegram()

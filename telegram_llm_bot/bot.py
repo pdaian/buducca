@@ -653,6 +653,30 @@ class BotRunner:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"voice transcription command failed: {stderr}")
         transcript = proc.stdout.strip()
+
+        if not transcript:
+            transcript_path = input_path.with_suffix(".txt")
+            if transcript_path.exists():
+                transcript = transcript_path.read_text(encoding="utf-8").strip()
+
+        if not transcript:
+            for candidate in sorted(input_path.parent.glob("*.txt")):
+                candidate_text = candidate.read_text(encoding="utf-8").strip()
+                if candidate_text:
+                    transcript = candidate_text
+                    break
+
+        if not transcript:
+            for candidate in sorted(input_path.parent.glob("*.json")):
+                try:
+                    payload = json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+                    transcript = payload["text"].strip()
+                    if transcript:
+                        break
+
         if self._debug_enabled:
             logging.debug(
                 "Voice transcription parsed result (signal): voice_file_path=%s transcript_present=%s transcript_length=%s",
