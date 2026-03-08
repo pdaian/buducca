@@ -405,8 +405,61 @@ class SignalClient:
                             attachment.get("voiceNote"),
                         )
                     return resolved
+
+            resolved_from_id = self._resolve_voice_attachment_id_path(attachment.get("id"))
+            if resolved_from_id:
+                if self._debug:
+                    resolved_path = Path(resolved_from_id)
+                    exists = resolved_path.exists()
+                    size_bytes = resolved_path.stat().st_size if exists else None
+                    logging.debug(
+                        "Signal voice attachment path selected via id: id=%s resolved=%s exists=%s size_bytes=%s contentType=%s voiceNote=%s",
+                        attachment.get("id"),
+                        resolved_from_id,
+                        exists,
+                        size_bytes,
+                        attachment.get("contentType"),
+                        attachment.get("voiceNote"),
+                    )
+                return resolved_from_id
             if self._debug:
                 logging.debug("Signal attachment looked like voice but had no filename fields: %s", attachment)
+        return None
+
+    def _resolve_voice_attachment_id_path(self, attachment_id: Any) -> str | None:
+        if not isinstance(attachment_id, str) or not attachment_id.strip():
+            return None
+
+        token = attachment_id.strip()
+        direct_path = Path(token)
+        if direct_path.exists():
+            return str(direct_path if direct_path.is_absolute() else Path.cwd() / direct_path)
+
+        local_roots = (Path.cwd(), Path.cwd() / "attachments")
+        for root in local_roots:
+            exact = root / token
+            if exact.exists() and exact.is_file():
+                return str(exact)
+            for match in sorted(root.glob(f"{token}*")):
+                if match.is_file():
+                    return str(match)
+
+        signal_attachments_root = Path.home() / ".local" / "share" / "signal-cli" / "attachments"
+        if not signal_attachments_root.exists() or not signal_attachments_root.is_dir():
+            return None
+
+        candidate_dirs = [signal_attachments_root / self.account, signal_attachments_root]
+        candidate_dirs.extend(path for path in signal_attachments_root.iterdir() if path.is_dir())
+
+        for directory in candidate_dirs:
+            if not directory.exists() or not directory.is_dir():
+                continue
+            exact = directory / token
+            if exact.exists() and exact.is_file():
+                return str(exact)
+            for match in sorted(directory.glob(f"{token}*")):
+                if match.is_file():
+                    return str(match)
         return None
 
     def _is_voice_attachment(self, attachment: dict[str, Any]) -> bool:
