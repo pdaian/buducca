@@ -1158,6 +1158,32 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(transcript, "signal json transcript")
 
+    def test_transcribe_voice_file_path_without_suffix_infers_mp3_input_name(self) -> None:
+        bot = self.make_bot(
+            runtime=RuntimeConfig(
+                enable_voice_notes=True,
+                voice_transcribe_command=[
+                    "python3",
+                    "-c",
+                    (
+                        "import sys; from pathlib import Path; p = Path(sys.argv[1]); "
+                        "Path(sys.argv[2], p.stem + '.txt').write_text(p.suffix, encoding='utf-8')"
+                    ),
+                    "{input}",
+                    "{input_dir}",
+                ],
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            voice_path = Path(td) / "note_without_suffix"
+            voice_path.write_bytes(b"ID3" + b"\x00" * 32)
+
+            transcript = bot._transcribe_voice_file_path(str(voice_path))
+
+        self.assertEqual(transcript, ".mp3")
+
+
     def test_handle_voice_update_uses_transcript(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
         bot.telegram = DummyTelegram()

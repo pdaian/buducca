@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -633,13 +634,43 @@ class BotRunner:
                 input_path.suffix,
             )
 
+        transcription_input_path = input_path
+        temp_input_dir: tempfile.TemporaryDirectory[str] | None = None
+        if not input_path.suffix:
+            inferred_suffix = ""
+            try:
+                header = input_path.read_bytes()[:16]
+            except OSError:
+                header = b""
+
+            if header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+                inferred_suffix = ".mp3"
+            elif header.startswith(b"OggS"):
+                inferred_suffix = ".ogg"
+            elif header.startswith(b"fLaC"):
+                inferred_suffix = ".flac"
+            elif header.startswith(b"RIFF") and b"WAVE" in header:
+                inferred_suffix = ".wav"
+
+            if inferred_suffix:
+                temp_input_dir = tempfile.TemporaryDirectory()
+                transcription_input_path = Path(temp_input_dir.name) / f"signal_voice{inferred_suffix}"
+                shutil.copy2(input_path, transcription_input_path)
+                if self._debug_enabled:
+                    logging.debug(
+                        "Signal voice note had no extension; created temp transcription input: original=%s temp=%s inferred_suffix=%s",
+                        input_path,
+                        transcription_input_path,
+                        inferred_suffix,
+                    )
+
         command_template = self.config.runtime.voice_transcribe_command
         command = [
-            part.replace("{input}", str(input_path)).replace("{input_dir}", str(input_path.parent))
+            part.replace("{input}", str(transcription_input_path)).replace("{input_dir}", str(transcription_input_path.parent))
             for part in command_template
         ]
         if not any("{input}" in part for part in command_template):
-            command.append(str(input_path))
+            command.append(str(transcription_input_path))
         proc = subprocess.run(command, capture_output=True, text=True, check=False)
         if self._debug_enabled:
             logging.debug(
@@ -655,19 +686,19 @@ class BotRunner:
         transcript = proc.stdout.strip()
 
         if not transcript:
-            transcript_path = input_path.with_suffix(".txt")
+            transcript_path = transcription_input_path.with_suffix(".txt")
             if transcript_path.exists():
                 transcript = transcript_path.read_text(encoding="utf-8").strip()
 
         if not transcript:
-            for candidate in sorted(input_path.parent.glob("*.txt")):
+            for candidate in sorted(transcription_input_path.parent.glob("*.txt")):
                 candidate_text = candidate.read_text(encoding="utf-8").strip()
                 if candidate_text:
                     transcript = candidate_text
                     break
 
         if not transcript:
-            for candidate in sorted(input_path.parent.glob("*.json")):
+            for candidate in sorted(transcription_input_path.parent.glob("*.json")):
                 try:
                     payload = json.loads(candidate.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
@@ -676,6 +707,9 @@ class BotRunner:
                     transcript = payload["text"].strip()
                     if transcript:
                         break
+
+        if temp_input_dir is not None:
+            temp_input_dir.cleanup()
 
         if self._debug_enabled:
             logging.debug(
