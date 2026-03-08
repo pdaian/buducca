@@ -4,7 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from telegram_llm_bot.signal_signup import run_signup
+from messaging_llm_bot.signal_signup import run_signup
 
 
 class SignalSignupTests(unittest.TestCase):

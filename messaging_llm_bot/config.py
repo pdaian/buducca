@@ -21,6 +21,7 @@ class TelegramConfig:
     allowed_group_ids_when_sender_not_allowed: list[int] = field(default_factory=list)
     process_pending_updates_on_startup: bool = False
     read_only: bool = False
+    store_unanswered_messages: bool = False
 
 
 @dataclass
@@ -32,6 +33,7 @@ class SignalConfig:
     receive_command: list[str] = field(default_factory=list)
     send_command: list[str] = field(default_factory=list)
     read_only: bool = False
+    store_unanswered_messages: bool = False
 
 
 @dataclass

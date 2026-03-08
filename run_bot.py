@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from telegram_llm_bot import BotRunner, load_config
+from messaging_llm_bot import BotRunner, load_config
 
 
 def parse_args() -> argparse.Namespace:

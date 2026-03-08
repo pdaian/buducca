@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from telegram_llm_bot.signal_client import SignalClient, SignalFrontendUnavailableError
+from messaging_llm_bot.signal_client import SignalClient, SignalFrontendUnavailableError
 
 
 class SignalClientTests(unittest.TestCase):
@@ -13,11 +13,11 @@ class SignalClientTests(unittest.TestCase):
             ]
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -31,11 +31,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"destination":"+15551230000","message":"remember milk"}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -49,11 +49,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"destination":"+15559998888","attachments":[{"contentType":"audio/ogg","filename":"sync.ogg"}]}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -67,11 +67,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"attachments":[{"filename":"voice-note.m4a"}]}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -85,11 +85,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"sourceUuid":"user-uuid","syncMessage":{"sentMessage":{"destinationNumber":"+15551230000","attachments":[{"voiceNote":true,"storedFilename":"memo.ogg"}]}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -107,11 +107,11 @@ class SignalClientTests(unittest.TestCase):
             + '","size":55680}]}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 with patch.object(client, "_resolve_voice_attachment_id_path", return_value=resolved_voice_path) as resolve:
                     updates = client.get_updates()
@@ -127,11 +127,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"source":"+15550001","dataMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"hi group"}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -145,11 +145,11 @@ class SignalClientTests(unittest.TestCase):
             '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"group note"}}}}'
         )
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = stdout
             run.return_value.stderr = ""
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -163,13 +163,13 @@ class SignalClientTests(unittest.TestCase):
     def test_default_contacts_command_uses_json_output_flag(self) -> None:
         message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 client.get_updates()
 
@@ -180,13 +180,13 @@ class SignalClientTests(unittest.TestCase):
         contacts_stdout = '[{"number":"+15550001","name":"Alice"}]'
         message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
                 Mock(returncode=0, stdout=contacts_stdout, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -197,13 +197,13 @@ class SignalClientTests(unittest.TestCase):
         groups_stdout = '[{"id":"group-123","name":"Family Chat"}]'
         message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"groupInfo":{"groupId":"group-123"},"message":"hello"}}}'
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=groups_stdout, stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 updates = client.get_updates()
 
@@ -216,7 +216,7 @@ class SignalClientTests(unittest.TestCase):
         contacts_second = '[{"number":"+15550001","name":"Alicia"}]'
         message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
 
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
                 Mock(returncode=0, stdout=contacts_first, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
@@ -225,9 +225,9 @@ class SignalClientTests(unittest.TestCase):
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000", contacts_cache_ttl_seconds=10)
-                with patch("telegram_llm_bot.signal_client.time.monotonic", side_effect=[0.0, 0.0, 20.0, 20.0]):
+                with patch("messaging_llm_bot.signal_client.time.monotonic", side_effect=[0.0, 0.0, 20.0, 20.0]):
                     first = client.get_updates()
                     second = client.get_updates()
 
@@ -235,7 +235,7 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(second[0].sender_name, "Alicia")
 
     def test_send_message_supports_note_to_self_recipient(self) -> None:
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = ""
             run.return_value.stderr = ""
@@ -250,7 +250,7 @@ class SignalClientTests(unittest.TestCase):
         )
 
     def test_send_message_supports_group_conversation_id(self) -> None:
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = ""
             run.return_value.stderr = ""
@@ -265,7 +265,7 @@ class SignalClientTests(unittest.TestCase):
         )
 
     def test_send_message_still_supports_raw_group_conversation_id(self) -> None:
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = ""
             run.return_value.stderr = ""
@@ -282,17 +282,17 @@ class SignalClientTests(unittest.TestCase):
     def test_raises_when_signal_cli_missing(self) -> None:
         client = SignalClient(account="+15551230000")
 
-        with patch("telegram_llm_bot.signal_client.which", return_value=None):
+        with patch("messaging_llm_bot.signal_client.which", return_value=None):
             with self.assertRaises(SignalFrontendUnavailableError):
                 client.get_updates()
 
 
     def test_registration_error_is_treated_as_frontend_unavailable(self) -> None:
-        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.return_value.returncode = 1
             run.return_value.stdout = ""
             run.return_value.stderr = "User +15551230000 is not registered."
-            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 with self.assertRaises(SignalFrontendUnavailableError) as exc:
                     client.get_updates()
@@ -302,7 +302,7 @@ class SignalClientTests(unittest.TestCase):
     def test_raises_when_json_output_not_configured(self) -> None:
         client = SignalClient(account="+15551230000", receive_command=["signal-cli", "-a", "+15551230000", "receive"])
 
-        with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+        with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
             with self.assertRaises(SignalFrontendUnavailableError):
                 client.get_updates()
 

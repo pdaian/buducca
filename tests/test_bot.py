@@ -5,11 +5,11 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from telegram_llm_bot.bot import BotRunner
-from telegram_llm_bot.http import RequestTimeoutError
-from telegram_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig
-from telegram_llm_bot.telegram_client import IncomingMessage
-from telegram_llm_bot.signal_client import SignalFrontendUnavailableError
+from messaging_llm_bot.bot import BotRunner
+from messaging_llm_bot.http import RequestTimeoutError
+from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig
+from messaging_llm_bot.telegram_client import IncomingMessage
+from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
 
 
 class DummyTelegram:
@@ -136,7 +136,7 @@ class BotTests(unittest.TestCase):
     def test_read_only_frontend_logs_as_collector_without_reply(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
-                telegram=TelegramConfig(bot_token="t", read_only=True),
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
                 runtime=RuntimeConfig(workspace_dir=td),
             )
@@ -266,6 +266,7 @@ class BotTests(unittest.TestCase):
                     account="+15550001",
                     allowed_sender_ids=["+15551112222"],
                     allowed_group_ids_when_sender_not_allowed=[],
+                    store_unanswered_messages=True,
                 ),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
                 runtime=RuntimeConfig(workspace_dir=td),
@@ -289,6 +290,23 @@ class BotTests(unittest.TestCase):
             self.assertIn("self note", signal_history.read_text(encoding="utf-8"))
             signal_recent = Path(td) / "signal.messages.recent"
             self.assertIn("self note", signal_recent.read_text(encoding="utf-8"))
+
+    def test_unanswered_messages_are_not_stored_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="1", text="collect me")
+            )
+
+            recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
+            self.assertEqual(recent, "")
 
     def test_signal_voice_update_from_unauthorized_sender_is_ignored(self) -> None:
         cfg = BotConfig(
@@ -1002,7 +1020,7 @@ class BotTests(unittest.TestCase):
 
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
-        decoder_path = "telegram_llm_bot.bot.json.JSONDecoder.raw_decode"
+        decoder_path = "messaging_llm_bot.bot.json.JSONDecoder.raw_decode"
 
         with patch(decoder_path) as raw_decode:
             parsed = bot._try_parse_skill_call("{" * 2000)
