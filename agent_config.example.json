@@ -1,49 +1,5 @@
 {
   "collectors": {
-    "telegram_recent": {
-      "accounts": [
-        {
-          "name": "bot_account",
-          "collector_bot_token": "123456:collector-bot-token"
-        },
-        {
-          "name": "user_account",
-          "user_client": {
-            "enabled": false,
-            "api_id": 123456,
-            "api_hash": "your_api_hash",
-            "session_path": "workspace/collectors/telegram_user",
-            "qr_wait_seconds": 120
-          }
-        }
-      ],
-      "timeout_seconds": 30,
-      "max_messages": 50
-    },
-    "signal_messages": {
-      "ignore_attachments": true,
-      "accounts": [
-        {
-          "name": "primary",
-          "device_name": "+15550001111",
-          "command": [
-            "signal-cli",
-            "-o",
-            "json",
-            "-a",
-            "+15550001111",
-            "receive",
-            "--ignore-attachments"
-          ]
-        }
-      ],
-      "link_command": [
-        "signal-cli",
-        "link",
-        "-n",
-        "buducca-signal"
-      ]
-    },
     "gmail": {
       "accounts": [
         {

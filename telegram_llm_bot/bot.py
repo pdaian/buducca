@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Deque
 
-from assistant_framework import CollectorManager, SkillManager, Workspace
+from assistant_framework import SkillManager, Workspace
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
@@ -80,8 +80,10 @@ class BotRunner:
         self._workspace.create_dir("logs")
         self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
         self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
+        self._workspace.write_text("logs/agenta_queries.history", self._workspace.read_text("logs/agenta_queries.history", default=""))
+        self._workspace.write_text("telegram.recent", self._workspace.read_text("telegram.recent", default=""))
+        self._workspace.write_text("signal.messages.recent", self._workspace.read_text("signal.messages.recent", default=""))
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
-        self._collector_manifests = CollectorManager(self.config.runtime.collectors_dir).load_manifests()
 
     @property
     def _debug_enabled(self) -> bool:
@@ -110,13 +112,6 @@ class BotRunner:
                     for line in skill.args_schema.splitlines():
                         skill_intro.append(f"    {line}")
             sections.append("\n".join(skill_intro))
-
-        if self._collector_manifests:
-            collector_lines = ["Available collectors and file structure:"]
-            for manifest in sorted(self._collector_manifests, key=lambda m: m.name):
-                paths = ", ".join(manifest.file_structure)
-                collector_lines.append(f"- {manifest.name}: {paths}")
-            sections.append("\n".join(collector_lines))
 
         learnings_lines = [
             "Persistent learnings (from workspace/learnings):",
@@ -659,7 +654,77 @@ class BotRunner:
             )
         return transcript or None
 
+    def _backend_is_read_only(self, backend: str) -> bool:
+        if backend == "telegram" and self.config.telegram:
+            return bool(self.config.telegram.read_only)
+        if backend == "signal" and self.config.signal:
+            return bool(self.config.signal.read_only)
+        return False
+
+    def _append_unanswered_collector_log(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
+    ) -> None:
+        if backend == "telegram":
+            payload = {
+                "source": "frontend_log",
+                "account": "default",
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "direction": "incoming",
+                "conversation_id": conversation_id,
+                "sender_id": sender_id,
+                "text": text,
+            }
+            self._workspace.append_text("telegram.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            return
+
+        if backend == "signal":
+            payload = {
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "source": "frontend_log",
+                "account": "default",
+                "direction": "incoming",
+                "conversation_id": conversation_id,
+                "sender": sender_id,
+                "sender_name": sender_name,
+                "sender_contact": sender_contact or sender_id,
+                "text": text,
+            }
+            self._workspace.append_text("signal.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def _append_agenta_query_log(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        reply: str,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
+    ) -> None:
+        payload = {
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+            "backend": backend,
+            "conversation_id": conversation_id,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "sender_contact": sender_contact,
+            "query": text,
+            "reply": reply,
+        }
+        self._workspace.append_text("logs/agenta_queries.history", json.dumps(payload, ensure_ascii=False) + "\n")
+
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
+        if self._backend_is_read_only(backend):
+            logging.info("Skipping outgoing %s message in read-only mode conversation=%s", backend, conversation_id)
+            return
         if backend == "telegram":
             if not self.telegram:
                 raise RuntimeError("Telegram frontend is not configured")
@@ -770,9 +835,6 @@ class BotRunner:
         sender_name = getattr(update, "sender_name", None)
         sender_contact = getattr(update, "sender_contact", None)
 
-        if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
-            return
-
         if not sender_contact:
             sender_contact = sender_id
             if backend == "signal" and sender_name:
@@ -788,12 +850,25 @@ class BotRunner:
                 sender_name=sender_name,
                 sender_contact=sender_contact,
             )
+            if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
+                self._append_unanswered_collector_log(
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    text=update.text,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                )
+                return
             self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
         voice_file_path = getattr(update, "voice_file_path", None)
         if not voice_file_id and not voice_file_path:
+            return
+
+        if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
             return
 
         if self._debug_enabled:
@@ -840,7 +915,7 @@ class BotRunner:
             return group_part.rsplit(SignalClient.GROUP_ID_DELIMITER, 1)[-1]
         return group_part
 
-    def _handle_message(self, *args: Any) -> None:
+    def _handle_message(self, *args: Any) -> bool:
         sender_name: str | None = None
         sender_contact: str | None = None
         if len(args) == 2:
@@ -866,7 +941,26 @@ class BotRunner:
                 "or (backend, conversation_id, sender_id, text, sender_name, sender_contact)"
             )
         if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
-            return
+            self._append_unanswered_collector_log(
+                backend=backend,
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+            )
+            return False
+
+        if self._backend_is_read_only(backend):
+            self._append_unanswered_collector_log(
+                backend=backend,
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+            )
+            return False
 
         conversation_key = self._history_key(backend, conversation_id)
 
@@ -898,7 +992,7 @@ class BotRunner:
                         f"after {self.config.runtime.request_timeout_seconds:g}s. "
                         "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
                     )
-                    return
+                    return False
                 except Exception:
                     logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
                     self._send_message(
@@ -907,7 +1001,7 @@ class BotRunner:
                         "I ran into an internal error while handling that request. "
                         "Please try again.",
                     )
-                    return
+                    return False
             self._history[conversation_key].append({"role": "user", "content": text})
             self._history[conversation_key].append(
                 {
@@ -918,7 +1012,17 @@ class BotRunner:
 
         for chunk in self._split_reply(reply):
             self._send_message(backend, conversation_id, chunk)
+        self._append_agenta_query_log(
+            backend=backend,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            text=text,
+            reply=reply,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+        )
         logging.info("Replied to %s conversation=%s", backend, conversation_id)
+        return True
 
     @contextmanager
     def _typing_indicator(self, backend: str, conversation_id: str):

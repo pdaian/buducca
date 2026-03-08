@@ -33,7 +33,9 @@ python3 run_bot.py --config config.json
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 - Signal allowlist override: set `signal.allowed_group_ids_when_sender_not_allowed` to raw Signal group IDs (the `groupInfo.groupId` value from `signal-cli` JSON output, not the `group:<title>|...` conversation label). Example: `"AQi7f+/4S3mQv6s5hN2xwQ=="`.
 
-- ⚠️ **Signal shared-account caveat:** if `collectors.signal_messages` and `signal.account` point at the same Signal identity, enabling attachment ignore mode (default) can lose voice/attachment context. Shared-account mode is unsupported unless you explicitly configure collector attachment handling.
+- `telegram.read_only` / `signal.read_only` can be set to `true` to run a frontend in collector-only mode (logs incoming messages, sends no replies).
+- Incoming messages that are not answered are written to `workspace/telegram.recent` or `workspace/signal.messages.recent` using collector-compatible formats.
+- Replied interactions are logged to `workspace/logs/agenta_queries.history`.
 
 ## Plugin layout (skills + collectors)
 
@@ -57,8 +59,6 @@ To keep the main README focused, each skill and collector now has its own README
 
 ### Available collectors
 
-- `telegram_recent` → `collectors/telegram_recent/README.md`
-- `signal_messages` → `collectors/signal_messages/README.md`
 - `gmail` → `collectors/gmail/README.md`
 - `slack` → `collectors/slack/README.md`
 - `twitter_recent` → `collectors/twitter_recent/README.md`
@@ -68,10 +68,6 @@ To keep the main README focused, each skill and collector now has its own README
 ### Dynamic loading and optional removal
 
 Skills and collectors are loaded dynamically from the filesystem at runtime. If you delete a skill or collector folder, it is no longer loaded (no extra toggles required).
-
-### Collector file structure in system prompt
-
-Each collector declares `FILE_STRUCTURE` in its module. The bot includes this collector file structure list in the system prompt so the agent can discover relevant collector files without extra user instructions.
 
 ## Core commands
 
@@ -131,28 +127,6 @@ Example command array for `config.json`:
 ]
 ```
 
-## Telegram token ownership safety
-
-Do **not** reuse the frontend Telegram bot token (`config.json` → `telegram.bot_token`) for `collectors.telegram_recent` bot polling (`collector_bot_token` / `bot_token`). Telegram only allows one `getUpdates` consumer per token.
-
-Use one of these alternatives:
-
-- Prefer collector user-client mode: `collectors.telegram_recent.accounts[*].user_client.enabled = true`
-- Or configure a separate collector bot token: `collectors.telegram_recent.accounts[*].collector_bot_token`
-
-## Optional: Telegram user-account collection (QR login)
-
-If you need messages a normal bot token cannot access:
-
-1. `pip install telethon`
-2. Add an entry under `collectors.telegram_recent.accounts` with `user_client.enabled = true`
-3. Add `api_id` and `api_hash` in that account
-4. Run one-time signup command: `python3 -m collectors.telegram_recent.signup --config agent_config.json`
-5. Re-run collectors
-
-> Backward compatibility: `collectors.telegram_recent_collector` is still accepted.
-
-
 ## Additional collector/signup commands
 
 Some integrations need one-time auth outside the main runtime loops:
@@ -161,9 +135,6 @@ Some integrations need one-time auth outside the main runtime loops:
 # Signal frontend (config.json > signal) QR flow
 python3 -m telegram_llm_bot.signal_signup --config config.json  # prints setup docs and exits
 
-# Signal collector second-device QR flow
-python3 -m collectors.signal_messages.signup --config agent_config.json  # prints setup docs and exits
-
 # WhatsApp Web QR flow
 python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 ```
@@ -171,8 +142,7 @@ python3 -m collectors.whatsapp_messages.signup --config agent_config.json
 ## Data locations
 
 - `workspace/telegram.recent` — recent Telegram message snapshots
-- `workspace/collector_status.json` — collector health/status
-- `workspace/collectors/telegram_recent.offset` — collector checkpoint state
+- `workspace/collector_status.json` — collector health/status (for background collectors)
 - `workspace/signal.messages.recent` — Signal messages
 - `workspace/gmail.recent` — Gmail message snapshots via Google Agentic CLI
 - `workspace/slack.recent` — Slack message snapshots
