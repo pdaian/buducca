@@ -4,7 +4,13 @@
     "poll_interval_seconds": 0.2,
     "long_poll_timeout_seconds": 30,
     "allowed_chat_ids": [],
-    "read_only": false
+    "read_only": false,
+    "mode": "bot",
+    "api_id": 123456,
+    "api_hash": "replace-with-your-telegram-api-hash",
+    "session_path": "workspace/telegram_user",
+    "allowed_sender_ids": [],
+    "allowed_group_ids_when_sender_not_allowed": []
   },
   "signal": {
     "account": "+15551234567",

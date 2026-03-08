@@ -38,6 +38,7 @@ class TelegramClientTests(unittest.TestCase):
         self.assertEqual(len(updates), 2)
         self.assertEqual(updates[0].text, "hello")
         self.assertEqual(updates[1].voice_file_id, "voice-id")
+        self.assertEqual(updates[0].sender_id, "123")
         self.assertEqual(updates[0].sender_name, "Alice")
         self.assertEqual(updates[0].sender_contact, "Alice (@alice_tg)")
 

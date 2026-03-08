@@ -53,12 +53,13 @@ class TelegramClient:
                 continue
             sender_name = self._extract_sender_name(sender)
             sender_contact = self._extract_sender_contact(sender, sender_name)
+            sender_id = sender.get("id") if isinstance(sender, dict) else None
             messages.append(
                 IncomingMessage(
                     update_id=update["update_id"],
                     backend="telegram",
                     conversation_id=str(chat["id"]),
-                    sender_id=str(chat["id"]),
+                    sender_id=str(sender_id if sender_id is not None else chat["id"]),
                     chat_id=int(chat["id"]),
                     text=text,
                     voice_file_id=voice_file_id,

@@ -21,6 +21,7 @@ from .http import HttpClient, RequestTimeoutError
 from .llm_client import OpenAICompatibleClient
 from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import IncomingMessage, TelegramClient
+from .telegram_user_client import TelegramUserClient
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
@@ -38,11 +39,16 @@ class BotRunner:
         assert config.llm is not None
 
         http_client = HttpClient(timeout_seconds=config.runtime.request_timeout_seconds)
-        self.telegram = (
-            TelegramClient(bot_token=config.telegram.bot_token, http_client=http_client)
-            if config.telegram
-            else None
-        )
+        self.telegram = None
+        if config.telegram:
+            if config.telegram.mode == "user":
+                self.telegram = TelegramUserClient(
+                    api_id=int(config.telegram.api_id or 0),
+                    api_hash=config.telegram.api_hash,
+                    session_path=config.telegram.session_path,
+                )
+            else:
+                self.telegram = TelegramClient(bot_token=config.telegram.bot_token, http_client=http_client)
         self.signal = SignalClient(
             account=config.signal.account,
             receive_command=config.signal.receive_command,
@@ -56,6 +62,8 @@ class BotRunner:
         )
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids) if config.telegram else set()
+        self._allowed_telegram_sender_ids = set(config.telegram.allowed_sender_ids) if config.telegram else set()
+        self._allowed_telegram_group_ids_when_sender_not_allowed = set(config.telegram.allowed_group_ids_when_sender_not_allowed) if config.telegram else set()
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
         self._allowed_signal_sender_ids_normalized = {
             self._normalize_signal_identifier(sender_id)
@@ -776,9 +784,23 @@ class BotRunner:
         self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _is_authorized_frontend_sender(self, backend: str, conversation_id: str, sender_id: str) -> bool:
-        if backend == "telegram" and self._allowed_chat_ids and int(sender_id) not in self._allowed_chat_ids:
-            logging.warning("Blocked message from unauthorized telegram chat_id=%s", sender_id)
-            return False
+        if backend == "telegram":
+            chat_id = int(conversation_id)
+            telegram_sender_id = int(sender_id)
+            if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:
+                logging.warning("Blocked message from unauthorized telegram chat_id=%s", chat_id)
+                return False
+            if self._allowed_telegram_sender_ids:
+                if telegram_sender_id in self._allowed_telegram_sender_ids:
+                    return True
+                if chat_id in self._allowed_telegram_group_ids_when_sender_not_allowed:
+                    return True
+                logging.warning(
+                    "Blocked message from unauthorized telegram sender_id=%s conversation_id=%s",
+                    sender_id,
+                    conversation_id,
+                )
+                return False
 
         if backend == "signal" and self.config.signal:
             normalized_sender_id = self._normalize_signal_identifier(sender_id)

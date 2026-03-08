@@ -122,5 +122,34 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNotNone(config.signal)
             self.assertEqual(config.signal.allowed_group_ids_when_sender_not_allowed, ["AQi7f+/4S3mQv6s5hN2xwQ=="])
 
+
+    def test_telegram_user_mode_requires_api_credentials(self) -> None:
+        data = {
+            "telegram": {"mode": "user", "bot_token": ""},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_telegram_user_mode_is_valid_with_api_credentials(self) -> None:
+        data = {
+            "telegram": {
+                "mode": "user",
+                "api_id": 123,
+                "api_hash": "h",
+                "session_path": "workspace/telegram_user",
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.telegram)
+            self.assertEqual(config.telegram.mode, "user")
+
 if __name__ == "__main__":
     unittest.main()
