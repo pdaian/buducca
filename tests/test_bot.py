@@ -133,6 +133,46 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.telegram.typing, [1])
         self.assertEqual(len(bot._history[1]), 2)
 
+    def test_read_only_frontend_logs_as_collector_without_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="1", text="collect me")
+            )
+
+            self.assertEqual(bot.telegram.sent, [])
+            recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
+            self.assertIn('"text": "collect me"', recent)
+            self.assertEqual((Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8"), "")
+
+    def test_replied_message_logs_agenta_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="1", text="hi")
+            )
+
+            self.assertEqual(bot.telegram.sent, [(1, "hello")])
+            log = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            self.assertIn('"query": "hi"', log)
+            self.assertIn('"reply": "hello"', log)
+
     def test_signal_sender_allowed_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(
@@ -181,7 +221,7 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
-    def test_signal_update_from_unauthorized_sender_is_ignored_before_logging(self) -> None:
+    def test_signal_update_from_unauthorized_sender_is_logged_as_collector_only(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
                 signal=SignalConfig(
@@ -208,7 +248,9 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.llm.calls, 0)
             signal_history = Path(td) / "logs" / "signal.history"
-            self.assertEqual(signal_history.read_text(encoding="utf-8"), "")
+            self.assertIn("self note", signal_history.read_text(encoding="utf-8"))
+            signal_recent = Path(td) / "signal.messages.recent"
+            self.assertIn("self note", signal_recent.read_text(encoding="utf-8"))
 
     def test_signal_voice_update_from_unauthorized_sender_is_ignored(self) -> None:
         cfg = BotConfig(
@@ -691,8 +733,6 @@ class BotTests(unittest.TestCase):
             self.assertIn("args schema", system_prompt)
             self.assertIn("{ text: string }", system_prompt)
             self.assertIn('"skill_call"', system_prompt)
-            self.assertIn("Available collectors and file structure", system_prompt)
-            self.assertIn("collectors/telegram_recent/__init__.py", system_prompt)
             self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
             self.assertIn("These are long-term learnings for future prompts", system_prompt)
             self.assertIn("- User prefers concise responses.", system_prompt)

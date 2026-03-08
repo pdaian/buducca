@@ -14,6 +14,7 @@ class TelegramConfig:
     long_poll_timeout_seconds: int = 30
     allowed_chat_ids: list[int] = field(default_factory=list)
     process_pending_updates_on_startup: bool = False
+    read_only: bool = False
 
 
 @dataclass
@@ -24,6 +25,7 @@ class SignalConfig:
     allowed_group_ids_when_sender_not_allowed: list[str] = field(default_factory=list)
     receive_command: list[str] = field(default_factory=list)
     send_command: list[str] = field(default_factory=list)
+    read_only: bool = False
 
 
 @dataclass
@@ -67,56 +69,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def _normalize_token(raw: Any) -> str:
-    return str(raw or "").strip()
-
-
-def _validate_telegram_collector_token_ownership(config: BotConfig, *, config_path: Path) -> None:
-    if not config.telegram:
-        return
-
-    frontend_token = _normalize_token(config.telegram.bot_token)
-    if not frontend_token:
-        return
-
-    collector_config_path = Path(config.runtime.collector_config_path)
-    if not collector_config_path.is_absolute():
-        collector_config_path = config_path.parent / collector_config_path
-    if not collector_config_path.exists():
-        return
-
-    collector_raw = _read_json(collector_config_path)
-    collectors_config = collector_raw.get("collectors")
-    if not isinstance(collectors_config, dict):
-        return
-
-    telegram_recent_config = collectors_config.get("telegram_recent")
-    if not isinstance(telegram_recent_config, dict):
-        legacy = collectors_config.get("telegram_recent_collector")
-        telegram_recent_config = legacy if isinstance(legacy, dict) else None
-    if not isinstance(telegram_recent_config, dict):
-        return
-
-    accounts = telegram_recent_config.get("accounts")
-    accounts_cfg = accounts if isinstance(accounts, list) else []
-    if not accounts_cfg:
-        accounts_cfg = [{"name": telegram_recent_config.get("account_name", "default"), **telegram_recent_config}]
-
-    for account_cfg in accounts_cfg:
-        if not isinstance(account_cfg, dict):
-            continue
-        account_name = str(account_cfg.get("name") or "default")
-        for token_field in ("collector_bot_token", "bot_token"):
-            candidate = _normalize_token(account_cfg.get(token_field))
-            if candidate and candidate == frontend_token:
-                raise ValueError(
-                    "Invalid Telegram token setup: telegram.bot_token in frontend config matches "
-                    f"collectors.telegram_recent.accounts[{account_name!r}].{token_field}. "
-                    "Only one getUpdates consumer may own a token. "
-                    "Use user_client.enabled=true or a separate collector_bot_token for the collector."
-                )
-
-
 def _validate(config: BotConfig, *, config_path: Path) -> None:
     if not config.telegram and not config.signal:
         raise ValueError("At least one frontend must be configured: telegram or signal")
@@ -158,7 +110,7 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
     if config.runtime.max_reply_chunk_chars <= 0:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
 
-    _validate_telegram_collector_token_ownership(config, config_path=config_path)
+    _ = config_path
 
 
 def load_config(path: str | Path) -> BotConfig:
