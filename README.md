@@ -4,6 +4,20 @@
 
 # BUDUCCA — Private, local-first personal assistant 🤖
 
+> [!IMPORTANT]
+> 🚧 **BUDUCCA is pre-release software** (early preview). Things may be rough around the edges, and your feedback will directly shape what we build next.
+>
+> 🤝 **Interested in using BUDUCCA?** We would love to talk with potential users, tinkerers, and anyone curious about the project.
+>
+> [![Join the BUDUCCA Telegram](https://img.shields.io/badge/Join%20our%20Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/buducca)
+>
+> <a href="https://t.me/buducca"><img src="https://telegram.org/img/t_logo.png" alt="Telegram logo" width="72"/></a>
+>
+> 👉 **How to join:**
+> 1. Click the button (or logo) above.
+> 2. Open the group in Telegram.
+> 3. Say hi and tell us what you want from a private, local-first assistant.
+
 Run your own Telegram and/or Signal assistant with a tiny, understandable Python stack.
 
 ## Why BUDUCCA
