@@ -42,6 +42,26 @@
     "read_only": false,
     "store_unanswered_messages": false
   },
+  "whatsapp": {
+    "account": "personal",
+    "poll_interval_seconds": 1.0,
+    "allowed_sender_ids": [],
+    "allowed_group_ids_when_sender_not_allowed": [],
+    "receive_command": [
+      "python3",
+      "scripts/whatsapp_receive.py"
+    ],
+    "send_command": [
+      "python3",
+      "scripts/whatsapp_send.py",
+      "--recipient",
+      "{recipient}",
+      "--message",
+      "{message}"
+    ],
+    "read_only": false,
+    "store_unanswered_messages": false
+  },
   "llm": {
     "base_url": "https://api.openai.com/v1",
     "api_key": "replace-with-api-key",

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig
+from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
 
@@ -31,6 +31,15 @@ class DummyTelegram:
     def download_file(self, file_path: str) -> bytes:
         return self.file_bytes
 
+
+
+
+class DummyWhatsApp:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_message(self, recipient: str, text: str) -> None:
+        self.sent.append((recipient, text))
 
 class DummyLLM:
     def __init__(self, reply: str) -> None:
@@ -581,6 +590,51 @@ class BotTests(unittest.TestCase):
         )
 
         self.assertEqual(bot.llm.calls, 1)
+
+    def test_whatsapp_read_only_frontend_logs_without_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                whatsapp=WhatsAppConfig(
+                    account="personal",
+                    read_only=True,
+                    store_unanswered_messages=True,
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.whatsapp = DummyWhatsApp()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="whatsapp", conversation_id="group:Family|g1", sender_id="+15550001", text="collect me")
+            )
+
+            self.assertEqual(bot.whatsapp.sent, [])
+            recent = (Path(td) / "whatsapp.messages.recent").read_text(encoding="utf-8")
+            self.assertIn('"text": "collect me"', recent)
+
+    def test_whatsapp_sender_allowlist_blocks_non_allowed_sender(self) -> None:
+        cfg = BotConfig(
+            whatsapp=WhatsAppConfig(
+                account="personal",
+                allowed_sender_ids=["+15551112222"],
+                allowed_group_ids_when_sender_not_allowed=[],
+                receive_command=["python3", "recv.py"],
+                send_command=["python3", "send.py", "{recipient}", "{message}"],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.whatsapp = DummyWhatsApp()
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message("whatsapp", "group:Family|g1", "+15553334444", "hi")
+
+        self.assertEqual(bot.llm.calls, 0)
 
     def test_handle_message_strips_think_blocks_from_reply_and_history(self) -> None:
         bot = self.make_bot()
