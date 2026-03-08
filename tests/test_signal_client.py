@@ -98,6 +98,30 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].sender_id, "user-uuid")
         self.assertTrue(updates[0].voice_file_path.endswith("memo.ogg"))
 
+    def test_parses_sync_voice_note_with_id_only_attachment(self) -> None:
+        attachment_id = "HXCT0K1ii9i1dZEO3SO0"
+        resolved_voice_path = "/tmp/HXCT0K1ii9i1dZEO3SO0.mp3"
+        stdout = (
+            '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"destination":"+15559998888","attachments":[{"contentType":"audio/mpeg","filename":null,"id":"'
+            + attachment_id
+            + '","size":55680}]}}}}'
+        )
+
+        with patch("telegram_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = stdout
+            run.return_value.stderr = ""
+            with patch("telegram_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                with patch.object(client, "_resolve_voice_attachment_id_path", return_value=resolved_voice_path) as resolve:
+                    updates = client.get_updates()
+
+        resolve.assert_called_once_with(attachment_id)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].conversation_id, "+15559998888")
+        self.assertEqual(updates[0].sender_id, "+15551230000")
+        self.assertEqual(updates[0].voice_file_path, resolved_voice_path)
+
     def test_parses_group_data_message_using_group_conversation_id(self) -> None:
         stdout = (
             '{"envelope":{"source":"+15550001","dataMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"hi group"}}}'
