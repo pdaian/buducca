@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from telegram_llm_bot.config import load_config
+from messaging_llm_bot.config import load_config
 
 
 class ConfigTests(unittest.TestCase):

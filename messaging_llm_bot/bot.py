@@ -727,6 +727,13 @@ class BotRunner:
             return bool(self.config.signal.read_only)
         return False
 
+    def _backend_stores_unanswered_messages(self, backend: str) -> bool:
+        if backend == "telegram" and self.config.telegram:
+            return bool(self.config.telegram.store_unanswered_messages)
+        if backend == "signal" and self.config.signal:
+            return bool(self.config.signal.store_unanswered_messages)
+        return False
+
     def _append_unanswered_collector_log(
         self,
         *,
@@ -737,6 +744,9 @@ class BotRunner:
         sender_name: str | None = None,
         sender_contact: str | None = None,
     ) -> None:
+        if not self._backend_stores_unanswered_messages(backend):
+            return
+
         if backend == "telegram":
             payload = {
                 "source": "frontend_log",

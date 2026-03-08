@@ -10,7 +10,8 @@
     "api_hash": "replace-with-your-telegram-api-hash",
     "session_path": "workspace/telegram_user",
     "allowed_sender_ids": [],
-    "allowed_group_ids_when_sender_not_allowed": []
+    "allowed_group_ids_when_sender_not_allowed": [],
+    "store_unanswered_messages": false
   },
   "signal": {
     "account": "+15551234567",
@@ -38,7 +39,8 @@
       "{message}",
       "{recipient}"
     ],
-    "read_only": false
+    "read_only": false,
+    "store_unanswered_messages": false
   },
   "llm": {
     "base_url": "https://api.openai.com/v1",

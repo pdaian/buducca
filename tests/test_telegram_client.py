@@ -1,6 +1,6 @@
 import unittest
 
-from telegram_llm_bot.telegram_client import TelegramClient
+from messaging_llm_bot.telegram_client import TelegramClient
 
 
 class FakeHttp:

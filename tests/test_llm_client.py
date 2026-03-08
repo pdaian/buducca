@@ -1,7 +1,7 @@
 import unittest
 
-from telegram_llm_bot.config import LLMConfig
-from telegram_llm_bot.llm_client import OpenAICompatibleClient
+from messaging_llm_bot.config import LLMConfig
+from messaging_llm_bot.llm_client import OpenAICompatibleClient
 
 
 class StubHttpClient:

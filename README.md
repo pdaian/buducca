@@ -49,8 +49,8 @@ python3 run_bot.py --config config.json
 
 - Telegram sender/group allowlist override (similar to Signal): set `telegram.allowed_sender_ids` to allow specific senders, and set `telegram.allowed_group_ids_when_sender_not_allowed` to allow specific chat/group IDs even when sender is not allowlisted.
 
-- `telegram.read_only` / `signal.read_only` can be set to `true` to run a frontend in collector-only mode (logs incoming messages, sends no replies).
-- Incoming messages that are not answered are written to `workspace/telegram.recent` or `workspace/signal.messages.recent` using collector-compatible formats.
+- `telegram.read_only` / `signal.read_only` can be set to `true` to run a frontend in collector-only mode (receives messages, sends no replies).
+- `telegram.store_unanswered_messages` / `signal.store_unanswered_messages` control whether unanswered/non-agent messages are persisted to `workspace/telegram.recent` or `workspace/signal.messages.recent` (default: `false`).
 - Replied interactions are logged to `workspace/logs/agenta_queries.history`.
 
 ## Plugin layout (skills + collectors)
@@ -116,6 +116,20 @@ Recommended workflow:
 - Let the tool generate/edit code + docs in the module folder.
 - Review, run tests, and submit a PR for inclusion in the main repo.
 
+## Design patterns
+
+BUDUCCA has two first-class plugin surfaces:
+
+- **Collectors**: ingest external data into workspace files for the assistant to consume.
+- **Frontends**: messaging plugins (Telegram, Signal, and future channels) that both receive and send messages.
+
+Frontends can be configured to:
+
+- respond normally (default),
+- filter to agent-handled messages only,
+- store unanswered/non-agent messages into collector-style workspace files,
+- or do both filtering and storage depending on `read_only` and `store_unanswered_messages` settings.
+
 ### Collector implementation pattern: explicit setup/signup command
 
 Collectors should avoid interactive setup during normal collection loops.
@@ -123,6 +137,12 @@ Collectors should avoid interactive setup during normal collection loops.
 - Any first-time auth/signup flow should be exposed as a separate command.
 - Collector runtime should be non-blocking and non-fatal when setup is incomplete.
 - If setup has not happened yet, collectors should return no data and wait for setup to be completed.
+
+### Frontend implementation pattern
+
+- Frontends are bidirectional message adapters: they **receive updates** and **send replies** on the same channel.
+- Frontends should support policy controls (allowlists, read-only mode, unanswered-message storage) without forcing one behavior.
+- Frontends should emit stable workspace log formats when storage is enabled so collector tooling can reuse the same files.
 
 ## Voice notes with OpenAI Whisper CLI
 
@@ -149,7 +169,7 @@ Some integrations need one-time auth outside the main runtime loops:
 
 ```bash
 # Signal frontend (config.json > signal) QR flow
-python3 -m telegram_llm_bot.signal_signup --config config.json  # prints setup docs and exits
+python3 -m messaging_llm_bot.signal_signup --config config.json  # prints setup docs and exits
 
 # WhatsApp Web QR flow
 python3 -m collectors.whatsapp_messages.signup --config agent_config.json
