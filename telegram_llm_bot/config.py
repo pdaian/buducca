@@ -9,10 +9,16 @@ from typing import Any
 
 @dataclass
 class TelegramConfig:
-    bot_token: str
+    bot_token: str = ""
+    mode: str = "bot"
+    api_id: int | None = None
+    api_hash: str = ""
+    session_path: str = "workspace/telegram_user"
     poll_interval_seconds: float = 1.0
     long_poll_timeout_seconds: int = 30
     allowed_chat_ids: list[int] = field(default_factory=list)
+    allowed_sender_ids: list[int] = field(default_factory=list)
+    allowed_group_ids_when_sender_not_allowed: list[int] = field(default_factory=list)
     process_pending_updates_on_startup: bool = False
     read_only: bool = False
 
@@ -74,8 +80,19 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("At least one frontend must be configured: telegram or signal")
 
     if config.telegram:
-        if not config.telegram.bot_token.strip():
-            raise ValueError("telegram.bot_token must be set")
+        mode = config.telegram.mode.strip().lower()
+        if mode not in {"bot", "user"}:
+            raise ValueError("telegram.mode must be either 'bot' or 'user'")
+        config.telegram.mode = mode
+        if mode == "bot" and not config.telegram.bot_token.strip():
+            raise ValueError("telegram.bot_token must be set when telegram.mode is 'bot'")
+        if mode == "user":
+            if not config.telegram.api_id:
+                raise ValueError("telegram.api_id must be set when telegram.mode is 'user'")
+            if not config.telegram.api_hash.strip():
+                raise ValueError("telegram.api_hash must be set when telegram.mode is 'user'")
+            if not config.telegram.session_path.strip():
+                raise ValueError("telegram.session_path must be set when telegram.mode is 'user'")
         if config.telegram.poll_interval_seconds < 0:
             raise ValueError("telegram.poll_interval_seconds must be >= 0")
         if config.telegram.long_poll_timeout_seconds <= 0:

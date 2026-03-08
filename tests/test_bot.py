@@ -173,6 +173,44 @@ class BotTests(unittest.TestCase):
             self.assertIn('"query": "hi"', log)
             self.assertIn('"reply": "hello"', log)
 
+
+    def test_telegram_sender_not_allowed_outside_configured_group(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(
+                bot_token="t",
+                allowed_sender_ids=[11],
+                allowed_group_ids_when_sender_not_allowed=[100],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message("telegram", "200", "22", "hi")
+
+        self.assertEqual(bot.llm.calls, 0)
+
+    def test_telegram_sender_allowed_in_configured_group(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(
+                bot_token="t",
+                allowed_sender_ids=[11],
+                allowed_group_ids_when_sender_not_allowed=[100],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = DummyTelegram()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message("telegram", "100", "22", "hi")
+
+        self.assertEqual(bot.llm.calls, 1)
+
     def test_signal_sender_allowed_in_configured_group(self) -> None:
         cfg = BotConfig(
             signal=SignalConfig(

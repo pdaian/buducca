@@ -26,12 +26,14 @@ python3 run_bot.py --config config.json
 
 ## Frontends
 
-- Configure `telegram` in `config.json` to run the bot on Telegram.
+- Configure `telegram` in `config.json` to run Telegram in bot mode (`telegram.mode: "bot"`) or full-account user mode (`telegram.mode: "user"` with Telethon session).
 - Configure `signal` to run the bot on Signal (`signal-cli`).
 - Signal frontend registration must be done directly in `signal-cli` (phone number or linked-device QR), then BUDUCCA can use that configured account.
 - Configure both to accept messages on either backend and reply on the same backend that received the message.
 - Set `runtime.max_reply_chunk_chars` to chunk long responses before sending.
 - Signal allowlist override: set `signal.allowed_group_ids_when_sender_not_allowed` to raw Signal group IDs (the `groupInfo.groupId` value from `signal-cli` JSON output, not the `group:<title>|...` conversation label). Example: `"AQi7f+/4S3mQv6s5hN2xwQ=="`.
+
+- Telegram sender/group allowlist override (similar to Signal): set `telegram.allowed_sender_ids` to allow specific senders, and set `telegram.allowed_group_ids_when_sender_not_allowed` to allow specific chat/group IDs even when sender is not allowlisted.
 
 - `telegram.read_only` / `signal.read_only` can be set to `true` to run a frontend in collector-only mode (logs incoming messages, sends no replies).
 - Incoming messages that are not answered are written to `workspace/telegram.recent` or `workspace/signal.messages.recent` using collector-compatible formats.
