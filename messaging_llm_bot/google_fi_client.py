@@ -348,6 +348,34 @@ def _find_conversation_rows(page: Any):
     return page.locator("a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"), "fallback-anchor"
 
 
+def _expand_conversation_rows(page: Any, rows: Any, *, max_conversations: int) -> int:
+    """Attempt to scroll the conversation list so lazy-loaded threads are discoverable."""
+    try:
+        known_count = rows.count()
+    except Exception:
+        return 0
+    stable_rounds = 0
+    max_rounds = 40
+    while stable_rounds < 3 and max_rounds > 0:
+        if max_conversations > 0 and known_count >= max_conversations:
+            break
+        max_rounds -= 1
+        try:
+            if known_count > 0:
+                rows.nth(known_count - 1).scroll_into_view_if_needed(timeout=800)
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(120)
+            current_count = rows.count()
+        except Exception:
+            break
+        if current_count <= known_count:
+            stable_rounds += 1
+            continue
+        known_count = current_count
+        stable_rounds = 0
+    return known_count
+
+
 def _message_bubble_selectors() -> list[str]:
     return [
         "mws-text-message-content",
@@ -374,7 +402,7 @@ def _find_message_bubbles(page: Any):
 
 def receive_events(
     *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
-    max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False, signup_wait_seconds: int = 300,
+    max_conversations: int = 0, max_bubbles: int = 0, dry_run: bool = False, signup_wait_seconds: int = 300,
 ) -> dict[str, list[dict[str, str]]]:
     if dry_run:
         logger.info("google_fi receive running in dry-run mode")
@@ -401,8 +429,10 @@ def receive_events(
         _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
 
         rows, selector = _find_conversation_rows(page)
-        row_count = rows.count()
-        total = min(row_count, max_conversations)
+        row_count = _expand_conversation_rows(page, rows, max_conversations=max_conversations)
+        if row_count <= 0:
+            row_count = rows.count()
+        total = row_count if max_conversations <= 0 else min(row_count, max_conversations)
         logger.info(
             "google_fi receive conversation rows detected=%s scanning=%s selector=%s",
             row_count,
@@ -428,17 +458,19 @@ def receive_events(
             title = (row.inner_text(timeout=800) or "").strip().split("\n", 1)[0]
             page.wait_for_timeout(250)
             bubbles, bubble_selector = _find_message_bubbles(page)
-            bubble_total = min(bubbles.count(), max_bubbles)
+            bubble_count = bubbles.count()
+            bubble_total = bubble_count if max_bubbles <= 0 else min(bubble_count, max_bubbles)
+            start_idx = max(0, bubble_count - bubble_total)
             logger.debug(
-                "Row %s conversation_id=%s title=%r bubble_count=%s scan_tail=%s bubble_selector=%s",
+                "Row %s conversation_id=%s title=%r bubble_count=%s scan_count=%s bubble_selector=%s",
                 idx,
                 conversation_id,
                 title,
-                bubbles.count(),
+                bubble_count,
                 bubble_total,
                 bubble_selector,
             )
-            for j in range(max(0, bubble_total - 4), bubble_total):
+            for j in range(start_idx, bubble_count):
                 text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
                 if not text:
                     logger.debug("Skipping empty bubble row=%s bubble=%s", idx, j)
@@ -563,8 +595,8 @@ def build_parser() -> argparse.ArgumentParser:
     recv.add_argument("--workspace", default="workspace")
     recv.add_argument("--state-file", default="google_fi_receive_state.json")
     recv.add_argument("--headful", action="store_true")
-    recv.add_argument("--max-conversations", type=int, default=12)
-    recv.add_argument("--max-bubbles", type=int, default=20)
+    recv.add_argument("--max-conversations", type=int, default=0)
+    recv.add_argument("--max-bubbles", type=int, default=0)
     recv.add_argument("--signup-wait-seconds", type=int, default=300)
     recv.add_argument("--dry-run", action="store_true")
     recv.add_argument("--verbose", action="store_true")
