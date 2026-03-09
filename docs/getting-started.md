@@ -1,0 +1,40 @@
+# Getting started
+
+## 1) Prepare config files
+
+```bash
+cp config.example.json config.json
+cp agent_config.example.json agent_config.json
+```
+
+## 2) Run collectors
+
+```bash
+python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
+```
+
+## 3) Run the messaging bot
+
+```bash
+python3 run_bot.py --config config.json
+```
+
+## Useful local commands
+
+```bash
+# Run a skill manually
+python3 -m assistant_framework.cli skill summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
+
+# Reset generated local state
+python3 reset_workspace.py --dry-run
+python3 reset_workspace.py --yes
+```
+
+## Workspace files you will care about
+
+- `workspace/collector_status.json` — collector health and loop state.
+- `workspace/logs/agenta_queries.history` — answered interactions.
+- `workspace/telegram.recent` — Telegram snapshots when storage is enabled.
+- `workspace/signal.messages.recent` — Signal snapshots when storage is enabled.
+- `workspace/whatsapp.messages.recent` — WhatsApp snapshots when storage is enabled.
+

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import importlib.util
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from .module_loader import iter_plugin_modules, load_module_from_file
 from .workspace import Workspace
 
 
@@ -24,27 +24,10 @@ class SkillManager:
         self.skills_dir = Path(skills_dir)
 
     def _load_module(self, path: Path) -> ModuleType:
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Unable to load skill module from {path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        return load_module_from_file(path, kind="skill")
 
     def _iter_module_files(self) -> list[Path]:
-        modules: list[Path] = []
-        for file_path in sorted(self.skills_dir.glob("*.py")):
-            if file_path.name.startswith("_"):
-                continue
-            modules.append(file_path)
-
-        for subdir in sorted(path for path in self.skills_dir.iterdir() if path.is_dir()):
-            if subdir.name.startswith("_"):
-                continue
-            init_file = subdir / "__init__.py"
-            if init_file.exists():
-                modules.append(init_file)
-        return modules
+        return iter_plugin_modules(self.skills_dir)
 
     def load(self) -> dict[str, Skill]:
         skills: dict[str, Skill] = {}

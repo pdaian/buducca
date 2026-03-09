@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import time
@@ -10,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from .module_loader import iter_plugin_modules, load_module_from_file
 from .workspace import Workspace
 
 COLLECTOR_STATUS_FILE = "collector_status.json"
@@ -33,28 +33,11 @@ class CollectorManager:
         self.collectors_dir = Path(collectors_dir)
         self.config = config or {}
 
-    def _load_module(self, path: Path) -> ModuleType:
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Unable to load collector module from {path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+    def _load_module(self, path: Path):
+        return load_module_from_file(path, kind="collector")
 
     def _iter_module_files(self) -> list[Path]:
-        modules: list[Path] = []
-        for file_path in sorted(self.collectors_dir.glob("*.py")):
-            if file_path.name.startswith("_"):
-                continue
-            modules.append(file_path)
-
-        for subdir in sorted(path for path in self.collectors_dir.iterdir() if path.is_dir()):
-            if subdir.name.startswith("_"):
-                continue
-            init_file = subdir / "__init__.py"
-            if init_file.exists():
-                modules.append(init_file)
-        return modules
+        return iter_plugin_modules(self.collectors_dir)
 
     def load(self) -> list[Collector]:
         collectors: list[Collector] = []

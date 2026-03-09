@@ -22,8 +22,6 @@ def _load_collector_config(path: str) -> dict:
     return _read_json(path).get("collectors", {})
 
 
-
-
 def _run_collectors(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
