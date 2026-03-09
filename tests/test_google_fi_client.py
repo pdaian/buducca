@@ -45,6 +45,28 @@ class GoogleFiClientTests(unittest.TestCase):
         self.assertEqual(updates[0].sender_id, "15550001")
         self.assertEqual(updates[0].text, "hello")
 
+    def test_get_updates_normalizes_phone_from_sender_id(self) -> None:
+        payload = '{"messages":[{"conversation_id":"thread-1","sender_id":"(555) 111-2222","text":"hello"}]}'
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sender_id, "5551112222")
+
+    def test_get_updates_uses_sender_contact_when_sender_id_is_name(self) -> None:
+        payload = '{"messages":[{"conversation_id":"thread-1","sender_id":"Mom","sender_contact":"+1 (555) 111-2222","text":"hello"}]}'
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sender_id, "+15551112222")
+
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
     def test_ensure_logged_in_waits_for_signup_in_headful_mode(self) -> None:
