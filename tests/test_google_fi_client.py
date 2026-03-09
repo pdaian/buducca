@@ -1,3 +1,6 @@
+from pathlib import Path
+import types
+import io
 import unittest
 from unittest.mock import Mock, patch
 
@@ -29,6 +32,29 @@ class GoogleFiClientTests(unittest.TestCase):
         with patch("messaging_llm_bot.google_fi_client.which", return_value=None):
             with self.assertRaises(GoogleFiFrontendUnavailableError):
                 client.get_updates()
+
+
+class GoogleFiCliErrorHandlingTests(unittest.TestCase):
+    def test_open_messages_page_reports_playwright_mismatch(self) -> None:
+        fake_sync_api = types.ModuleType("playwright.sync_api")
+        sync_pw = Mock()
+        sync_pw.return_value.start.side_effect = KeyError("deviceDescriptors")
+        fake_sync_api.sync_playwright = sync_pw
+
+        with patch.dict("sys.modules", {"playwright": types.ModuleType("playwright"), "playwright.sync_api": fake_sync_api}):
+            from messaging_llm_bot.google_fi_client import BrowserOptions, _open_messages_page
+
+            with self.assertRaises(GoogleFiFrontendUnavailableError) as ctx:
+                _open_messages_page(BrowserOptions(workspace=Path("workspace")))
+        self.assertIn("deviceDescriptors", str(ctx.exception))
+
+    def test_main_returns_nonzero_for_frontend_unavailable(self) -> None:
+        from messaging_llm_bot import google_fi_client
+
+        with patch.object(google_fi_client, "receive_events", side_effect=GoogleFiFrontendUnavailableError("broken")):
+            with patch("sys.stderr", new_callable=io.StringIO):
+                code = google_fi_client.main(["receive"])
+        self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -172,11 +173,19 @@ def _open_messages_page(options: BrowserOptions):
     from playwright.sync_api import sync_playwright  # type: ignore
 
     options.profile_dir.mkdir(parents=True, exist_ok=True)
-    p = sync_playwright().start()
-    context = p.chromium.launch_persistent_context(str(options.profile_dir), headless=options.headless)
-    page = context.pages[0] if context.pages else context.new_page()
-    page.goto(GOOGLE_MESSAGES_URL, wait_until="domcontentloaded", timeout=options.timeout_ms)
-    return p, context, page
+    try:
+        p = sync_playwright().start()
+        context = p.chromium.launch_persistent_context(str(options.profile_dir), headless=options.headless)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(GOOGLE_MESSAGES_URL, wait_until="domcontentloaded", timeout=options.timeout_ms)
+        return p, context, page
+    except KeyError as exc:
+        if exc.args and exc.args[0] == "deviceDescriptors":
+            raise GoogleFiFrontendUnavailableError(
+                "Playwright installation is mismatched (missing 'deviceDescriptors'). "
+                "Reinstall Playwright for this Python environment and run 'python3 -m playwright install chromium'."
+            ) from exc
+        raise
 
 
 def _ensure_logged_in(page, timeout_ms: int) -> None:
@@ -375,34 +384,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "receive":
-        payload = receive_events(
-            workspace=args.workspace,
-            state_file=args.state_file,
-            headful=args.headful,
-            max_conversations=args.max_conversations,
-            max_bubbles=args.max_bubbles,
-            dry_run=args.dry_run,
-        )
-        print(json.dumps(payload, ensure_ascii=False))
-        return 0
+    try:
+        if args.command == "receive":
+            payload = receive_events(
+                workspace=args.workspace,
+                state_file=args.state_file,
+                headful=args.headful,
+                max_conversations=args.max_conversations,
+                max_bubbles=args.max_bubbles,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps(payload, ensure_ascii=False))
+            return 0
 
-    if args.command == "send":
-        payload = send_via_browser(
-            recipient=args.recipient,
-            message=args.message,
-            workspace=args.workspace,
-            headful=args.headful,
-            dry_run=args.dry_run,
-        )
-        print(json.dumps(payload, ensure_ascii=False))
-        return 0
+        if args.command == "send":
+            payload = send_via_browser(
+                recipient=args.recipient,
+                message=args.message,
+                workspace=args.workspace,
+                headful=args.headful,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps(payload, ensure_ascii=False))
+            return 0
 
-    payload = receive_events(workspace=args.workspace, headful=args.headful, dry_run=args.dry_run)
-    for item in payload.get("messages", []):
-        sender = item.get("sender_name") or item.get("sender_id") or "unknown"
-        print(f"{sender}: {item.get('text', '')}")
-    return 0
+        payload = receive_events(workspace=args.workspace, headful=args.headful, dry_run=args.dry_run)
+        for item in payload.get("messages", []):
+            sender = item.get("sender_name") or item.get("sender_id") or "unknown"
+            print(f"{sender}: {item.get('text', '')}")
+        return 0
+    except (GoogleFiFrontendUnavailableError, GoogleFiAutomationError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
