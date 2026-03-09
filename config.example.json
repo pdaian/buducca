@@ -71,7 +71,8 @@
     "temperature": 0.2,
     "max_tokens": 400,
     "history_messages": 8,
-    "system_prompt_timezone": "America/New_York"
+    "system_prompt_timezone": "America/New_York",
+    "file_task_layout_prompt": "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (assistant/notes, assistant/lists, assistant/health, assistant/finance, assistant/people, assistant/travel). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."
   },
   "runtime": {
     "request_timeout_seconds": 300,
@@ -91,6 +92,14 @@
       "{input}"
     ],
     "max_reply_chunk_chars": 4096,
-    "debug": false
+    "debug": false,
+    "file_skill_actions": [
+      "read",
+      "write",
+      "append",
+      "move",
+      "create_dir",
+      "delete_dir"
+    ]
   }
 }

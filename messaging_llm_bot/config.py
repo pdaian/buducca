@@ -59,6 +59,7 @@ class LLMConfig:
     max_tokens: int = 400
     history_messages: int = 8
     system_prompt_timezone: str = "America/New_York"
+    file_task_layout_prompt: str = "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (for example assistant/notes/, assistant/lists/, assistant/health/, assistant/finance/, assistant/people/, assistant/travel/). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."
 
 
 @dataclass
@@ -74,6 +75,7 @@ class RuntimeConfig:
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
+    file_skill_actions: list[str] = field(default_factory=lambda: ["read", "write", "append", "move", "create_dir", "delete_dir"])
 
 
 @dataclass
@@ -147,6 +149,8 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("runtime.voice_transcribe_command must be set when runtime.enable_voice_notes is true")
     if config.runtime.max_reply_chunk_chars <= 0:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
+    if not config.runtime.file_skill_actions:
+        raise ValueError("runtime.file_skill_actions must contain at least one action")
 
     _ = config_path
 

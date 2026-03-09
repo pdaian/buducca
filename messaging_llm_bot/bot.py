@@ -158,6 +158,18 @@ class BotRunner:
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
                 "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
             ]
+
+            if "file" in self._skills:
+                configured_actions = ", ".join(self.config.runtime.file_skill_actions)
+                skill_rules.extend(
+                    [
+                        "For file-based personal assistant tasks, prefer the file skill instead of expecting task-specific skills.",
+                        f"Configured file skill actions: {configured_actions}.",
+                        "Use args.action exactly as configured and include concrete file paths under the workspace.",
+                        f"File organization guidance: {self.config.llm.file_task_layout_prompt.strip()}",
+                    ]
+                )
+
             sections.append("\n".join(skill_rules))
 
         return f"{base_prompt}\n\n" + "\n\n".join(sections)

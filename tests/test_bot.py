@@ -850,6 +850,42 @@ class BotTests(unittest.TestCase):
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
 
+    def test_system_prompt_includes_configured_file_skill_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "file.py").write_text(
+                'NAME = "file"\nDESCRIPTION = "File ops."\n\n'
+                'def run(workspace, args):\n    return "ok"\n',
+                encoding="utf-8",
+            )
+
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(
+                    base_url="u",
+                    api_key="k",
+                    model="m",
+                    history_messages=2,
+                    file_task_layout_prompt="Store everything under assistant/.",
+                ),
+                runtime=RuntimeConfig(
+                    workspace_dir=td,
+                    skills_dir=str(skills_dir),
+                    file_skill_actions=["read", "append"],
+                ),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_message(1, "hi")
+
+            system_prompt = bot.llm.messages[0]["content"]
+            self.assertIn("For file-based personal assistant tasks, prefer the file skill", system_prompt)
+            self.assertIn("Configured file skill actions: read, append.", system_prompt)
+            self.assertIn("File organization guidance: Store everything under assistant/.", system_prompt)
+
     def test_skill_call_output_executes_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
