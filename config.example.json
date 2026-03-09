@@ -101,5 +101,24 @@
       "create_dir",
       "delete_dir"
     ]
+  },
+  "google_fi": {
+    "account": "personal",
+    "poll_interval_seconds": 1.0,
+    "allowed_sender_ids": [],
+    "receive_command": [
+      "python3",
+      "scripts/google_fi_receive.py"
+    ],
+    "send_command": [
+      "python3",
+      "scripts/google_fi_send.py",
+      "--recipient",
+      "{recipient}",
+      "--message",
+      "{message}"
+    ],
+    "read_only": false,
+    "store_unanswered_messages": false
   }
 }

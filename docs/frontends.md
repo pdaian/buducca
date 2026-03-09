@@ -1,6 +1,6 @@
 # Frontends
 
-BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel.
+BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel. Google Fi additionally emits call events that are logged.
 
 ## Telegram
 
@@ -60,3 +60,14 @@ Example:
 ]
 ```
 
+
+
+## Google Fi
+
+Configure `google_fi` in `config.json` with external receive/send commands for https://messages.google.com/web/.
+
+- `receive_command` must output JSON as either a list of message objects or an object with `messages` and optional `calls` arrays.
+- `send_command` supports `{recipient}` and `{message}` placeholders.
+- Call events from `calls` are persisted to `google_fi.calls.recent` in the workspace.
+
+Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.
