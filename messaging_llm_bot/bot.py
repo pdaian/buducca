@@ -88,6 +88,12 @@ class BotRunner:
         self._allowed_whatsapp_group_ids_when_sender_not_allowed = (
             set(config.whatsapp.allowed_group_ids_when_sender_not_allowed) if config.whatsapp else set()
         )
+        self._allowed_google_fi_sender_ids = set(config.google_fi.allowed_sender_ids) if config.google_fi else set()
+        self._allowed_google_fi_sender_ids_normalized = {
+            self._normalize_signal_identifier(sender_id)
+            for sender_id in self._allowed_google_fi_sender_ids
+            if self._normalize_signal_identifier(sender_id)
+        }
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
@@ -1038,6 +1044,21 @@ class BotRunner:
                 return True
             logging.warning(
                 "Blocked message from unauthorized whatsapp sender_id=%s conversation_id=%s",
+                sender_id,
+                conversation_id,
+            )
+            return False
+
+        if backend == "google_fi" and self.config.google_fi:
+            if not self._allowed_google_fi_sender_ids:
+                return True
+            normalized_sender_id = self._normalize_signal_identifier(sender_id)
+            if sender_id in self._allowed_google_fi_sender_ids or (
+                bool(normalized_sender_id) and normalized_sender_id in self._allowed_google_fi_sender_ids_normalized
+            ):
+                return True
+            logging.warning(
+                "Blocked message from unauthorized google_fi sender_id=%s conversation_id=%s",
                 sender_id,
                 conversation_id,
             )
