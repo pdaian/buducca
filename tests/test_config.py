@@ -17,6 +17,30 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(path)
 
+
+    def test_invalid_json_includes_location_and_pointer(self) -> None:
+        bad_json = '{"telegram": {"bot_token": "t"\n "llm": {"base_url": "https://x", "api_key": "k", "model": "m"}}'
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(bad_json, encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                load_config(path)
+            msg = str(ctx.exception)
+            self.assertIn("Invalid JSON in config file", msg)
+            self.assertIn("line 2, column 2", msg)
+            self.assertIn("^", msg)
+
+    def test_missing_llm_section_has_friendly_error(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                load_config(path)
+            self.assertEqual(str(ctx.exception), "Missing required top-level section: llm")
+
     def test_signal_only_config_is_valid(self) -> None:
         data = {
             "signal": {"account": "+15550001"},
