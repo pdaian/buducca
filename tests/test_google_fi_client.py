@@ -119,5 +119,29 @@ class GoogleFiCliErrorHandlingTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class GoogleFiConversationParsingTests(unittest.TestCase):
+    def test_extract_conversation_id_from_row_ignores_new_conversation(self) -> None:
+        from messaging_llm_bot.google_fi_client import _extract_conversation_id_from_row
+
+        row = Mock()
+        row.get_attribute.side_effect = lambda name: '/web/conversations/new' if name == 'href' else None
+
+        self.assertIsNone(_extract_conversation_id_from_row(row, 0))
+
+    def test_extract_conversation_id_from_row_uses_nested_anchor(self) -> None:
+        from messaging_llm_bot.google_fi_client import _extract_conversation_id_from_row
+
+        row = Mock()
+        row.get_attribute.return_value = None
+        nested_first = Mock()
+        nested_first.get_attribute.return_value = '/web/conversations/12345'
+        nested = Mock()
+        nested.count.return_value = 1
+        nested.first = nested_first
+        row.locator.return_value = nested
+
+        self.assertEqual(_extract_conversation_id_from_row(row, 0), '12345')
+
+
 if __name__ == "__main__":
     unittest.main()

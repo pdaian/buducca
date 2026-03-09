@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from shutil import which
 from typing import Any
 
 GOOGLE_MESSAGES_URL = "https://messages.google.com/web/conversations"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -250,6 +252,37 @@ def _extract_conversation_id_from_href(href: str) -> str:
     return href.strip() or "unknown"
 
 
+def _extract_conversation_id_from_row(row: Any, idx: int) -> str | None:
+    href = (row.get_attribute("href") or "").strip()
+    if "/web/conversations/new" in href:
+        logger.debug("Skipping row %s because href points to new-conversation placeholder: %r", idx, href)
+        return None
+    conversation_id = _extract_conversation_id_from_href(href)
+    if conversation_id not in {"", "unknown", "/web/conversations/new"}:
+        logger.debug("Resolved conversation id for row %s from direct href: %s", idx, conversation_id)
+        return conversation_id
+
+    try:
+        nested = row.locator("a[href*='/web/conversations/']:not([href*='/web/conversations/new'])")
+        if nested.count() > 0:
+            nested_href = (nested.first.get_attribute("href") or "").strip()
+            nested_id = _extract_conversation_id_from_href(nested_href)
+            if nested_id not in {"", "unknown", "/web/conversations/new"}:
+                logger.debug("Resolved conversation id for row %s from nested href: %s", idx, nested_id)
+                return nested_id
+    except Exception:
+        logger.debug("Failed nested href extraction for row %s", idx, exc_info=True)
+
+    for attr in ("data-thread-id", "data-conversation-id", "data-id", "id"):
+        raw = (row.get_attribute(attr) or "").strip()
+        if raw and raw.lower() not in {"new", "conversation-new"}:
+            logger.debug("Resolved conversation id for row %s from attribute %s: %s", idx, attr, raw)
+            return raw
+
+    logger.debug("Could not resolve conversation id for row %s", idx)
+    return None
+
+
 def _parse_possible_call_state(text: str) -> str | None:
     lowered = text.lower()
     if "missed call" in lowered:
@@ -268,6 +301,7 @@ def receive_events(
     max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False, signup_wait_seconds: int = 300,
 ) -> dict[str, list[dict[str, str]]]:
     if dry_run:
+        logger.info("google_fi receive running in dry-run mode")
         return {"messages": [], "calls": []}
 
     workspace_path = Path(workspace)
@@ -275,34 +309,65 @@ def receive_events(
     state_path = workspace_path / state_file
     state = _load_state(state_path)
     seen: dict[str, str] = state.get("seen", {})
+    logger.info(
+        "google_fi receive start workspace=%s state_file=%s headful=%s max_conversations=%s max_bubbles=%s seen_entries=%s",
+        workspace_path,
+        state_file,
+        headful,
+        max_conversations,
+        max_bubbles,
+        len(seen),
+    )
 
     p = context = page = None
     try:
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
         _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
 
-        rows = page.locator("mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']")
+        rows = page.locator(
+            "mws-conversation-list-item, "
+            "a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"
+        )
         total = min(rows.count(), max_conversations)
+        logger.info("google_fi receive conversation rows detected=%s scanning=%s", rows.count(), total)
         messages: list[dict[str, str]] = []
         calls: list[dict[str, str]] = []
+        skipped_rows = 0
 
         for idx in range(total):
             row = rows.nth(idx)
             try:
                 row.click(timeout=2000)
             except Exception:
+                skipped_rows += 1
+                logger.debug("Skipping row %s because click failed", idx, exc_info=True)
                 continue
-            href = row.get_attribute("href") or ""
-            conversation_id = _extract_conversation_id_from_href(href) or f"row-{idx}"
+            conversation_id = _extract_conversation_id_from_row(row, idx)
+            if not conversation_id:
+                skipped_rows += 1
+                continue
             title = (row.inner_text(timeout=800) or "").strip().split("\n", 1)[0]
-            bubbles = page.locator("mws-message-part-content, .text-msg, [data-e2e-message-text], [aria-label*='Message']")
+            bubbles = page.locator(
+                "mws-text-message-content, mws-message-part-content, "
+                ".text-msg, [data-e2e-message-text]"
+            )
             bubble_total = min(bubbles.count(), max_bubbles)
+            logger.debug(
+                "Row %s conversation_id=%s title=%r bubble_count=%s scan_tail=%s",
+                idx,
+                conversation_id,
+                title,
+                bubbles.count(),
+                bubble_total,
+            )
             for j in range(max(0, bubble_total - 4), bubble_total):
                 text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
                 if not text:
+                    logger.debug("Skipping empty bubble row=%s bubble=%s", idx, j)
                     continue
                 key = f"{conversation_id}::{text}"
                 if seen.get(conversation_id) == key:
+                    logger.debug("Skipping duplicate seen event conversation_id=%s key=%r", conversation_id, key)
                     continue
                 seen[conversation_id] = key
                 event = {
@@ -313,11 +378,20 @@ def receive_events(
                 }
                 call_state = _parse_possible_call_state(text)
                 if call_state:
+                    logger.debug("Captured call event conversation_id=%s state=%s text=%r", conversation_id, call_state, text)
                     calls.append({**event, "status": call_state, "received_at": datetime.now(timezone.utc).isoformat()})
                 else:
+                    logger.debug("Captured message event conversation_id=%s text=%r", conversation_id, text)
                     messages.append(event)
 
         _save_state(state_path, {"seen": seen})
+        logger.info(
+            "google_fi receive complete messages=%s calls=%s skipped_rows=%s updated_seen_entries=%s",
+            len(messages),
+            len(calls),
+            skipped_rows,
+            len(seen),
+        )
         return {"messages": messages, "calls": calls}
     finally:
         try:
@@ -413,6 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
     recv.add_argument("--max-bubbles", type=int, default=20)
     recv.add_argument("--signup-wait-seconds", type=int, default=300)
     recv.add_argument("--dry-run", action="store_true")
+    recv.add_argument("--verbose", action="store_true")
 
     send = sub.add_parser("send")
     send.add_argument("--recipient", required=True)
@@ -421,17 +496,25 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--headful", action="store_true")
     send.add_argument("--signup-wait-seconds", type=int, default=300)
     send.add_argument("--dry-run", action="store_true")
+    send.add_argument("--verbose", action="store_true")
 
     list_messages = sub.add_parser("list-messages")
     list_messages.add_argument("--workspace", default="workspace")
     list_messages.add_argument("--headful", action="store_true")
     list_messages.add_argument("--signup-wait-seconds", type=int, default=300)
     list_messages.add_argument("--dry-run", action="store_true")
+    list_messages.add_argument("--verbose", action="store_true")
     return parser
+
+
+def _configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _configure_logging(getattr(args, "verbose", False))
     try:
         if args.command == "receive":
             payload = receive_events(
