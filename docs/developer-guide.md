@@ -1,0 +1,50 @@
+# Developer guide
+
+## Architecture in one screen
+
+- `assistant_framework/` provides core primitives:
+  - `Workspace` for file-backed state
+  - `SkillManager` for loading runnable skills
+  - `CollectorManager` + `CollectorRunner` for data ingestion loops
+- `messaging_llm_bot/` provides frontend clients and bot orchestration.
+- `skills/` and `collectors/` are dynamic plugin directories.
+
+## Plugin layout
+
+Skills:
+
+- code: `skills/<skill_name>/__init__.py`
+- docs: `skills/<skill_name>/README.md`
+
+Collectors:
+
+- code: `collectors/<collector_name>/__init__.py`
+- docs: `collectors/<collector_name>/README.md`
+
+If you delete a plugin folder, it is not loaded.
+
+## Add a new skill
+
+1. Create `skills/<name>/__init__.py`.
+2. Expose either:
+   - `register()` returning metadata and callable, or
+   - module constants + `run(workspace, args)`.
+3. Add `skills/<name>/README.md` with behavior, dependencies, config, and examples.
+4. Run tests.
+
+## Add a new collector
+
+1. Create `collectors/<name>/__init__.py`.
+2. Expose either:
+   - `create_collector(config)` returning `name`, `interval_seconds`, and `run`, or
+   - module constants + `run(workspace)`.
+3. Keep interactive setup out of the runtime loop; use a separate signup/setup command when needed.
+4. Add `collectors/<name>/README.md`.
+
+## Style goals for contributions
+
+- Prefer small pure-Python modules over framework-heavy abstractions.
+- Keep names explicit and predictable.
+- Avoid duplicated logic between skills/collectors/core runtime.
+- Write code that reads like a clear script first, clever trick second.
+
