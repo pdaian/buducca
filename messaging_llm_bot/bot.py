@@ -119,6 +119,13 @@ class BotRunner:
         self._workspace.write_text("whatsapp.messages.recent", self._workspace.read_text("whatsapp.messages.recent", default=""))
         self._workspace.write_text("google_fi.messages.recent", self._workspace.read_text("google_fi.messages.recent", default=""))
         self._workspace.write_text("google_fi.calls.recent", self._workspace.read_text("google_fi.calls.recent", default=""))
+        self._recent_unanswered_keys: dict[str, set[str]] = {
+            "telegram.recent": set(),
+            "signal.messages.recent": set(),
+            "whatsapp.messages.recent": set(),
+            "google_fi.messages.recent": set(),
+        }
+        self._load_unanswered_recent_keys()
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
 
     @property
@@ -825,6 +832,8 @@ class BotRunner:
             return
 
         if backend == "telegram":
+            if not self._should_append_unanswered_message("telegram.recent", conversation_id, sender_id, text):
+                return
             payload = {
                 "source": "frontend_log",
                 "account": "default",
@@ -838,6 +847,8 @@ class BotRunner:
             return
 
         if backend == "signal":
+            if not self._should_append_unanswered_message("signal.messages.recent", conversation_id, sender_id, text):
+                return
             payload = {
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "source": "frontend_log",
@@ -853,6 +864,8 @@ class BotRunner:
             return
 
         if backend == "whatsapp":
+            if not self._should_append_unanswered_message("whatsapp.messages.recent", conversation_id, sender_id, text):
+                return
             payload = {
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "source": "frontend_log",
@@ -868,6 +881,8 @@ class BotRunner:
             return
 
         if backend == "google_fi":
+            if not self._should_append_unanswered_message("google_fi.messages.recent", conversation_id, sender_id, text):
+                return
             payload = {
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "source": "frontend_log",
@@ -880,6 +895,43 @@ class BotRunner:
                 "text": text,
             }
             self._workspace.append_text("google_fi.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def _load_unanswered_recent_keys(self) -> None:
+        for file_path in self._recent_unanswered_keys:
+            existing = self._workspace.read_text(file_path, default="")
+            for line in existing.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                text = payload.get("text")
+                conversation_id = payload.get("conversation_id")
+                sender_id = payload.get("sender_id")
+                if not isinstance(sender_id, str):
+                    sender_id = payload.get("sender")
+                if not isinstance(text, str) or not isinstance(conversation_id, str) or not isinstance(sender_id, str):
+                    continue
+                self._recent_unanswered_keys[file_path].add(self._unanswered_message_key(conversation_id, sender_id, text))
+
+    @staticmethod
+    def _unanswered_message_key(conversation_id: str, sender_id: str, text: str) -> str:
+        return f"{conversation_id}\n{sender_id}\n{text}"
+
+    def _should_append_unanswered_message(self, file_path: str, conversation_id: str, sender_id: str, text: str) -> bool:
+        key = self._unanswered_message_key(conversation_id, sender_id, text)
+        known = self._recent_unanswered_keys.get(file_path)
+        if known is None:
+            self._recent_unanswered_keys[file_path] = {key}
+            return True
+        if key in known:
+            return False
+        known.add(key)
+        return True
 
     def _append_agenta_query_log(
         self,
@@ -1125,7 +1177,16 @@ class BotRunner:
                     sender_contact=sender_contact,
                 )
                 return
-            self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
+            was_handled = self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
+            if backend == "google_fi" and not was_handled:
+                self._append_unanswered_collector_log(
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    text=update.text,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                )
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
