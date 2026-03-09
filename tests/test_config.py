@@ -184,5 +184,19 @@ class ConfigTests(unittest.TestCase):
                 load_config(path)
 
 
+    def test_runtime_file_skill_actions_must_not_be_empty(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+            "runtime": {"file_skill_actions": []},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+
+
 if __name__ == "__main__":
     unittest.main()
