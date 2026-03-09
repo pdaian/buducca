@@ -85,13 +85,17 @@ class WhatsAppClient:
         executable = Path(command[0]).name.lower()
         if "python" not in executable:
             return None
-        script_candidate = Path(command[1])
-        if script_candidate.suffix != ".py":
-            return None
-        if not script_candidate.is_absolute():
-            return None
-        if not script_candidate.exists():
-            return command[1]
+        for part in command[1:]:
+            if part.startswith("-"):
+                continue
+            script_candidate = Path(part)
+            if script_candidate.suffix != ".py":
+                continue
+            if not script_candidate.is_absolute():
+                continue
+            if not script_candidate.exists():
+                return part
+            break
         return None
 
     def get_updates(self) -> list[IncomingMessage]:
