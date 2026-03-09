@@ -48,12 +48,14 @@
     "allowed_sender_ids": [],
     "allowed_group_ids_when_sender_not_allowed": [],
     "receive_command": [
-      "python3",
-      "scripts/whatsapp_receive.py"
+      "whatsapp-receive-json",
+      "--account",
+      "personal"
     ],
     "send_command": [
-      "python3",
-      "scripts/whatsapp_send.py",
+      "whatsapp-send-json",
+      "--account",
+      "personal",
       "--recipient",
       "{recipient}",
       "--message",
