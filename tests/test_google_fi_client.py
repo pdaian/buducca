@@ -35,6 +35,29 @@ class GoogleFiClientTests(unittest.TestCase):
 
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
+    def test_ensure_logged_in_waits_for_signup_in_headful_mode(self) -> None:
+        from messaging_llm_bot import google_fi_client
+
+        page = Mock()
+        page.wait_for_selector.side_effect = [Exception("not yet"), None]
+
+        google_fi_client._ensure_logged_in(page, 15000, headful=True, signup_wait_ms=60000)
+
+        self.assertEqual(page.wait_for_selector.call_count, 2)
+        first_call = page.wait_for_selector.call_args_list[0]
+        second_call = page.wait_for_selector.call_args_list[1]
+        self.assertEqual(first_call.kwargs["timeout"], 15000)
+        self.assertEqual(second_call.kwargs["timeout"], 60000)
+
+    def test_ensure_logged_in_raises_without_headful_signup_wait(self) -> None:
+        from messaging_llm_bot import google_fi_client
+
+        page = Mock()
+        page.wait_for_selector.side_effect = Exception("not logged in")
+
+        with self.assertRaises(google_fi_client.GoogleFiAutomationError):
+            google_fi_client._ensure_logged_in(page, 15000, headful=False, signup_wait_ms=60000)
+
     def test_open_messages_page_reports_playwright_mismatch(self) -> None:
         fake_sync_api = types.ModuleType("playwright.sync_api")
         sync_pw = Mock()
