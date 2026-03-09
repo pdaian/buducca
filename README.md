@@ -4,7 +4,7 @@
 
 # BUDUCCA — Private, local-first personal assistant 🤖
 
-Run your own Telegram, Signal, and/or WhatsApp assistant with a small Python codebase you can actually read in an afternoon.
+Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small Python codebase you can actually read in an afternoon.
 
 [![Join the BUDUCCA Telegram](https://img.shields.io/badge/Join%20our%20Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/buducca)
 
@@ -13,7 +13,7 @@ Run your own Telegram, Signal, and/or WhatsApp assistant with a small Python cod
 
 ## What BUDUCCA can do
 
-- Run one assistant backend behind multiple messaging frontends (Telegram, Signal, WhatsApp).
+- Run one assistant backend behind multiple messaging frontends (Telegram, Signal, WhatsApp, Google Fi).
 - Ingest local data via collectors (Gmail, Slack, Twitter recent activity, Google Calendar).
 - Execute local skills for filesystem tasks, task management, web search, workspace learning, and summaries.
 - Keep everything in a plain workspace directory so state is inspectable and scriptable.
@@ -44,6 +44,9 @@ python3 run_bot.py --config config.json
 - Architecture and extension guide: [`docs/developer-guide.md`](docs/developer-guide.md)
 
 Plugin docs live next to each plugin:
+
+Google Fi CLI: `python3 -m messaging_llm_bot.google_fi_client --help`
+
 
 - `skills/<name>/README.md`
 - `collectors/<name>/README.md`

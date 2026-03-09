@@ -1,6 +1,6 @@
 # Frontends
 
-BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel.
+BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel. Google Fi additionally emits call events that are logged.
 
 ## Telegram
 
@@ -60,3 +60,28 @@ Example:
 ]
 ```
 
+
+
+## Google Fi
+
+Google Fi support is upstreamed into `messaging_llm_bot/google_fi_client.py`.
+
+Use module commands directly:
+
+```bash
+python3 -m messaging_llm_bot.google_fi_client receive
+python3 -m messaging_llm_bot.google_fi_client send --recipient "+15550001111" --message "test"
+python3 -m messaging_llm_bot.google_fi_client list-messages
+```
+
+Setup requirements:
+
+```bash
+pip install playwright
+playwright install chromium
+python3 -m messaging_llm_bot.google_fi_client receive --headful
+```
+
+The first headful run is used to complete Google Messages login and save session state under `workspace/google_fi_browser_profile`.
+
+Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.
