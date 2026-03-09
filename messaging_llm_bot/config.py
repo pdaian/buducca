@@ -100,8 +100,20 @@ class BotConfig:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError as exc:
+        raise ValueError(f"Config file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        line = exc.doc.splitlines()[exc.lineno - 1] if exc.doc else ""
+        pointer = " " * max(exc.colno - 1, 0) + "^"
+        message = (
+            f"Invalid JSON in config file {path} at line {exc.lineno}, column {exc.colno}: {exc.msg}\n"
+            f"{line}\n"
+            f"{pointer}"
+        )
+        raise ValueError(message) from exc
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
@@ -185,7 +197,10 @@ def load_config(path: str | Path) -> BotConfig:
     signal = SignalConfig(**signal_raw) if isinstance(signal_raw, dict) else None
     whatsapp = WhatsAppConfig(**whatsapp_raw) if isinstance(whatsapp_raw, dict) else None
     google_fi = GoogleFiConfig(**google_fi_raw) if isinstance(google_fi_raw, dict) else None
-    llm = LLMConfig(**raw["llm"])
+    try:
+        llm = LLMConfig(**raw["llm"])
+    except KeyError as exc:
+        raise ValueError("Missing required top-level section: llm") from exc
     runtime = RuntimeConfig(**raw.get("runtime", {}))
 
     config = BotConfig(telegram=telegram, signal=signal, whatsapp=whatsapp, google_fi=google_fi, llm=llm, runtime=runtime)
