@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from messaging_llm_bot.whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
@@ -35,6 +37,19 @@ class WhatsAppClientTests(unittest.TestCase):
         with patch("messaging_llm_bot.whatsapp_client.which", return_value=None):
             with self.assertRaises(WhatsAppFrontendUnavailableError):
                 client.get_updates()
+
+    def test_normalize_command_paths_rewrites_legacy_repo_root(self) -> None:
+        client = WhatsAppClient(receive_command=["python3", "/home/ai/buducca/scripts/whatsapp_receive.py"], send_command=[])
+        with TemporaryDirectory() as td:
+            repo_root = Path(td)
+            script_path = repo_root / "scripts" / "whatsapp_receive.py"
+            script_path.parent.mkdir(parents=True)
+            script_path.write_text("print('ok')", encoding="utf-8")
+            client._repo_root = repo_root
+
+            normalized = client._normalize_command_paths(client.receive_command)
+
+        self.assertEqual(normalized, ["python3", str(script_path)])
 
 
 if __name__ == "__main__":
