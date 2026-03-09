@@ -78,10 +78,32 @@ class WhatsAppClient:
                 f"WhatsApp frontend disabled: executable {executable!r} was not found in PATH"
             )
 
+    @staticmethod
+    def _missing_python_script(command: list[str]) -> str | None:
+        if len(command) < 2:
+            return None
+        executable = Path(command[0]).name.lower()
+        if "python" not in executable:
+            return None
+        script_candidate = Path(command[1])
+        if script_candidate.suffix != ".py":
+            return None
+        if not script_candidate.is_absolute():
+            return None
+        if not script_candidate.exists():
+            return command[1]
+        return None
+
     def get_updates(self) -> list[IncomingMessage]:
         self._validate_receive_command()
+        command = self._normalize_command_paths(self.receive_command)
+        missing_script = self._missing_python_script(command)
+        if missing_script:
+            raise WhatsAppFrontendUnavailableError(
+                f"WhatsApp frontend disabled: script {missing_script!r} does not exist"
+            )
         try:
-            proc = subprocess.run(self._normalize_command_paths(self.receive_command), capture_output=True, text=True, check=False)
+            proc = subprocess.run(command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
             raise WhatsAppFrontendUnavailableError(
                 f"WhatsApp frontend disabled: executable {exc.filename!r} was not found"
@@ -152,6 +174,11 @@ class WhatsAppClient:
         self._validate_send_command()
         command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
         command = self._normalize_command_paths(command)
+        missing_script = self._missing_python_script(command)
+        if missing_script:
+            raise WhatsAppFrontendUnavailableError(
+                f"WhatsApp frontend disabled: script {missing_script!r} does not exist"
+            )
         try:
             proc = subprocess.run(command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
