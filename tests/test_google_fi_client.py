@@ -163,6 +163,27 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         self.assertIs(rows, populated)
         self.assertEqual(selector, "[data-e2e-conversation-id]")
 
+    def test_find_message_bubbles_prefers_first_non_empty_selector(self) -> None:
+        from messaging_llm_bot.google_fi_client import _find_message_bubbles
+
+        page = Mock()
+        empty = Mock()
+        empty.count.return_value = 0
+        populated = Mock()
+        populated.count.return_value = 2
+
+        def locator_side_effect(selector: str):
+            if selector == "mws-message-text-content":
+                return populated
+            return empty
+
+        page.locator.side_effect = locator_side_effect
+
+        bubbles, selector = _find_message_bubbles(page)
+
+        self.assertIs(bubbles, populated)
+        self.assertEqual(selector, "mws-message-text-content")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -315,6 +315,30 @@ def _find_conversation_rows(page: Any):
     return page.locator("a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"), "fallback-anchor"
 
 
+def _message_bubble_selectors() -> list[str]:
+    return [
+        "mws-text-message-content",
+        "mws-message-part-content",
+        "mws-message-text-content",
+        "[data-e2e-message-text]",
+        "[data-e2e-message-body]",
+        "[data-message-id] [dir='auto']",
+        ".text-msg",
+    ]
+
+
+def _find_message_bubbles(page: Any):
+    for selector in _message_bubble_selectors():
+        locator = page.locator(selector)
+        try:
+            if locator.count() > 0:
+                return locator, selector
+        except Exception:
+            logger.debug("Failed counting bubbles for selector %r", selector, exc_info=True)
+    fallback = "mws-text-message-content, mws-message-part-content, .text-msg, [data-e2e-message-text]"
+    return page.locator(fallback), "fallback-bubbles"
+
+
 def receive_events(
     *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
     max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False, signup_wait_seconds: int = 300,
@@ -369,18 +393,17 @@ def receive_events(
                 skipped_rows += 1
                 continue
             title = (row.inner_text(timeout=800) or "").strip().split("\n", 1)[0]
-            bubbles = page.locator(
-                "mws-text-message-content, mws-message-part-content, "
-                ".text-msg, [data-e2e-message-text]"
-            )
+            page.wait_for_timeout(250)
+            bubbles, bubble_selector = _find_message_bubbles(page)
             bubble_total = min(bubbles.count(), max_bubbles)
             logger.debug(
-                "Row %s conversation_id=%s title=%r bubble_count=%s scan_tail=%s",
+                "Row %s conversation_id=%s title=%r bubble_count=%s scan_tail=%s bubble_selector=%s",
                 idx,
                 conversation_id,
                 title,
                 bubbles.count(),
                 bubble_total,
+                bubble_selector,
             )
             for j in range(max(0, bubble_total - 4), bubble_total):
                 text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
