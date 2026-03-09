@@ -14,6 +14,7 @@ from typing import Any
 
 GOOGLE_MESSAGES_URL = "https://messages.google.com/web/conversations"
 logger = logging.getLogger(__name__)
+_PHONE_PATTERN = re.compile(r"\+?[\d\s().-]{7,}")
 
 
 @dataclass
@@ -128,7 +129,9 @@ class GoogleFiClient:
             return None
         text_value = self._first_text(item.get("text"), item.get("body"), item.get("message"), item.get("content"))
         conversation_id = self._first_text(item.get("conversation_id"), item.get("thread_id"), item.get("chat_id"), item.get("chatId"))
-        sender_id = self._first_text(item.get("sender_id"), item.get("from"), item.get("sender"), item.get("number"))
+        sender_id = self._pick_sender_id(
+            item.get("sender_id"), item.get("from"), item.get("number"), item.get("sender"), item.get("sender_contact")
+        )
         if not text_value or not conversation_id or not sender_id:
             return None
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
@@ -148,7 +151,9 @@ class GoogleFiClient:
         if not isinstance(item, dict):
             return None
         conversation_id = self._first_text(item.get("conversation_id"), item.get("thread_id"), item.get("chat_id"), item.get("chatId"))
-        sender_id = self._first_text(item.get("sender_id"), item.get("from"), item.get("caller"), item.get("number"))
+        sender_id = self._pick_sender_id(
+            item.get("sender_id"), item.get("from"), item.get("number"), item.get("caller"), item.get("sender_contact")
+        )
         if not conversation_id or not sender_id:
             return None
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
@@ -183,6 +188,26 @@ class GoogleFiClient:
                 if nested:
                     return nested
         return None
+
+    @staticmethod
+    def _phone_like_or_original(value: str | None) -> str | None:
+        if not value:
+            return None
+        match = _PHONE_PATTERN.search(value)
+        if not match:
+            return value
+        cleaned = "".join(ch for ch in match.group(0) if ch == "+" or ch.isdigit())
+        return cleaned or value
+
+    @classmethod
+    def _pick_sender_id(cls, *values: Any) -> str | None:
+        first_text = cls._first_text(*values)
+        for value in values:
+            candidate = cls._first_text(value)
+            normalized = cls._phone_like_or_original(candidate)
+            if normalized and normalized != candidate:
+                return normalized
+        return cls._phone_like_or_original(first_text)
 
 
 def _open_messages_page(options: BrowserOptions):
@@ -423,10 +448,12 @@ def receive_events(
                     logger.debug("Skipping duplicate seen event conversation_id=%s key=%r", conversation_id, key)
                     continue
                 seen[conversation_id] = key
+                extracted_sender_id = GoogleFiClient._phone_like_or_original(title) or conversation_id
                 event = {
                     "conversation_id": conversation_id,
-                    "sender_id": title or conversation_id,
+                    "sender_id": extracted_sender_id,
                     "sender_name": title or "",
+                    "sender_contact": title or extracted_sender_id,
                     "text": text,
                 }
                 call_state = _parse_possible_call_state(text)
