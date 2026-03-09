@@ -14,6 +14,17 @@ class GoogleFiScriptsTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(json.loads(proc.stdout), {"messages": [], "calls": []})
 
+
+    def test_receive_dry_run_verbose(self) -> None:
+        proc = subprocess.run(
+            ["python3", "-m", "messaging_llm_bot.google_fi_client", "receive", "--dry-run", "--verbose"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(json.loads(proc.stdout), {"messages": [], "calls": []})
+
     def test_send_dry_run(self) -> None:
         proc = subprocess.run(
             ["python3", "-m", "messaging_llm_bot.google_fi_client", "send", "--dry-run", "--recipient", "thread-1", "--message", "hi"],
