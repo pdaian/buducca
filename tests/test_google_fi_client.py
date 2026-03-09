@@ -33,6 +33,18 @@ class GoogleFiClientTests(unittest.TestCase):
             with self.assertRaises(GoogleFiFrontendUnavailableError):
                 client.get_updates()
 
+    def test_get_updates_parses_numeric_and_nested_fields(self) -> None:
+        payload = '{"messages":[{"thread_id":12345,"number":15550001,"content":{"text":"hello"}}]}'
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].conversation_id, "12345")
+        self.assertEqual(updates[0].sender_id, "15550001")
+        self.assertEqual(updates[0].text, "hello")
+
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
     def test_ensure_logged_in_waits_for_signup_in_headful_mode(self) -> None:

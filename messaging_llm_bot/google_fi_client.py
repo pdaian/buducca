@@ -126,7 +126,7 @@ class GoogleFiClient:
     def _parse_message(self, item: Any) -> IncomingMessage | None:
         if not isinstance(item, dict):
             return None
-        text_value = self._first_text(item.get("text"), item.get("body"), item.get("message"))
+        text_value = self._first_text(item.get("text"), item.get("body"), item.get("message"), item.get("content"))
         conversation_id = self._first_text(item.get("conversation_id"), item.get("thread_id"), item.get("chat_id"), item.get("chatId"))
         sender_id = self._first_text(item.get("sender_id"), item.get("from"), item.get("sender"), item.get("number"))
         if not text_value or not conversation_id or not sender_id:
@@ -174,6 +174,14 @@ class GoogleFiClient:
         for value in values:
             if isinstance(value, str) and value.strip():
                 return value.strip()
+            if isinstance(value, (int, float)):
+                rendered = str(value).strip()
+                if rendered:
+                    return rendered
+            if isinstance(value, dict):
+                nested = GoogleFiClient._first_text(value.get("text"), value.get("body"), value.get("message"), value.get("content"))
+                if nested:
+                    return nested
         return None
 
 
