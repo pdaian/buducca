@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
+from messaging_llm_bot.config import BotConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
 
@@ -1407,6 +1407,42 @@ class BotTests(unittest.TestCase):
         bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
 
         self.assertEqual(bot.telegram.sent, [(1, "I could not transcribe that voice note locally.")])
+
+    def test_google_fi_sender_not_allowed_when_allowlist_is_configured(self) -> None:
+        cfg = BotConfig(
+            google_fi=GoogleFiConfig(
+                account="default",
+                allowed_sender_ids=["+15551112222"],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.google_fi = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message("google_fi", "thread-1", "+15553334444", "hi")
+
+        self.assertEqual(bot.llm.calls, 0)
+
+    def test_google_fi_sender_allowed_when_number_format_differs(self) -> None:
+        cfg = BotConfig(
+            google_fi=GoogleFiConfig(
+                account="default",
+                allowed_sender_ids=["+1 (555) 111-2222"],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.google_fi = object()
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_message("google_fi", "thread-1", "+15551112222", "hi")
+
+        self.assertEqual(bot.llm.calls, 1)
 
 
 if __name__ == "__main__":
