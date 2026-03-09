@@ -250,6 +250,32 @@ def _extract_conversation_id_from_href(href: str) -> str:
     return href.strip() or "unknown"
 
 
+def _extract_conversation_id_from_row(row: Any, idx: int) -> str | None:
+    href = (row.get_attribute("href") or "").strip()
+    if "/web/conversations/new" in href:
+        return None
+    conversation_id = _extract_conversation_id_from_href(href)
+    if conversation_id not in {"", "unknown", "/web/conversations/new"}:
+        return conversation_id
+
+    try:
+        nested = row.locator("a[href*='/web/conversations/']:not([href*='/web/conversations/new'])")
+        if nested.count() > 0:
+            nested_href = (nested.first.get_attribute("href") or "").strip()
+            nested_id = _extract_conversation_id_from_href(nested_href)
+            if nested_id not in {"", "unknown", "/web/conversations/new"}:
+                return nested_id
+    except Exception:
+        pass
+
+    for attr in ("data-thread-id", "data-conversation-id", "data-id", "id"):
+        raw = (row.get_attribute(attr) or "").strip()
+        if raw and raw.lower() not in {"new", "conversation-new"}:
+            return raw
+
+    return None
+
+
 def _parse_possible_call_state(text: str) -> str | None:
     lowered = text.lower()
     if "missed call" in lowered:
@@ -281,7 +307,10 @@ def receive_events(
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
         _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
 
-        rows = page.locator("mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']")
+        rows = page.locator(
+            "mws-conversation-list-item, "
+            "a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"
+        )
         total = min(rows.count(), max_conversations)
         messages: list[dict[str, str]] = []
         calls: list[dict[str, str]] = []
@@ -292,10 +321,14 @@ def receive_events(
                 row.click(timeout=2000)
             except Exception:
                 continue
-            href = row.get_attribute("href") or ""
-            conversation_id = _extract_conversation_id_from_href(href) or f"row-{idx}"
+            conversation_id = _extract_conversation_id_from_row(row, idx)
+            if not conversation_id:
+                continue
             title = (row.inner_text(timeout=800) or "").strip().split("\n", 1)[0]
-            bubbles = page.locator("mws-message-part-content, .text-msg, [data-e2e-message-text], [aria-label*='Message']")
+            bubbles = page.locator(
+                "mws-text-message-content, mws-message-part-content, "
+                ".text-msg, [data-e2e-message-text]"
+            )
             bubble_total = min(bubbles.count(), max_bubbles)
             for j in range(max(0, bubble_total - 4), bubble_total):
                 text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
