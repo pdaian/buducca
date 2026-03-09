@@ -400,6 +400,34 @@ def _find_message_bubbles(page: Any):
     return page.locator(fallback), "fallback-bubbles"
 
 
+def _expand_message_bubbles(page: Any, bubbles: Any, *, max_bubbles: int) -> int:
+    """Attempt to scroll message history so older lazy-loaded bubbles become available."""
+    try:
+        known_count = bubbles.count()
+    except Exception:
+        return 0
+    stable_rounds = 0
+    max_rounds = 50
+    while stable_rounds < 3 and max_rounds > 0:
+        if max_bubbles > 0 and known_count >= max_bubbles:
+            break
+        max_rounds -= 1
+        try:
+            if known_count > 0:
+                bubbles.nth(0).scroll_into_view_if_needed(timeout=800)
+            page.mouse.wheel(0, -2600)
+            page.wait_for_timeout(120)
+            current_count = bubbles.count()
+        except Exception:
+            break
+        if current_count <= known_count:
+            stable_rounds += 1
+            continue
+        known_count = current_count
+        stable_rounds = 0
+    return known_count
+
+
 def _wait_for_background_hydration(page: Any, *, wait_ms: int) -> None:
     """Give Google Messages time to finish post-load async rendering."""
     if wait_ms <= 0:
@@ -468,7 +496,9 @@ def receive_events(
             title = (row.inner_text(timeout=800) or "").strip().split("\n", 1)[0]
             page.wait_for_timeout(250)
             bubbles, bubble_selector = _find_message_bubbles(page)
-            bubble_count = bubbles.count()
+            bubble_count = _expand_message_bubbles(page, bubbles, max_bubbles=max_bubbles)
+            if bubble_count <= 0:
+                bubble_count = bubbles.count()
             bubble_total = bubble_count if max_bubbles <= 0 else min(bubble_count, max_bubbles)
             start_idx = max(0, bubble_count - bubble_total)
             logger.debug(

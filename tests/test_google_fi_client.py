@@ -229,6 +229,21 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         self.assertIs(rows, populated)
         self.assertEqual(selector, "[data-e2e-conversation-id]")
 
+
+    def test_expand_message_bubbles_scrolls_until_stable(self) -> None:
+        from messaging_llm_bot.google_fi_client import _expand_message_bubbles
+
+        page = Mock()
+        page.mouse = Mock()
+        bubbles = Mock()
+        bubbles.count.side_effect = [3, 6, 6, 6, 6]
+        bubbles.nth.return_value = Mock()
+
+        expanded = _expand_message_bubbles(page, bubbles, max_bubbles=0)
+
+        self.assertEqual(expanded, 6)
+        self.assertGreaterEqual(bubbles.nth.call_count, 1)
+
     def test_find_message_bubbles_prefers_first_non_empty_selector(self) -> None:
         from messaging_llm_bot.google_fi_client import _find_message_bubbles
 
