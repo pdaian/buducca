@@ -71,6 +71,45 @@ class GoogleFiCliErrorHandlingTests(unittest.TestCase):
                 _open_messages_page(BrowserOptions(workspace=Path("workspace")))
         self.assertIn("deviceDescriptors", str(ctx.exception))
 
+    def test_open_messages_page_falls_back_when_channel_unavailable(self) -> None:
+        from messaging_llm_bot.google_fi_client import BrowserOptions, _open_messages_page
+
+        context = Mock()
+        context.pages = [Mock()]
+
+        launch = Mock(side_effect=[Exception("Unsupported channel"), context])
+        chromium = Mock(launch_persistent_context=launch)
+        pw = Mock(chromium=chromium)
+        sync_pw = Mock()
+        sync_pw.return_value.start.return_value = pw
+        fake_sync_api = types.ModuleType("playwright.sync_api")
+        fake_sync_api.sync_playwright = sync_pw
+
+        with patch.dict("sys.modules", {"playwright": types.ModuleType("playwright"), "playwright.sync_api": fake_sync_api}):
+            p, opened_context, page = _open_messages_page(BrowserOptions(workspace=Path("workspace")))
+
+        self.assertIs(p, pw)
+        self.assertIs(opened_context, context)
+        self.assertIs(page, context.pages[0])
+        self.assertEqual(launch.call_count, 2)
+        first_kwargs = launch.call_args_list[0].kwargs
+        second_kwargs = launch.call_args_list[1].kwargs
+        self.assertEqual(first_kwargs["channel"], "chrome")
+        self.assertNotIn("channel", second_kwargs)
+
+    def test_ensure_logged_in_reports_google_secure_browser_block(self) -> None:
+        from messaging_llm_bot import google_fi_client
+
+        page = Mock()
+        page.wait_for_selector.side_effect = Exception("not logged in")
+        secure_banner = Mock()
+        secure_banner.count.return_value = 1
+        page.locator.return_value = secure_banner
+
+        with self.assertRaises(google_fi_client.GoogleFiAutomationError) as ctx:
+            google_fi_client._ensure_logged_in(page, 15000, headful=False, signup_wait_ms=0)
+        self.assertIn("insecure browser", str(ctx.exception).lower())
+
     def test_main_returns_nonzero_for_frontend_unavailable(self) -> None:
         from messaging_llm_bot import google_fi_client
 

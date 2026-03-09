@@ -39,6 +39,12 @@ class BrowserOptions:
     workspace: Path
     headless: bool = True
     timeout_ms: int = 15000
+    browser_channel: str | None = "chrome"
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    )
 
     @property
     def profile_dir(self) -> Path:
@@ -175,7 +181,21 @@ def _open_messages_page(options: BrowserOptions):
     options.profile_dir.mkdir(parents=True, exist_ok=True)
     try:
         p = sync_playwright().start()
-        context = p.chromium.launch_persistent_context(str(options.profile_dir), headless=options.headless)
+        launch_kwargs: dict[str, Any] = {
+            "headless": options.headless,
+            "user_agent": options.user_agent,
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        if options.browser_channel:
+            launch_kwargs["channel"] = options.browser_channel
+        try:
+            context = p.chromium.launch_persistent_context(str(options.profile_dir), **launch_kwargs)
+        except Exception as exc:
+            if options.browser_channel and "channel" in str(exc).lower():
+                launch_kwargs.pop("channel", None)
+                context = p.chromium.launch_persistent_context(str(options.profile_dir), **launch_kwargs)
+            else:
+                raise
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(GOOGLE_MESSAGES_URL, wait_until="domcontentloaded", timeout=options.timeout_ms)
         return p, context, page
@@ -210,6 +230,16 @@ def _ensure_logged_in(page, timeout_ms: int, *, headful: bool = False, signup_wa
                 return
             except Exception:
                 pass
+    blocked_by_browser_security = False
+    try:
+        blocked_by_browser_security = int(page.locator("text=This browser or app may not be secure").count()) > 0
+    except Exception:
+        blocked_by_browser_security = False
+    if blocked_by_browser_security:
+        raise GoogleFiAutomationError(
+            "Google blocked this login as an insecure browser. "
+            "Run in --headful mode and ensure Google Chrome is installed so Playwright can use a standard Chrome profile."
+        )
     raise GoogleFiAutomationError("Google Messages is not logged in or UI changed. Run with --headful once and login.")
 
 
