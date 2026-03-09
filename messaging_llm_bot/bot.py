@@ -24,6 +24,7 @@ from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import IncomingMessage, TelegramClient
 from .telegram_user_client import TelegramUserClient
 from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
+from .google_fi_client import GoogleFiClient, GoogleFiFrontendUnavailableError
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _MAX_SKILL_PARSE_CHARS = 20_000
@@ -61,6 +62,10 @@ class BotRunner:
             receive_command=config.whatsapp.receive_command,
             send_command=config.whatsapp.send_command,
         ) if config.whatsapp else None
+        self.google_fi = GoogleFiClient(
+            receive_command=config.google_fi.receive_command,
+            send_command=config.google_fi.send_command,
+        ) if config.google_fi else None
         self.llm = OpenAICompatibleClient(
             config=config.llm,
             http_client=http_client,
@@ -90,6 +95,7 @@ class BotRunner:
         self._telegram_retry_after: float | None = None
         self._signal_frontend_disabled = False
         self._whatsapp_frontend_disabled = False
+        self._google_fi_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
         self._history: dict[Any, Deque[dict[str, str]]] = defaultdict(
@@ -100,10 +106,13 @@ class BotRunner:
         self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
         self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
         self._workspace.write_text("logs/whatsapp.history", self._workspace.read_text("logs/whatsapp.history", default=""))
+        self._workspace.write_text("logs/google_fi.history", self._workspace.read_text("logs/google_fi.history", default=""))
         self._workspace.write_text("logs/agenta_queries.history", self._workspace.read_text("logs/agenta_queries.history", default=""))
         self._workspace.write_text("telegram.recent", self._workspace.read_text("telegram.recent", default=""))
         self._workspace.write_text("signal.messages.recent", self._workspace.read_text("signal.messages.recent", default=""))
         self._workspace.write_text("whatsapp.messages.recent", self._workspace.read_text("whatsapp.messages.recent", default=""))
+        self._workspace.write_text("google_fi.messages.recent", self._workspace.read_text("google_fi.messages.recent", default=""))
+        self._workspace.write_text("google_fi.calls.recent", self._workspace.read_text("google_fi.calls.recent", default=""))
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
 
     @property
@@ -195,6 +204,8 @@ class BotRunner:
                 poll_interval = max(poll_interval, self.config.signal.poll_interval_seconds)
             if self.config.whatsapp:
                 poll_interval = max(poll_interval, self.config.whatsapp.poll_interval_seconds)
+            if self.config.google_fi:
+                poll_interval = max(poll_interval, self.config.google_fi.poll_interval_seconds)
             time.sleep(poll_interval)
 
     def _poll_frontends_once(self) -> None:
@@ -258,6 +269,14 @@ class BotRunner:
             except WhatsAppFrontendUnavailableError as exc:
                 self._whatsapp_frontend_disabled = True
                 logging.warning("%s; continuing without whatsapp frontend", exc)
+
+        if self.google_fi and not self._google_fi_frontend_disabled:
+            try:
+                for update in self.google_fi.get_updates():
+                    self._handle_update(update)
+            except GoogleFiFrontendUnavailableError as exc:
+                self._google_fi_frontend_disabled = True
+                logging.warning("%s; continuing without google_fi frontend", exc)
 
     @staticmethod
     def _is_telegram_conflict_error(exc: RuntimeError) -> bool:
@@ -771,6 +790,8 @@ class BotRunner:
             return bool(self.config.signal.read_only)
         if backend == "whatsapp" and self.config.whatsapp:
             return bool(self.config.whatsapp.read_only)
+        if backend == "google_fi" and self.config.google_fi:
+            return bool(self.config.google_fi.read_only)
         return False
 
     def _backend_stores_unanswered_messages(self, backend: str) -> bool:
@@ -780,6 +801,8 @@ class BotRunner:
             return bool(self.config.signal.store_unanswered_messages)
         if backend == "whatsapp" and self.config.whatsapp:
             return bool(self.config.whatsapp.store_unanswered_messages)
+        if backend == "google_fi" and self.config.google_fi:
+            return bool(self.config.google_fi.store_unanswered_messages)
         return False
 
     def _append_unanswered_collector_log(
@@ -836,6 +859,21 @@ class BotRunner:
                 "text": text,
             }
             self._workspace.append_text("whatsapp.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            return
+
+        if backend == "google_fi":
+            payload = {
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "source": "frontend_log",
+                "account": self.config.google_fi.account if self.config.google_fi else "default",
+                "direction": "incoming",
+                "conversation_id": conversation_id,
+                "sender": sender_id,
+                "sender_name": sender_name,
+                "sender_contact": sender_contact or sender_id,
+                "text": text,
+            }
+            self._workspace.append_text("google_fi.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _append_agenta_query_log(
         self,
@@ -894,6 +932,18 @@ class BotRunner:
             self.whatsapp.send_message(conversation_id, text)
             self._append_frontend_log(
                 backend="whatsapp",
+                direction="outgoing",
+                conversation_id=conversation_id,
+                sender_id="bot",
+                text=text,
+            )
+            return
+        if backend == "google_fi":
+            if not self.google_fi:
+                raise RuntimeError("Google Fi frontend is not configured")
+            self.google_fi.send_message(conversation_id, text)
+            self._append_frontend_log(
+                backend="google_fi",
                 direction="outgoing",
                 conversation_id=conversation_id,
                 sender_id="bot",
@@ -1030,6 +1080,20 @@ class BotRunner:
                 sender_name=sender_name,
                 sender_contact=sender_contact,
             )
+            if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
+                payload = {
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    "source": "frontend_log",
+                    "account": self.config.google_fi.account if self.config.google_fi else "default",
+                    "direction": "incoming",
+                    "conversation_id": conversation_id,
+                    "sender": sender_id,
+                    "sender_name": sender_name,
+                    "sender_contact": sender_contact or sender_id,
+                    "text": update.text,
+                }
+                self._workspace.append_text("google_fi.calls.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+                return
             if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
                 self._append_unanswered_collector_log(
                     backend=backend,
