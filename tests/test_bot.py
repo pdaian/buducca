@@ -1444,6 +1444,62 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 1)
 
+    def test_google_fi_unanswered_messages_are_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                    allowed_sender_ids=["+15551112222"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.llm = DummyLLM("hello")
+
+            update = IncomingMessage(
+                update_id=1,
+                backend="google_fi",
+                conversation_id="thread-1",
+                sender_id="+15553334444",
+                text="collect me",
+            )
+            bot._handle_update(update)
+            bot._handle_update(update)
+
+            recent_lines = [
+                line for line in (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            self.assertEqual(len(recent_lines), 1)
+
+    def test_google_fi_timeout_is_stored_as_unprocessed_message(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot._send_message = lambda backend, conversation_id, text: None
+            bot.llm = TimeoutLLM()
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="google_fi",
+                    conversation_id="thread-1",
+                    sender_id="+15551112222",
+                    text="request that times out",
+                )
+            )
+
+            recent = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8")
+            self.assertIn("request that times out", recent)
+
 
 if __name__ == "__main__":
     unittest.main()
