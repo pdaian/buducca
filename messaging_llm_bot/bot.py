@@ -442,6 +442,12 @@ class BotRunner:
 
         return "\n".join(summarized).strip() or skill_result
 
+    def _reply_would_split(self, text: str) -> bool:
+        return len(text) > self.config.runtime.max_reply_chunk_chars
+
+    def _done_flag_was_explicit(self, model_reply: str) -> bool:
+        return bool(re.search(r'"done"\s*:', model_reply))
+
     def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
         model_reply = initial_model_reply
         for step_index in range(_MAX_SKILL_CHAIN_STEPS):
@@ -449,13 +455,17 @@ class BotRunner:
             if not skill_call:
                 return model_reply
 
+            done_was_explicit = self._done_flag_was_explicit(model_reply)
+
             raw_skill_result = self._strip_think_blocks(
                 self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
             )
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
             requires_llm_response = self._skill_requires_llm_response(skill_call["name"])
+            long_skill_output = self._reply_would_split(raw_skill_result)
+            should_force_follow_up_call = long_skill_output and (not skill_call["done"] or not done_was_explicit)
 
-            if skill_call["done"] and not requires_llm_response:
+            if skill_call["done"] and not requires_llm_response and not should_force_follow_up_call:
                 return raw_skill_result
 
             prompt.append({"role": "assistant", "content": model_reply})
@@ -465,7 +475,7 @@ class BotRunner:
                     "content": self._continue_skill_chain_prompt(
                         skill_call["name"],
                         raw_skill_result,
-                        allow_follow_up_skill=not skill_call["done"],
+                        allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
                     ),
                 }
             )
@@ -481,7 +491,7 @@ class BotRunner:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
                     summarized_skill_result,
-                    allow_follow_up_skill=not skill_call["done"],
+                    allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
                 )
             if self._debug_enabled:
                 logging.debug(

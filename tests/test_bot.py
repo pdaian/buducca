@@ -984,6 +984,22 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot._history[1][1]["content"], "Here is the summary from search.")
         self.assertNotIn("<html><body>Huge page</body></html>", bot._history[1][1]["content"])
 
+    def test_skill_call_without_done_requeries_for_long_output(self) -> None:
+        bot = self.make_bot()
+        bot.llm = SequentialLLM(
+            [
+                '{"skill_call": {"name": "web_search", "args": {"query": "x"}}}',
+                "summarized",
+            ]
+        )
+        bot._run_skill_call = lambda *_args, **_kwargs: "x" * 5000
+
+        prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "search"}]
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+
+        self.assertEqual(reply, "summarized")
+        self.assertEqual(bot.llm.calls, 2)
+
     def test_skill_call_chain_logs_intermediate_prompt_and_response_on_debug(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
