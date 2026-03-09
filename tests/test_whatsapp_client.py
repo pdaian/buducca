@@ -51,6 +51,15 @@ class WhatsAppClientTests(unittest.TestCase):
 
         self.assertEqual(normalized, ["python3", str(script_path)])
 
+    def test_get_updates_missing_python_script_raises_frontend_unavailable(self) -> None:
+        client = WhatsAppClient(
+            receive_command=["python3", "/tmp/missing_whatsapp_receive.py"],
+            send_command=["python3", "send.py"],
+        )
+        with patch("messaging_llm_bot.whatsapp_client.which", return_value="/usr/bin/python3"):
+            with self.assertRaises(WhatsAppFrontendUnavailableError):
+                client.get_updates()
+
 
 if __name__ == "__main__":
     unittest.main()
