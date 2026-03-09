@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Buducca // Cyberpunk Terminal</title>
+  <style>
+    :root {
+      --bg: #06080f;
+      --panel: #0b1020;
+      --line: #1ef2ff;
+      --line-dim: rgba(30, 242, 255, 0.35);
+      --accent: #ff4fd8;
+      --text: #bbf7ff;
+      --muted: #7ed6df;
+      --warn: #ffd166;
+      --ok: #72f1b8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Fira Code", "JetBrains Mono", Consolas, monospace;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(30, 242, 255, 0.12), transparent 40%),
+        radial-gradient(circle at 80% 10%, rgba(255, 79, 216, 0.09), transparent 35%),
+        linear-gradient(180deg, #04060c 0%, #070d18 100%);
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+    }
+
+    .terminal {
+      width: min(960px, 100%);
+      border: 1px solid var(--line-dim);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(11,16,32,0.9), rgba(5,10,20,0.95));
+      box-shadow:
+        0 0 0 1px rgba(255, 79, 216, 0.15) inset,
+        0 0 30px rgba(30, 242, 255, 0.15),
+        0 0 70px rgba(255, 79, 216, 0.08);
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.8rem 1rem;
+      border-bottom: 1px solid var(--line-dim);
+      background: rgba(0,0,0,0.25);
+      letter-spacing: 0.04em;
+      font-size: 0.9rem;
+    }
+
+    .lights {
+      display: inline-flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      opacity: 0.85;
+    }
+
+    .dot:nth-child(1) { background: #ff5f56; }
+    .dot:nth-child(2) { background: #ffbd2e; }
+    .dot:nth-child(3) { background: #27c93f; }
+
+    .terminal-body {
+      padding: 1.4rem;
+      display: grid;
+      gap: 1.2rem;
+      line-height: 1.55;
+    }
+
+    .prompt::before {
+      content: "> ";
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    h1, h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--line);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    p {
+      margin: 0.2rem 0 0;
+      color: var(--text);
+    }
+
+    ul {
+      margin: 0.4rem 0 0;
+      padding-left: 1.2rem;
+      color: var(--muted);
+    }
+
+    li { margin-bottom: 0.35rem; }
+
+    a {
+      color: var(--ok);
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(114, 241, 184, 0.45);
+    }
+
+    a:hover {
+      color: #b4ffd9;
+      border-bottom-color: rgba(180, 255, 217, 0.8);
+    }
+
+    .codeblock {
+      margin-top: 0.45rem;
+      padding: 0.75rem 0.9rem;
+      background: rgba(5, 8, 15, 0.7);
+      border: 1px solid rgba(30, 242, 255, 0.3);
+      border-radius: 8px;
+      color: var(--warn);
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .cursor {
+      display: inline-block;
+      width: 0.6ch;
+      margin-left: 0.2ch;
+      background: var(--line);
+      animation: blink 1s steps(2, start) infinite;
+      transform: translateY(2px);
+    }
+
+    @keyframes blink {
+      to { opacity: 0; }
+    }
+
+    .footer {
+      margin-top: 0.4rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="terminal" role="main" aria-label="Buducca cyberpunk info page">
+    <header class="terminal-header">
+      <span class="lights" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
+      <span>BUDUCCA_TERMINAL_v1.0</span>
+      <span>SECURE_LINK::ONLINE</span>
+    </header>
+
+    <section class="terminal-body">
+      <div>
+        <h1 class="prompt">buducca://overview</h1>
+        <p>Modular messaging AI framework for building autonomous chat assistants across Telegram, Signal, and WhatsApp with pluggable skills and collectors.</p>
+      </div>
+
+      <div>
+        <h2 class="prompt">network-links</h2>
+        <ul>
+          <li>GitHub: <a href="https://github.com/" target="_blank" rel="noreferrer noopener">https://github.com/your-org/buducca</a></li>
+          <li>Telegram: <a href="https://t.me/" target="_blank" rel="noreferrer noopener">https://t.me/your_buducca_channel</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h2 class="prompt">use-cases</h2>
+        <ul>
+          <li>Automate daily summaries from Gmail, Slack, and calendar collectors.</li>
+          <li>Run a personal ops assistant via Telegram with command-based skills.</li>
+          <li>Create customer-support copilots that query workspace knowledge.</li>
+          <li>Trigger workflows from chat events and summarize outcomes instantly.</li>
+          <li>Prototype multi-channel AI agents with shared logic and adapters.</li>
+        </ul>
+      </div>
+
+      <div>
+        <h2 class="prompt">quickstart</h2>
+        <div class="codeblock">python run_bot.py --config config.json</div>
+        <p class="footer">Initialize your config, connect provider keys, then run the bot command above.<span class="cursor" aria-hidden="true"></span></p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
