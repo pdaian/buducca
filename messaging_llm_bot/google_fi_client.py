@@ -400,9 +400,18 @@ def _find_message_bubbles(page: Any):
     return page.locator(fallback), "fallback-bubbles"
 
 
+def _wait_for_background_hydration(page: Any, *, wait_ms: int) -> None:
+    """Give Google Messages time to finish post-load async rendering."""
+    if wait_ms <= 0:
+        return
+    logger.debug("Waiting %sms for post-load background hydration", wait_ms)
+    page.wait_for_timeout(wait_ms)
+
+
 def receive_events(
     *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
     max_conversations: int = 0, max_bubbles: int = 0, dry_run: bool = False, signup_wait_seconds: int = 300,
+    post_load_wait_ms: int = 2000,
 ) -> dict[str, list[dict[str, str]]]:
     if dry_run:
         logger.info("google_fi receive running in dry-run mode")
@@ -427,6 +436,7 @@ def receive_events(
     try:
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
         _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
+        _wait_for_background_hydration(page, wait_ms=max(0, post_load_wait_ms))
 
         rows, selector = _find_conversation_rows(page)
         row_count = _expand_conversation_rows(page, rows, max_conversations=max_conversations)
@@ -597,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
     recv.add_argument("--headful", action="store_true")
     recv.add_argument("--max-conversations", type=int, default=0)
     recv.add_argument("--max-bubbles", type=int, default=0)
+    recv.add_argument("--post-load-wait-ms", type=int, default=2000)
     recv.add_argument("--signup-wait-seconds", type=int, default=300)
     recv.add_argument("--dry-run", action="store_true")
     recv.add_argument("--verbose", action="store_true")
@@ -613,6 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_messages = sub.add_parser("list-messages")
     list_messages.add_argument("--workspace", default="workspace")
     list_messages.add_argument("--headful", action="store_true")
+    list_messages.add_argument("--post-load-wait-ms", type=int, default=2000)
     list_messages.add_argument("--signup-wait-seconds", type=int, default=300)
     list_messages.add_argument("--dry-run", action="store_true")
     list_messages.add_argument("--verbose", action="store_true")
@@ -637,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_bubbles=args.max_bubbles,
                 dry_run=args.dry_run,
                 signup_wait_seconds=args.signup_wait_seconds,
+                post_load_wait_ms=args.post_load_wait_ms,
             )
             print(json.dumps(payload, ensure_ascii=False))
             return 0
@@ -658,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             headful=args.headful,
             dry_run=args.dry_run,
             signup_wait_seconds=args.signup_wait_seconds,
+            post_load_wait_ms=args.post_load_wait_ms,
         )
         for item in payload.get("messages", []):
             sender = item.get("sender_name") or item.get("sender_id") or "unknown"

@@ -161,6 +161,16 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(args.max_conversations, 0)
         self.assertEqual(args.max_bubbles, 0)
+        self.assertEqual(args.post_load_wait_ms, 2000)
+
+    def test_wait_for_background_hydration_skips_nonpositive_wait(self) -> None:
+        from messaging_llm_bot.google_fi_client import _wait_for_background_hydration
+
+        page = Mock()
+
+        _wait_for_background_hydration(page, wait_ms=0)
+
+        page.wait_for_timeout.assert_not_called()
 
     def test_expand_conversation_rows_scrolls_until_stable(self) -> None:
         from messaging_llm_bot.google_fi_client import _expand_conversation_rows
