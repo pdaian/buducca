@@ -69,5 +69,6 @@ Configure `google_fi` in `config.json` with external receive/send commands for h
 - `receive_command` must output JSON as either a list of message objects or an object with `messages` and optional `calls` arrays.
 - `send_command` supports `{recipient}` and `{message}` placeholders.
 - Call events from `calls` are persisted to `google_fi.calls.recent` in the workspace.
+- Starter scripts now exist at `scripts/google_fi_receive.py` and `scripts/google_fi_send.py`; these are file-queue bridges, not direct browser automation.
 
 Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.
