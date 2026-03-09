@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from shutil import which
 from typing import Any
 
@@ -25,6 +26,7 @@ class WhatsAppFrontendUnavailableError(RuntimeError):
 class WhatsAppClient:
     GROUP_CONVERSATION_PREFIX = "group:"
     GROUP_ID_DELIMITER = "|"
+    LEGACY_REPO_ROOT = Path("/home/ai/buducca")
 
     def __init__(
         self,
@@ -34,6 +36,29 @@ class WhatsAppClient:
         self.receive_command = receive_command
         self.send_command = send_command
         self._update_counter = 0
+        self._repo_root = Path(__file__).resolve().parent.parent
+
+    def _normalize_command_paths(self, command: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for part in command:
+            candidate = Path(part)
+            if candidate.is_absolute() and str(candidate).startswith(str(self.LEGACY_REPO_ROOT)) and not candidate.exists():
+                try:
+                    suffix = candidate.relative_to(self.LEGACY_REPO_ROOT)
+                except ValueError:
+                    normalized.append(part)
+                    continue
+                replacement = self._repo_root / suffix
+                normalized.append(str(replacement) if replacement.exists() else part)
+                continue
+
+            if not candidate.is_absolute() and "/" in part and not candidate.exists():
+                replacement = self._repo_root / candidate
+                normalized.append(str(replacement) if replacement.exists() else part)
+                continue
+
+            normalized.append(part)
+        return normalized
 
     def _validate_receive_command(self) -> None:
         if not self.receive_command:
@@ -56,7 +81,7 @@ class WhatsAppClient:
     def get_updates(self) -> list[IncomingMessage]:
         self._validate_receive_command()
         try:
-            proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
+            proc = subprocess.run(self._normalize_command_paths(self.receive_command), capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
             raise WhatsAppFrontendUnavailableError(
                 f"WhatsApp frontend disabled: executable {exc.filename!r} was not found"
@@ -126,6 +151,7 @@ class WhatsAppClient:
     def send_message(self, recipient: str, text: str) -> None:
         self._validate_send_command()
         command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
+        command = self._normalize_command_paths(command)
         try:
             proc = subprocess.run(command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
