@@ -154,6 +154,28 @@ class GoogleFiCliErrorHandlingTests(unittest.TestCase):
 
 
 class GoogleFiConversationParsingTests(unittest.TestCase):
+    def test_receive_parser_defaults_to_exhaustive_scanning(self) -> None:
+        from messaging_llm_bot.google_fi_client import build_parser
+
+        args = build_parser().parse_args(["receive"])
+
+        self.assertEqual(args.max_conversations, 0)
+        self.assertEqual(args.max_bubbles, 0)
+
+    def test_expand_conversation_rows_scrolls_until_stable(self) -> None:
+        from messaging_llm_bot.google_fi_client import _expand_conversation_rows
+
+        page = Mock()
+        page.mouse = Mock()
+        rows = Mock()
+        rows.count.side_effect = [2, 4, 4, 4, 4]
+        rows.nth.return_value = Mock()
+
+        expanded = _expand_conversation_rows(page, rows, max_conversations=0)
+
+        self.assertEqual(expanded, 4)
+        self.assertGreaterEqual(rows.nth.call_count, 1)
+
     def test_extract_conversation_id_from_row_ignores_new_conversation(self) -> None:
         from messaging_llm_bot.google_fi_client import _extract_conversation_id_from_row
 
