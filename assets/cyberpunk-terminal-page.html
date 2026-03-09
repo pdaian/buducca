@@ -154,16 +154,36 @@
   <main class="terminal" role="main" aria-label="Buducca cyberpunk info page">
     <header class="terminal-header">
       <span class="lights" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
-      <span>BUDUCCA_TERMINAL_v1.0</span>
+      <span>BUDUCCA_TERMINAL_v1.1</span>
       <span>SECURE_LINK::ONLINE</span>
     </header>
 
     <section class="terminal-body">
       <div>
         <h1 class="prompt">buducca://overview</h1>
-        <p>Modular messaging AI framework for building autonomous chat assistants across Telegram, Signal, and WhatsApp with pluggable skills and collectors.</p>
+        <p>Buducca is a messaging-native AI framework: one assistant core, many channels, and real-world automation through pluggable collectors and skills.</p>
       </div>
 
+
+      <div>
+        <h2 class="prompt">what-is-unique</h2>
+        <ul>
+          <li><strong>Messaging-first by design</strong>: built around Telegram, Signal, and WhatsApp instead of forcing web app patterns into chat.</li>
+          <li><strong>Unified assistant core</strong>: channel adapters share the same orchestration layer, so behavior stays consistent across platforms.</li>
+          <li><strong>Skill + collector architecture</strong>: combine actions (skills) with live context sources (collectors) to keep responses useful and grounded.</li>
+          <li><strong>Operator-ready workflow</strong>: supports both simple bots and autonomous assistants without rewriting the stack.</li>
+        </ul>
+      </div>
+
+      <div>
+        <h2 class="prompt">capability-flexibility</h2>
+        <ul>
+          <li>Start lean with file/search/task skills, then add domain skills as needs evolve.</li>
+          <li>Swap or extend LLM providers and messaging clients while preserving the assistant logic.</li>
+          <li>Attach collectors for Gmail, Slack, Calendar, Twitter, or custom internal sources.</li>
+          <li>Compose capabilities into custom workflows: summarize, trigger, notify, and learn in one conversational loop.</li>
+        </ul>
+      </div>
       <div>
         <h2 class="prompt">network-links</h2>
         <ul>
@@ -173,7 +193,7 @@
       </div>
 
       <div>
-        <h2 class="prompt">use-cases</h2>
+        <h2 class="prompt">example-deployments</h2>
         <ul>
           <li>Automate daily summaries from Gmail, Slack, and calendar collectors.</li>
           <li>Run a personal ops assistant via Telegram with command-based skills.</li>
