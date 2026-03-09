@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 from html.parser import HTMLParser
+import json
 import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
@@ -14,15 +15,17 @@ REQUIRES_LLM_RESPONSE = True
 DESCRIPTION = (
     "Search the web with DuckDuckGo (no API key required). "
     "Args: query (required), max_pages_checked (optional, default 80), "
-    "min_pages_returned (optional, default 10). "
+    "min_pages_returned (optional, default 10), mode (optional: 'web' or 'video'). "
     "Returns title/url/snippet plus cleaned text for pages with non-trivial readable content."
 )
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
+_YOUTUBE_SEARCH_URL = "https://www.youtube.com/results"
 _DEFAULT_MAX_PAGES_CHECKED = 80
 _DEFAULT_MIN_PAGES_RETURNED = 10
 _DEFAULT_MAX_PAGE_CHARS = 2200
 _MIN_NON_TRIVIAL_TEXT_CHARS = 180
+_DEFAULT_MAX_VIDEO_RESULTS = 10
 
 _TEXT_BREAK_TAGS = {
     "p",
@@ -285,6 +288,79 @@ def _fetch_search_html(query: str) -> str:
         return response.read().decode(charset, errors="replace")
 
 
+def _fetch_youtube_search_html(query: str) -> str:
+    url = f"{_YOUTUBE_SEARCH_URL}?{urlencode({'search_query': query})}"
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; buducca-web-search-skill/1.0)",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=15) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
+
+
+def _iter_json_nodes(root: Any):
+    if isinstance(root, dict):
+        yield root
+        for value in root.values():
+            yield from _iter_json_nodes(value)
+    elif isinstance(root, list):
+        for value in root:
+            yield from _iter_json_nodes(value)
+
+
+def _extract_youtube_videos(html_payload: str, max_results: int) -> list[dict[str, str]]:
+    match = re.search(r"ytInitialData\s*=\s*(\{.*?\});", html_payload, flags=re.DOTALL)
+    if not match:
+        return []
+
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+
+    videos: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    for node in _iter_json_nodes(payload):
+        video_data = node.get("videoRenderer")
+        if not isinstance(video_data, dict):
+            continue
+        video_id = video_data.get("videoId")
+        if not isinstance(video_id, str) or not video_id or video_id in seen_ids:
+            continue
+
+        title_runs = (((video_data.get("title") or {}).get("runs")) or [])
+        title = ""
+        if isinstance(title_runs, list):
+            title = _normalize_text(" ".join(str(item.get("text", "")) for item in title_runs if isinstance(item, dict)))
+        if not title:
+            title = _normalize_text(str(((video_data.get("title") or {}).get("simpleText")) or ""))
+        if not title:
+            continue
+
+        snippet_runs = (((video_data.get("detailedMetadataSnippets") or [{}])[0].get("snippetText") or {}).get("runs")) or []
+        snippet = ""
+        if isinstance(snippet_runs, list):
+            snippet = _normalize_text(" ".join(str(item.get("text", "")) for item in snippet_runs if isinstance(item, dict)))
+
+        seen_ids.add(video_id)
+        videos.append(
+            {
+                "title": title,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "snippet": snippet,
+            }
+        )
+        if len(videos) >= max_results:
+            break
+
+    return videos
+
+
 def _extract_results(html_payload: str, max_results: int) -> list[dict[str, str]]:
     parser = _DuckDuckGoHTMLParser()
     parser.feed(html_payload)
@@ -327,8 +403,40 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     del workspace
 
     query = str(args.get("query", "")).strip()
+    mode = str(args.get("mode", "web")).strip().lower()
+    if mode not in {"web", "video"}:
+        return "Invalid arg `mode`. Supported values are `web` and `video`."
+
     if not query:
         return "Missing required arg `query`."
+
+    if mode == "video":
+        try:
+            max_video_results = int(args.get("max_video_results", _DEFAULT_MAX_VIDEO_RESULTS))
+        except (TypeError, ValueError):
+            max_video_results = _DEFAULT_MAX_VIDEO_RESULTS
+        max_video_results = max(1, min(50, max_video_results))
+
+        try:
+            payload = _fetch_youtube_search_html(query)
+        except Exception as exc:
+            return f"YouTube video search failed: {exc}"
+
+        videos = _extract_youtube_videos(payload, max_video_results)
+        if not videos:
+            return f"No YouTube videos found for query: {query}"
+
+        lines = [
+            f"YouTube video results for: {query}",
+            f"Returned {len(videos)} video result(s).",
+        ]
+        for idx, item in enumerate(videos, start=1):
+            lines.append(f"{idx}. {item['title']}")
+            lines.append(f"   URL: {item['url']}")
+            snippet = item.get("snippet", "")
+            if snippet:
+                lines.append(f"   Snippet: {snippet}")
+        return "\n".join(lines)
 
     try:
         max_pages_checked = int(args.get("max_pages_checked", _DEFAULT_MAX_PAGES_CHECKED))
@@ -353,6 +461,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return f"No results found for query: {query}"
 
     kept_results: list[tuple[dict[str, str], str]] = []
+    checked_results: list[dict[str, str]] = []
     pages_checked = 0
 
     for item in results:
@@ -360,6 +469,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             break
 
         pages_checked += 1
+        checked_results.append(item)
         try:
             page_html = _fetch_page_html(item["url"])
             page_text = _extract_readable_text(page_html)
@@ -371,10 +481,18 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             continue
 
     if not kept_results:
-        return (
+        lines = [
             f"DuckDuckGo results for: {query}\n"
             f"Checked {pages_checked} page(s), but none had non-trivial readable text."
-        )
+        ]
+        lines.append("Source links checked:")
+        for idx, item in enumerate(checked_results, start=1):
+            lines.append(f"{idx}. {item['title']}")
+            lines.append(f"   URL: {item['url']}")
+            snippet = item.get("snippet", "")
+            if snippet:
+                lines.append(f"   Snippet: {snippet}")
+        return "\n".join(lines)
 
     lines = [
         f"DuckDuckGo results for: {query}",
@@ -383,7 +501,16 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             f"{len(kept_results)} page(s) with non-trivial text after checking {pages_checked} page(s) "
             f"(target min_pages_returned={min_pages_returned}, max_pages_checked={max_pages_checked})."
         ),
+        "Source links checked:",
     ]
+    for idx, item in enumerate(checked_results, start=1):
+        lines.append(f"{idx}. {item['title']}")
+        lines.append(f"   URL: {item['url']}")
+        snippet = item.get("snippet", "")
+        if snippet:
+            lines.append(f"   Snippet: {snippet}")
+
+    lines.append("Pages with extracted non-trivial text:")
     for idx, (item, page_text) in enumerate(kept_results, start=1):
         lines.append(f"{idx}. {item['title']}")
         lines.append(f"   URL: {item['url']}")

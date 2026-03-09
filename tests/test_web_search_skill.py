@@ -49,6 +49,15 @@ _ESCAPED_HTML_TEXT_PAGE = """
 </html>
 """
 
+_YOUTUBE_SAMPLE_HTML = """
+<html><head><script>
+var ytInitialData = {"contents":{"twoColumnSearchResultsRenderer":{"primaryContents":{"sectionListRenderer":{"contents":[{"itemSectionRenderer":{"contents":[
+  {"videoRenderer":{"videoId":"abc123","title":{"runs":[{"text":"Video A title"}]},"detailedMetadataSnippets":[{"snippetText":{"runs":[{"text":"Video A snippet"}]}}]}},
+  {"videoRenderer":{"videoId":"def456","title":{"runs":[{"text":"Video B title"}]},"detailedMetadataSnippets":[{"snippetText":{"runs":[{"text":"Video B snippet"}]}}]}}
+]}}]}}}}};
+</script></head><body></body></html>
+"""
+
 
 def load_web_search_module():
     skill_path = Path("skills/web_search/__init__.py")
@@ -83,6 +92,8 @@ class WebSearchSkillTests(unittest.TestCase):
             self.assertIn("Snippet: Snippet A text.", result)
             self.assertIn("2. Example Result B", result)
             self.assertIn("Returned 2 page(s) with non-trivial text", result)
+            self.assertIn("Source links checked:", result)
+            self.assertIn("Pages with extracted non-trivial text:", result)
             self.assertIn("URL: https://example.com/b", result)
             self.assertIn("Snippet: Snippet B text.", result)
             self.assertIn("Page text:\nMock page text for https://example.com/a", result)
@@ -137,6 +148,21 @@ class WebSearchSkillTests(unittest.TestCase):
             self.assertEqual(observed.get("max_results"), 80)
             self.assertEqual(result, "No results found for query: defaults")
 
+    def test_returns_checked_links_even_when_no_page_has_non_trivial_text(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module._fetch_search_html = lambda query: _SAMPLE_HTML
+            self.module._fetch_page_html = lambda url: "<html><body><p>Short text</p></body></html>"
+
+            result = self.module.run(workspace, {"query": "thin content", "max_pages_checked": 2})
+
+            self.assertIn("Checked 2 page(s), but none had non-trivial readable text.", result)
+            self.assertIn("Source links checked:", result)
+            self.assertIn("1. Example Result A", result)
+            self.assertIn("URL: https://example.com/a", result)
+            self.assertIn("2. Example Result B", result)
+            self.assertIn("URL: https://example.com/b", result)
+
     def test_extract_readable_text_filters_scripts_and_noise(self) -> None:
         text = self.module._extract_readable_text(_SAMPLE_PAGE_HTML)
         self.assertIn("This paragraph contains human-readable text about the subject and should be kept.", text)
@@ -158,6 +184,30 @@ class WebSearchSkillTests(unittest.TestCase):
                 "This is a sufficiently long sample paragraph with many words that should definitely pass the non trivial content gate used by the web search skill before returning parsed page text to the user."
             )
         )
+
+    def test_video_mode_returns_youtube_results(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module._fetch_youtube_search_html = lambda query: _YOUTUBE_SAMPLE_HTML
+
+            result = self.module.run(workspace, {"query": "python async", "mode": "video", "max_video_results": 2})
+
+            self.assertIn("YouTube video results for: python async", result)
+            self.assertIn("Returned 2 video result(s).", result)
+            self.assertIn("1. Video A title", result)
+            self.assertIn("URL: https://www.youtube.com/watch?v=abc123", result)
+            self.assertIn("Snippet: Video A snippet", result)
+            self.assertIn("2. Video B title", result)
+            self.assertIn("URL: https://www.youtube.com/watch?v=def456", result)
+
+    def test_video_mode_handles_empty_results(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module._fetch_youtube_search_html = lambda query: "<html><body>No payload</body></html>"
+
+            result = self.module.run(workspace, {"query": "no videos", "mode": "video"})
+
+            self.assertEqual(result, "No YouTube videos found for query: no videos")
 
 
 if __name__ == "__main__":
