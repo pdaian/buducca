@@ -211,11 +211,12 @@ def _open_messages_page(options: BrowserOptions):
 
 
 def _ensure_logged_in(page, timeout_ms: int, *, headful: bool = False, signup_wait_ms: int = 300000) -> None:
+    ready_selector = (
+        "a[href*='/web/conversations/']:not([href*='/web/conversations/new']), "
+        "mws-conversation-list-item, [data-e2e-conversation-id], [data-thread-id]"
+    )
     try:
-        page.wait_for_selector(
-            "mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']",
-            timeout=timeout_ms,
-        )
+        page.wait_for_selector(ready_selector, timeout=timeout_ms)
         return
     except Exception:
         if headful and signup_wait_ms > 0:
@@ -225,10 +226,7 @@ def _ensure_logged_in(page, timeout_ms: int, *, headful: bool = False, signup_wa
                 file=sys.stderr,
             )
             try:
-                page.wait_for_selector(
-                    "mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']",
-                    timeout=signup_wait_ms,
-                )
+                page.wait_for_selector(ready_selector, timeout=signup_wait_ms)
                 return
             except Exception:
                 pass
@@ -296,6 +294,27 @@ def _parse_possible_call_state(text: str) -> str | None:
     return None
 
 
+def _conversation_row_selectors() -> list[str]:
+    return [
+        "mws-conversation-list-item",
+        "[data-e2e-conversation-id]",
+        "[data-thread-id]",
+        "[role='listitem']:has(a[href*='/web/conversations/'])",
+        "a[href*='/web/conversations/']:not([href*='/web/conversations/new'])",
+    ]
+
+
+def _find_conversation_rows(page: Any):
+    for selector in _conversation_row_selectors():
+        locator = page.locator(selector)
+        try:
+            if locator.count() > 0:
+                return locator, selector
+        except Exception:
+            logger.debug("Failed counting rows for selector %r", selector, exc_info=True)
+    return page.locator("a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"), "fallback-anchor"
+
+
 def receive_events(
     *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
     max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False, signup_wait_seconds: int = 300,
@@ -324,12 +343,15 @@ def receive_events(
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
         _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
 
-        rows = page.locator(
-            "mws-conversation-list-item, "
-            "a[href*='/web/conversations/']:not([href*='/web/conversations/new'])"
+        rows, selector = _find_conversation_rows(page)
+        row_count = rows.count()
+        total = min(row_count, max_conversations)
+        logger.info(
+            "google_fi receive conversation rows detected=%s scanning=%s selector=%s",
+            row_count,
+            total,
+            selector,
         )
-        total = min(rows.count(), max_conversations)
-        logger.info("google_fi receive conversation rows detected=%s scanning=%s", rows.count(), total)
         messages: list[dict[str, str]] = []
         calls: list[dict[str, str]] = []
         skipped_rows = 0

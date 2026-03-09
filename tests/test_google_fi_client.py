@@ -142,6 +142,27 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(_extract_conversation_id_from_row(row, 0), '12345')
 
+    def test_find_conversation_rows_prefers_first_non_empty_selector(self) -> None:
+        from messaging_llm_bot.google_fi_client import _find_conversation_rows
+
+        page = Mock()
+        empty = Mock()
+        empty.count.return_value = 0
+        populated = Mock()
+        populated.count.return_value = 3
+
+        def locator_side_effect(selector: str):
+            if selector == "[data-e2e-conversation-id]":
+                return populated
+            return empty
+
+        page.locator.side_effect = locator_side_effect
+
+        rows, selector = _find_conversation_rows(page)
+
+        self.assertIs(rows, populated)
+        self.assertEqual(selector, "[data-e2e-conversation-id]")
+
 
 if __name__ == "__main__":
     unittest.main()
