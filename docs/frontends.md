@@ -83,5 +83,6 @@ python3 -m messaging_llm_bot.google_fi_client receive --headful
 ```
 
 The first headful run is used to complete Google Messages login and save session state under `workspace/google_fi_browser_profile`.
+If login takes longer, increase the wait window with `--signup-wait-seconds` (default: `300`).
 
 Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.

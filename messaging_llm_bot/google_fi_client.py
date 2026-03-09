@@ -188,7 +188,7 @@ def _open_messages_page(options: BrowserOptions):
         raise
 
 
-def _ensure_logged_in(page, timeout_ms: int) -> None:
+def _ensure_logged_in(page, timeout_ms: int, *, headful: bool = False, signup_wait_ms: int = 300000) -> None:
     try:
         page.wait_for_selector(
             "mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']",
@@ -196,7 +196,20 @@ def _ensure_logged_in(page, timeout_ms: int) -> None:
         )
         return
     except Exception:
-        pass
+        if headful and signup_wait_ms > 0:
+            print(
+                "Google Messages is not logged in yet. "
+                "Complete login in the open browser window; waiting for conversations to appear...",
+                file=sys.stderr,
+            )
+            try:
+                page.wait_for_selector(
+                    "mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']",
+                    timeout=signup_wait_ms,
+                )
+                return
+            except Exception:
+                pass
     raise GoogleFiAutomationError("Google Messages is not logged in or UI changed. Run with --headful once and login.")
 
 
@@ -222,7 +235,7 @@ def _parse_possible_call_state(text: str) -> str | None:
 
 def receive_events(
     *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
-    max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False,
+    max_conversations: int = 12, max_bubbles: int = 20, dry_run: bool = False, signup_wait_seconds: int = 300,
 ) -> dict[str, list[dict[str, str]]]:
     if dry_run:
         return {"messages": [], "calls": []}
@@ -236,7 +249,7 @@ def receive_events(
     p = context = page = None
     try:
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
-        _ensure_logged_in(page, 15000)
+        _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
 
         rows = page.locator("mws-conversation-list-item, a[href*='/web/conversations/'], [aria-label*='Conversation']")
         total = min(rows.count(), max_conversations)
@@ -285,7 +298,9 @@ def receive_events(
                 p.stop()
 
 
-def send_via_browser(*, recipient: str, message: str, workspace: str = "workspace", headful: bool = False, dry_run: bool = False) -> dict[str, object]:
+def send_via_browser(
+    *, recipient: str, message: str, workspace: str = "workspace", headful: bool = False, dry_run: bool = False, signup_wait_seconds: int = 300,
+) -> dict[str, object]:
     if dry_run:
         return {"ok": True, "dry_run": True, "recipient": recipient}
 
@@ -294,7 +309,7 @@ def send_via_browser(*, recipient: str, message: str, workspace: str = "workspac
     p = context = page = None
     try:
         p, context, page = _open_messages_page(BrowserOptions(workspace=workspace_path, headless=not headful))
-        _ensure_logged_in(page, 15000)
+        _ensure_logged_in(page, 15000, headful=headful, signup_wait_ms=max(0, signup_wait_seconds) * 1000)
         for selector in ["input[type='search']", "input[aria-label*='To']", "input[aria-label*='Search']", "textarea[aria-label*='To']"]:
             loc = page.locator(selector)
             if loc.count() == 0:
@@ -366,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     recv.add_argument("--headful", action="store_true")
     recv.add_argument("--max-conversations", type=int, default=12)
     recv.add_argument("--max-bubbles", type=int, default=20)
+    recv.add_argument("--signup-wait-seconds", type=int, default=300)
     recv.add_argument("--dry-run", action="store_true")
 
     send = sub.add_parser("send")
@@ -373,11 +389,13 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--message", required=True)
     send.add_argument("--workspace", default="workspace")
     send.add_argument("--headful", action="store_true")
+    send.add_argument("--signup-wait-seconds", type=int, default=300)
     send.add_argument("--dry-run", action="store_true")
 
     list_messages = sub.add_parser("list-messages")
     list_messages.add_argument("--workspace", default="workspace")
     list_messages.add_argument("--headful", action="store_true")
+    list_messages.add_argument("--signup-wait-seconds", type=int, default=300)
     list_messages.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -393,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_conversations=args.max_conversations,
                 max_bubbles=args.max_bubbles,
                 dry_run=args.dry_run,
+                signup_wait_seconds=args.signup_wait_seconds,
             )
             print(json.dumps(payload, ensure_ascii=False))
             return 0
@@ -404,11 +423,17 @@ def main(argv: list[str] | None = None) -> int:
                 workspace=args.workspace,
                 headful=args.headful,
                 dry_run=args.dry_run,
+                signup_wait_seconds=args.signup_wait_seconds,
             )
             print(json.dumps(payload, ensure_ascii=False))
             return 0
 
-        payload = receive_events(workspace=args.workspace, headful=args.headful, dry_run=args.dry_run)
+        payload = receive_events(
+            workspace=args.workspace,
+            headful=args.headful,
+            dry_run=args.dry_run,
+            signup_wait_seconds=args.signup_wait_seconds,
+        )
         for item in payload.get("messages", []):
             sender = item.get("sender_name") or item.get("sender_id") or "unknown"
             print(f"{sender}: {item.get('text', '')}")
