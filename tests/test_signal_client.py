@@ -279,6 +279,13 @@ class SignalClientTests(unittest.TestCase):
             check=False,
         )
 
+    def test_send_message_skips_blank_text(self) -> None:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            client = SignalClient(account="+15551230000")
+            client.send_message("+15551230000", "   ")
+
+        run.assert_not_called()
+
     def test_raises_when_signal_cli_missing(self) -> None:
         client = SignalClient(account="+15551230000")
 
