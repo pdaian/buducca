@@ -12,21 +12,11 @@ from pathlib import Path
 from shutil import which
 from typing import Any
 
+from .interfaces import IncomingMessage
+
 GOOGLE_MESSAGES_URL = "https://messages.google.com/web/conversations"
 logger = logging.getLogger(__name__)
 _PHONE_PATTERN = re.compile(r"\+?[\d\s().-]{7,}")
-
-
-@dataclass
-class IncomingMessage:
-    update_id: int
-    backend: str
-    conversation_id: str
-    sender_id: str
-    text: str | None = None
-    sender_name: str | None = None
-    sender_contact: str | None = None
-    event_type: str = "message"
 
 
 class GoogleFiFrontendUnavailableError(RuntimeError):
