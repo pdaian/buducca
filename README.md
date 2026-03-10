@@ -4,7 +4,7 @@
 
 # BUDUCCA — Private, local-first personal assistant 🤖
 
-Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small Python codebase you can actually read in an afternoon.
+Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small Python codebase you can actually read in an afternoon, while keeping local-model reasoning under your control.
 
 [![Join the BUDUCCA Telegram](https://img.shields.io/badge/Join%20our%20Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/buducca)
 
@@ -20,10 +20,10 @@ Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small
 
 ## Why it feels different
 
-- **Local-first by default:** data and automation stay on your machine.
+- **Local-first by default:** data, automation, and local-model reasoning stay on your machine for stronger data sovereignty.
 - **Simple plugin model:** skills, collectors, and compressors are regular Python modules, loaded dynamically from disk.
 - **Readable architecture:** no giant framework, no hidden telemetry pipeline, no required cloud backend.
-- **Hackable workflows:** every meaningful behavior is configurable with JSON + Python.
+- **Hackable workflows:** every meaningful behavior is configurable with JSON + Python, including how local models reason over your data.
 
 ## Quick start
 
@@ -53,4 +53,3 @@ Google Fi CLI: `python3 -m messaging_llm_bot.google_fi_client --help`
 - `skills/<name>/README.md`
 - `collectors/<name>/README.md`
 - `compressors/<name>/README.md`
-
