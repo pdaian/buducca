@@ -495,7 +495,7 @@ class BotRunner:
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
             requires_llm_response = self._skill_requires_llm_response(skill_call["name"])
             long_skill_output = self._reply_would_split(raw_skill_result)
-            should_force_follow_up_call = long_skill_output and (not skill_call["done"] or not done_was_explicit)
+            should_force_follow_up_call = long_skill_output
 
             if skill_call["done"] and not requires_llm_response and not should_force_follow_up_call:
                 return raw_skill_result
