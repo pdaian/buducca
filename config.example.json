@@ -48,12 +48,18 @@
     "allowed_sender_ids": [],
     "allowed_group_ids_when_sender_not_allowed": [],
     "receive_command": [
-      "whatsapp-receive-json",
+      "python3",
+      "-m",
+      "messaging_llm_bot.whatsapp_client",
+      "receive",
       "--account",
       "personal"
     ],
     "send_command": [
-      "whatsapp-send-json",
+      "python3",
+      "-m",
+      "messaging_llm_bot.whatsapp_client",
+      "send",
       "--account",
       "personal",
       "--recipient",
