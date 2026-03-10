@@ -144,6 +144,55 @@ class LoadingTests(unittest.TestCase):
             collectors[0].run(ws)
             self.assertEqual(ws.read_text("collector.txt"), "fresh")
 
+    def test_collector_manager_load_manifests_only_includes_enabled_and_loadable_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            collectors_dir = Path(td) / "collectors"
+            collectors_dir.mkdir()
+            (collectors_dir / "good.py").write_text(
+                textwrap.dedent(
+                    """
+                    NAME = "good"
+                    DESCRIPTION = "Good collector"
+                    GENERATED_FILES = ["good.recent"]
+                    FILE_STRUCTURE = ["collectors/good.py", "collectors/good/README.md"]
+
+                    def create_collector(config):
+                        def run(workspace):
+                            return None
+                        return {
+                            "name": "good",
+                            "description": DESCRIPTION,
+                            "interval_seconds": 5,
+                            "generated_files": GENERATED_FILES,
+                            "file_structure": FILE_STRUCTURE,
+                            "run": run,
+                        }
+                    """
+                ),
+                encoding="utf-8",
+            )
+            (collectors_dir / "disabled.py").write_text(
+                "def run(workspace):\n    return None\n",
+                encoding="utf-8",
+            )
+            (collectors_dir / "broken.py").write_text(
+                "raise RuntimeError('boom')\n",
+                encoding="utf-8",
+            )
+
+            manager = CollectorManager(
+                collectors_dir,
+                config={
+                    "disabled": {"enabled": False},
+                },
+            )
+
+            manifests = manager.load_manifests()
+
+            self.assertEqual([manifest.name for manifest in manifests], ["good"])
+            self.assertEqual(manifests[0].generated_files, ["good.recent"])
+            self.assertEqual(manifests[0].description, "Good collector")
+
     def test_collector_manager_reflects_deleted_package_collector(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             collectors_dir = Path(td) / "collectors"
