@@ -124,6 +124,7 @@ class BotRunner:
             "signal.messages.recent": set(),
             "whatsapp.messages.recent": set(),
             "google_fi.messages.recent": set(),
+            "google_fi.calls.recent": set(),
         }
         self._load_unanswered_recent_keys()
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
@@ -1154,6 +1155,8 @@ class BotRunner:
                 sender_contact=sender_contact,
             )
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
+                if not self._should_append_unanswered_message("google_fi.calls.recent", conversation_id, sender_id, update.text):
+                    return
                 payload = {
                     "received_at": datetime.now(timezone.utc).isoformat(),
                     "source": "frontend_log",
