@@ -44,6 +44,7 @@ python3 run_bot.py --config config.json
 - Start here: [`docs/getting-started.md`](docs/getting-started.md)
 - Frontend behavior and safety notes: [`docs/frontends.md`](docs/frontends.md)
 - Architecture and extension guide: [`docs/developer-guide.md`](docs/developer-guide.md)
+- Future feature plan and benchmark comparison: [`docs/roadmap.md`](docs/roadmap.md)
 
 Plugin docs live next to each plugin:
 
