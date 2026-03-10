@@ -6,8 +6,9 @@
   - `Workspace` for file-backed state
   - `SkillManager` for loading runnable skills
   - `CollectorManager` + `CollectorRunner` for data ingestion loops
+  - `CompressorManager` + `CompressorRunner` for workspace cleanup loops
 - `messaging_llm_bot/` provides frontend clients and bot orchestration.
-- `skills/` and `collectors/` are dynamic plugin directories.
+- `skills/`, `collectors/`, and `compressors/` are dynamic plugin directories.
 
 ## Plugin layout
 
@@ -20,6 +21,11 @@ Collectors:
 
 - code: `collectors/<collector_name>/__init__.py`
 - docs: `collectors/<collector_name>/README.md`
+
+Compressors:
+
+- code: `compressors/<compressor_name>/__init__.py`
+- optional config: `compressors/config.json`
 
 If you delete a plugin folder, it is not loaded.
 
@@ -48,3 +54,13 @@ If you delete a plugin folder, it is not loaded.
 - Avoid duplicated logic between skills/collectors/core runtime.
 - Write code that reads like a clear script first, clever trick second.
 
+
+
+## Add a new compressor
+
+1. Create `compressors/<name>/__init__.py`.
+2. Expose either:
+   - `create_compressor(config)` returning `name`, `interval_seconds`, and `run`, or
+   - module constants + `run(workspace)`.
+3. Keep compression idempotent whenever possible (safe repeated runs).
+4. Add `compressors/<name>/README.md`.
