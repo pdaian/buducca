@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ class WhatsAppClient:
         self._repo_root = Path(__file__).resolve().parent.parent
 
     def _normalize_command_paths(self, command: list[str]) -> list[str]:
+        if not command:
+            return command
         normalized: list[str] = []
         for part in command:
             candidate = Path(part)
@@ -192,3 +195,36 @@ class WhatsAppClient:
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"WhatsApp send command failed: {stderr}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="whatsapp-client", description="Built-in WhatsApp JSON frontend stubs")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    receive = subparsers.add_parser("receive", help="emit JSON updates")
+    receive.add_argument("--account", default="default")
+
+    send = subparsers.add_parser("send", help="send a message (stub)")
+    send.add_argument("--account", default="default")
+    send.add_argument("--recipient", required=True)
+    send.add_argument("--message", required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "receive":
+        print(json.dumps({"messages": []}))
+        return 0
+
+    if args.command == "send":
+        return 0
+
+    parser.error(f"Unsupported command: {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

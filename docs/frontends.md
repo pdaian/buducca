@@ -21,7 +21,7 @@ python3 -m messaging_llm_bot.signal_signup --config config.json
 
 ## WhatsApp
 
-Configure `whatsapp` in `config.json` with your external receive/send JSON commands.
+Configure `whatsapp` in `config.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
 
 ## Common behavior flags
 

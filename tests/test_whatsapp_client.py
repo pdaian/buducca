@@ -1,9 +1,11 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from messaging_llm_bot.whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
+from messaging_llm_bot.whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError, main
 
 
 class WhatsAppClientTests(unittest.TestCase):
@@ -59,6 +61,13 @@ class WhatsAppClientTests(unittest.TestCase):
         with patch("messaging_llm_bot.whatsapp_client.which", return_value="/usr/bin/python3"):
             with self.assertRaises(WhatsAppFrontendUnavailableError):
                 client.get_updates()
+
+    def test_main_receive_outputs_json_messages(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            exit_code = main(["receive", "--account", "personal"])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), '{"messages": []}')
 
 
 if __name__ == "__main__":
