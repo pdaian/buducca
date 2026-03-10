@@ -863,6 +863,7 @@ class BotRunner:
         text: str,
         sender_name: str | None = None,
         sender_contact: str | None = None,
+        logged_at: str | None = None,
     ) -> None:
         if not self._backend_stores_unanswered_messages(backend):
             return
@@ -878,6 +879,7 @@ class BotRunner:
                 text=text,
                 account="default",
                 source="frontend_log",
+                logged_at=logged_at,
             )
             self._workspace.append_text("telegram.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
@@ -895,6 +897,7 @@ class BotRunner:
                 sender_contact=sender_contact or sender_id,
                 account="default",
                 source="frontend_log",
+                logged_at=logged_at,
             )
             self._workspace.append_text("signal.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
@@ -912,6 +915,7 @@ class BotRunner:
                 sender_contact=sender_contact or sender_id,
                 account=self.config.whatsapp.account if self.config.whatsapp else "default",
                 source="frontend_log",
+                logged_at=logged_at,
             )
             self._workspace.append_text("whatsapp.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
@@ -929,6 +933,7 @@ class BotRunner:
                 sender_contact=sender_contact or sender_id,
                 account=self.config.google_fi.account if self.config.google_fi else "default",
                 source="frontend_log",
+                logged_at=logged_at,
             )
             self._workspace.append_text("google_fi.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -1059,6 +1064,7 @@ class BotRunner:
         text: str,
         sender_name: str | None = None,
         sender_contact: str | None = None,
+        logged_at: str | None = None,
     ) -> None:
         history_file = f"logs/{backend}.history"
         payload = self._build_frontend_record(
@@ -1070,7 +1076,7 @@ class BotRunner:
             sender_name=sender_name,
             sender_contact=sender_contact,
             source="frontend_log",
-            logged_at=datetime.now(timezone.utc).isoformat(),
+            logged_at=logged_at or datetime.now(timezone.utc).isoformat(),
         )
         self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -1206,6 +1212,7 @@ class BotRunner:
         sender_id = getattr(update, "sender_id", conversation_id)
         sender_name = getattr(update, "sender_name", None)
         sender_contact = getattr(update, "sender_contact", None)
+        sent_at = getattr(update, "sent_at", None)
 
         if not sender_contact:
             sender_contact = sender_id
@@ -1221,6 +1228,7 @@ class BotRunner:
                 text=update.text,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
+                logged_at=sent_at,
             )
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
                 if not self._should_append_unanswered_message("google_fi.calls.recent", conversation_id, sender_id, update.text):
@@ -1235,6 +1243,7 @@ class BotRunner:
                     sender_contact=sender_contact or sender_id,
                     account=self.config.google_fi.account if self.config.google_fi else "default",
                     source="frontend_log",
+                    logged_at=sent_at,
                 )
                 self._workspace.append_text("google_fi.calls.recent", json.dumps(payload, ensure_ascii=False) + "\n")
                 return
@@ -1246,6 +1255,7 @@ class BotRunner:
                     text=update.text,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
+                    logged_at=sent_at,
                 )
                 return
             was_handled = self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
@@ -1257,6 +1267,7 @@ class BotRunner:
                     text=update.text,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
+                    logged_at=sent_at,
                 )
             return
 
