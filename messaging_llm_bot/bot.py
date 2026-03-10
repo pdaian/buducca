@@ -958,6 +958,9 @@ class BotRunner:
         self._workspace.append_text("logs/agenta_queries.history", json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
+        if not text.strip():
+            logging.info("Skipping empty outgoing %s message for conversation=%s", backend, conversation_id)
+            return
         if self._backend_is_read_only(backend):
             logging.info("Skipping outgoing %s message in read-only mode conversation=%s", backend, conversation_id)
             return
