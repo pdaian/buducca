@@ -40,9 +40,9 @@ python3 reset_workspace.py --yes
 ## Workspace files you will care about
 
 - `workspace/collector_status.json` — collector health and loop state.
+- `workspace/collector_status.json` also includes each loaded collector's declared generated workspace files.
 - `workspace/logs/agenta_queries.history` — answered interactions.
 - `workspace/compressor_status.json` — compressor health and loop state.
 - `workspace/telegram.recent` — Telegram snapshots when storage is enabled.
 - `workspace/signal.messages.recent` — Signal snapshots when storage is enabled.
 - `workspace/whatsapp.messages.recent` — WhatsApp snapshots when storage is enabled.
-
