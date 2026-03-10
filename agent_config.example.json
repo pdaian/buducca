@@ -4,11 +4,11 @@
       "accounts": [
         {
           "name": "personal",
-          "command": "google-agentic gmail list --account personal --format json --limit 50"
+          "command": "python3 /absolute/path/to/gmail_personal_export.py"
         },
         {
           "name": "work",
-          "command": "google-agentic gmail list --account work --format json --limit 50"
+          "command": "python3 /absolute/path/to/gmail_work_export.py"
         }
       ]
     },
@@ -38,7 +38,7 @@
         "primary@example.com",
         {
           "name": "work@example.com",
-          "command_template": "google-agentic calendar events --account {account} --format json --time-min {month_start} --time-max {month_end}"
+          "command_template": "python3 collectors/google_calendar/google_calendar_api.py --account {account} --time-min {month_start} --time-max {month_end}"
         }
       ]
     }
