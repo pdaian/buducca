@@ -20,6 +20,7 @@ python3 -m assistant_framework.cli skill file --args '{"action":"write","paths":
 ```
 
 Use `paths` for file actions and `directories` for directory actions.
+For `read`, `read_line_limit` is optional and returns only the last N lines when provided.
 
 ## Args schema
 ```ts
@@ -31,5 +32,6 @@ Use `paths` for file actions and `directories` for directory actions.
   content?: string;
   destination_dir?: string;
   directories?: string[];
+  read_line_limit?: number;
 }
 ```
