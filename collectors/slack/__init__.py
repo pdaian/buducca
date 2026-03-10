@@ -8,13 +8,15 @@ from assistant_framework.collector_shell import run_command
 from assistant_framework.workspace import Workspace
 
 NAME = "slack"
+DESCRIPTION = "Collects recent Slack messages from configured exports and writes unseen items into workspace/slack.recent."
 INTERVAL_SECONDS = 120
 STATE_FILE = "collectors/slack.state.json"
 OUTPUT_FILE = "slack.recent"
 FILE_STRUCTURE = ["collectors/slack/__init__.py", "collectors/slack/README.md"]
+GENERATED_FILES = [OUTPUT_FILE, STATE_FILE]
 
 
-def create_collector(config: dict):
+def register_collector(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     timeout = float(config.get("timeout_seconds", 60))
     default_command = config.get("command") or os.environ.get("SLACK_EXPORT_COMMAND", "")
@@ -49,8 +51,9 @@ def create_collector(config: dict):
                 out.append(
                     {
                         "source": "slack",
+                        "collector": NAME,
                         "account": account_name,
-                        "received_at": now,
+                        "collected_at": now,
                         "channel": message.get("channel"),
                         "user": message.get("user"),
                         "ts": ts,
@@ -63,4 +66,15 @@ def create_collector(config: dict):
             workspace.write_text(OUTPUT_FILE, "\n".join(json.dumps(i, ensure_ascii=False) for i in out) + "\n")
         workspace.write_text(STATE_FILE, json.dumps(state))
 
-    return {"name": NAME, "interval_seconds": interval, "run": _run}
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "interval_seconds": interval,
+        "generated_files": GENERATED_FILES,
+        "file_structure": FILE_STRUCTURE,
+        "run": _run,
+    }
+
+
+def create_collector(config: dict):
+    return register_collector(config)
