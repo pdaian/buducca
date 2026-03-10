@@ -61,6 +61,50 @@ class FileSkillTests(unittest.TestCase):
             )
             self.assertEqual(read_result, "notes/todo.txt:\nhello!\n\nnotes/next.txt:\ntoday!")
 
+
+    def test_read_with_line_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module.run(
+                workspace,
+                {
+                    "action": "write",
+                    "paths": ["notes/log.txt"],
+                    "content": "line1\nline2\nline3\nline4",
+                },
+            )
+
+            result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": 2},
+            )
+
+            self.assertEqual(result, "notes/log.txt:\nline3\nline4")
+
+    def test_read_with_invalid_line_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module.run(
+                workspace,
+                {
+                    "action": "write",
+                    "paths": ["notes/log.txt"],
+                    "content": "line1\nline2",
+                },
+            )
+
+            zero_result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": 0},
+            )
+            non_int_result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": "abc"},
+            )
+
+            self.assertEqual(zero_result, "`read_line_limit` must be an integer greater than 0.")
+            self.assertEqual(non_int_result, "`read_line_limit` must be an integer greater than 0.")
+
     def test_read_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

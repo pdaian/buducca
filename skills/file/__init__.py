@@ -10,6 +10,7 @@ DESCRIPTION = (
     "Use args.action (or args.command) with one of: read/write/append/create_dir/delete_dir/move. "
     "File actions require args.paths as a list. write/append also require args.contents as a list "
     "(or args.content to apply the same text to every path). "
+    "read accepts optional args.read_line_limit to return only the last N lines. "
     "move requires args.paths and args.destination_dir. "
     "Directory actions require args.directories as a list."
 )
@@ -53,14 +54,37 @@ def _resolve_contents(args: dict[str, Any], path_count: int) -> list[str] | None
     return None
 
 
-def _read(workspace: Workspace, paths: list[str]) -> str:
+def _resolve_read_line_limit(args: dict[str, Any]) -> int | None:
+    read_line_limit = args.get("read_line_limit")
+    if read_line_limit is None:
+        return None
+
+    try:
+        limit = int(read_line_limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("`read_line_limit` must be an integer greater than 0.") from exc
+
+    if limit <= 0:
+        raise ValueError("`read_line_limit` must be an integer greater than 0.")
+    return limit
+
+
+def _tail_lines(content: str, limit: int) -> str:
+    lines = content.splitlines()
+    return "\n".join(lines[-limit:])
+
+
+def _read(workspace: Workspace, paths: list[str], read_line_limit: int | None = None) -> str:
     results: list[str] = []
     for path in paths:
         target = workspace.resolve(path)
         if not target.exists():
             results.append(f"{path}: File not found")
             continue
-        results.append(f"{path}:\n{workspace.read_text(path)}")
+        content = workspace.read_text(path)
+        if read_line_limit is not None:
+            content = _tail_lines(content, read_line_limit)
+        results.append(f"{path}:\n{content}")
     return "\n\n".join(results)
 
 
@@ -113,7 +137,8 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
                 return "Missing required arg `paths` (list)."
 
             if action == "read":
-                return _read(workspace, paths)
+                read_line_limit = _resolve_read_line_limit(args)
+                return _read(workspace, paths, read_line_limit)
 
             if action == "move":
                 destination_dir = str(args.get("destination_dir", "")).strip()
