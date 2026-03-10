@@ -8,14 +8,16 @@ from assistant_framework.collector_shell import run_command
 from assistant_framework.workspace import Workspace
 
 NAME = "twitter_recent"
+DESCRIPTION = "Collects recent Twitter following posts and direct messages into separate workspace files."
 INTERVAL_SECONDS = 180
 STATE_FILE = "collectors/twitter_recent.state.json"
 FOLLOWING_OUTPUT_FILE = "twitter.following.recent"
 DMS_OUTPUT_FILE = "twitter.dms.recent"
 FILE_STRUCTURE = ["collectors/twitter_recent/__init__.py", "collectors/twitter_recent/README.md"]
+GENERATED_FILES = [FOLLOWING_OUTPUT_FILE, DMS_OUTPUT_FILE, STATE_FILE]
 
 
-def create_collector(config: dict):
+def register_collector(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     timeout = float(config.get("timeout_seconds", 90))
     default_following = config.get("following_command") or os.environ.get("TWITTER_FOLLOWING_COMMAND", "")
@@ -53,7 +55,9 @@ def create_collector(config: dict):
                         if post_id <= following_last:
                             continue
                         max_id = max(max_id, post_id)
-                        following_out.append({"source": "twitter_following", "account": account_name, "received_at": now, **post})
+                        following_out.append(
+                            {"source": "twitter_following", "collector": NAME, "account": account_name, "collected_at": now, **post}
+                        )
                     acc_state["following_last_id"] = max_id
 
             dms_command = account.get("dms_command") or default_dms
@@ -68,7 +72,9 @@ def create_collector(config: dict):
                         if dm_id <= dm_last:
                             continue
                         max_id = max(max_id, dm_id)
-                        dm_out.append({"source": "twitter_dm", "account": account_name, "received_at": now, **dm})
+                        dm_out.append(
+                            {"source": "twitter_dm", "collector": NAME, "account": account_name, "collected_at": now, **dm}
+                        )
                     acc_state["dm_last_id"] = max_id
 
         if following_out:
@@ -80,4 +86,15 @@ def create_collector(config: dict):
             workspace.write_text(DMS_OUTPUT_FILE, "\n".join(json.dumps(item, ensure_ascii=False) for item in dm_out) + "\n")
         workspace.write_text(STATE_FILE, json.dumps(state))
 
-    return {"name": NAME, "interval_seconds": interval, "run": _run}
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "interval_seconds": interval,
+        "generated_files": GENERATED_FILES,
+        "file_structure": FILE_STRUCTURE,
+        "run": _run,
+    }
+
+
+def create_collector(config: dict):
+    return register_collector(config)
