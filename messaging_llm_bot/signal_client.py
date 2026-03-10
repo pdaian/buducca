@@ -5,21 +5,10 @@ import logging
 import subprocess
 import time
 from shutil import which
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-@dataclass
-class IncomingMessage:
-    update_id: int
-    backend: str
-    conversation_id: str
-    sender_id: str
-    text: str | None = None
-    voice_file_path: str | None = None
-    sender_name: str | None = None
-
+from .interfaces import IncomingMessage
 
 class SignalFrontendUnavailableError(RuntimeError):
     """Raised when Signal frontend is not runnable in current environment."""
