@@ -80,6 +80,8 @@ class RuntimeConfig:
     debug: bool = False
     workspace_dir: str = "workspace"
     collector_status_file: str = "collector_status.json"
+    hourly_file: str = "hourly"
+    hourly_status_file: str = "hourly_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
     collector_config_path: str = "agent_config.json"
@@ -175,6 +177,10 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("llm.system_prompt_timezone must be a valid IANA timezone") from exc
     if config.runtime.request_timeout_seconds <= 0:
         raise ValueError("runtime.request_timeout_seconds must be > 0")
+    if not config.runtime.hourly_file.strip():
+        raise ValueError("runtime.hourly_file must be set")
+    if not config.runtime.hourly_status_file.strip():
+        raise ValueError("runtime.hourly_status_file must be set")
     if config.runtime.enable_voice_notes and not config.runtime.voice_transcribe_command:
         raise ValueError("runtime.voice_transcribe_command must be set when runtime.enable_voice_notes is true")
     if config.runtime.max_reply_chunk_chars <= 0:

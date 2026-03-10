@@ -38,6 +38,7 @@ _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS = 5.0
 _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS = 60.0
 _MAX_REMINDER_FILE_CHARS = 4_000
 _MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
+_HOURLY_NO_ACTION_REPLY = "NO_ACTION"
 
 
 class BotRunner:
@@ -131,6 +132,7 @@ class BotRunner:
             "google_fi.calls.recent": set(),
         }
         self._load_unanswered_recent_keys()
+        self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
 
     @property
@@ -262,6 +264,7 @@ class BotRunner:
 
     def _poll_frontends_once(self) -> None:
         self._poll_due_reminders_once()
+        self._poll_due_hourly_once()
 
         if self.telegram and self.config.telegram:
             if self._telegram_retry_after is not None and time.time() < self._telegram_retry_after:
@@ -507,6 +510,193 @@ class BotRunner:
             + "\n",
         )
         return True
+
+    def _poll_due_hourly_once(self) -> None:
+        hourly_path = self.config.runtime.hourly_file
+        hourly_text = self._workspace.read_text(hourly_path, default="").strip()
+        if not hourly_text:
+            return
+
+        slot = self._current_hourly_slot()
+        slot_key = slot.isoformat()
+        if self._last_hourly_slot == slot_key:
+            return
+
+        if self._run_hourly_task(hourly_text, slot):
+            self._last_hourly_slot = slot_key
+            self._workspace.write_text(
+                self.config.runtime.hourly_status_file,
+                json.dumps(
+                    {
+                        "last_hourly_slot": slot_key,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+            )
+
+    def _run_hourly_task(self, hourly_text: str, slot: datetime) -> bool:
+        target = self._resolve_hourly_target()
+        backend = target[0] if target else "hourly"
+        conversation_id = target[1] if target else slot.isoformat()
+        sender_id = "hourly-scheduler"
+        sender_name = "Hourly Scheduler"
+        sender_contact = self.config.runtime.hourly_file
+        hourly_prompt = self._build_hourly_prompt(hourly_text, slot)
+        conversation_key = self._history_key(backend, conversation_id)
+
+        logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
+        try:
+            with self._typing_indicator(backend, conversation_id):
+                prompt = self._build_messages(
+                    conversation_key,
+                    hourly_prompt,
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                )
+                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                reply = self._resolve_llm_reply(prompt, model_reply)
+        except RequestTimeoutError:
+            logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
+            return False
+        except Exception:
+            logging.exception("Hourly routine failed slot=%s", slot.isoformat())
+            return False
+
+        self._history[conversation_key].append({"role": "user", "content": hourly_prompt})
+        self._history[conversation_key].append(
+            {
+                "role": "assistant",
+                "content": self._summarize_skill_result_for_context("web_search", reply),
+            }
+        )
+
+        normalized_reply = reply.strip()
+        if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY and target:
+            try:
+                for chunk in self._split_reply(reply):
+                    self._send_message(backend, conversation_id, chunk)
+            except Exception:
+                logging.exception("Failed to send hourly routine reply slot=%s", slot.isoformat())
+                return False
+        elif normalized_reply == _HOURLY_NO_ACTION_REPLY:
+            logging.info("Hourly routine produced no action for slot=%s", slot.isoformat())
+        elif normalized_reply and not target:
+            logging.info("Hourly routine produced output with no delivery target slot=%s", slot.isoformat())
+
+        self._append_agenta_query_log(
+            backend=backend,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            text=hourly_prompt,
+            reply=reply,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+        )
+        self._workspace.append_text(
+            "logs/hourly.history",
+            json.dumps(
+                {
+                    "logged_at": datetime.now(timezone.utc).isoformat(),
+                    "slot": slot.isoformat(),
+                    "target": {"backend": backend, "conversation_id": conversation_id} if target else None,
+                    "hourly_file": self.config.runtime.hourly_file,
+                    "prompt": hourly_prompt,
+                    "reply": reply,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+        return True
+
+    def _build_hourly_prompt(self, hourly_text: str, slot: datetime) -> str:
+        timezone_name = self.config.llm.system_prompt_timezone
+        lines = [
+            "[Hourly routine]",
+            f"- scheduled_for_local: {slot.isoformat()}",
+            f"- timezone: {timezone_name}",
+            f"- file: {self.config.runtime.hourly_file}",
+            "",
+            "You are running automatically at the top of the hour.",
+            "Read workspace files as needed and take any actions required by the hourly instructions.",
+            f"If nothing should happen for this hour, reply with exactly {_HOURLY_NO_ACTION_REPLY}.",
+            "",
+            f"Instructions from workspace/{self.config.runtime.hourly_file}:",
+            hourly_text,
+        ]
+        return "\n".join(lines)
+
+    def _current_hourly_slot(self) -> datetime:
+        now = datetime.now(ZoneInfo(self.config.llm.system_prompt_timezone))
+        return now.replace(minute=0, second=0, microsecond=0)
+
+    def _load_last_hourly_slot(self) -> str:
+        raw = self._workspace.read_text(self.config.runtime.hourly_status_file, default="").strip()
+        if not raw:
+            return ""
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            logging.warning("Skipping malformed hourly status file path=%s", self.config.runtime.hourly_status_file)
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        value = payload.get("last_hourly_slot")
+        return value.strip() if isinstance(value, str) else ""
+
+    def _resolve_hourly_target(self) -> tuple[str, str] | None:
+        latest_target = self._latest_logged_conversation_target()
+        if latest_target:
+            return latest_target
+
+        if self.config.telegram and len(self.config.telegram.allowed_chat_ids) == 1:
+            return "telegram", str(self.config.telegram.allowed_chat_ids[0])
+        if self.config.signal and len(self.config.signal.allowed_sender_ids) == 1:
+            return "signal", self.config.signal.allowed_sender_ids[0]
+        if self.config.whatsapp and len(self.config.whatsapp.allowed_sender_ids) == 1:
+            return "whatsapp", self.config.whatsapp.allowed_sender_ids[0]
+        if self.config.google_fi and len(self.config.google_fi.allowed_sender_ids) == 1:
+            return "google_fi", self.config.google_fi.allowed_sender_ids[0]
+        return None
+
+    def _latest_logged_conversation_target(self) -> tuple[str, str] | None:
+        candidates: list[tuple[datetime, str, str]] = []
+        for backend in ("telegram", "signal", "whatsapp", "google_fi"):
+            file_text = self._workspace.read_text(f"logs/{backend}.history", default="")
+            if not file_text.strip():
+                continue
+            for raw_line in reversed(file_text.splitlines()):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("direction") != "incoming":
+                    continue
+                conversation_id = payload.get("conversation_id")
+                if not isinstance(conversation_id, str) or not conversation_id.strip():
+                    continue
+                logged_at = payload.get("logged_at")
+                try:
+                    timestamp = datetime.fromisoformat(str(logged_at))
+                except ValueError:
+                    timestamp = datetime.min.replace(tzinfo=timezone.utc)
+                candidates.append((timestamp, backend, conversation_id))
+                break
+        if not candidates:
+            return None
+        _, backend, conversation_id = max(candidates, key=lambda item: item[0])
+        return backend, conversation_id
 
     def _build_due_reminder_text(self, record: dict[str, Any]) -> str:
         unix_time = int(record["unix_time"])

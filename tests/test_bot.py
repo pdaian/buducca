@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -189,6 +190,62 @@ class BotTests(unittest.TestCase):
             log = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
             self.assertIn('"query": "hi"', log)
             self.assertIn('"reply": "hello"', log)
+
+    def test_hourly_task_sends_to_latest_logged_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("daily summary")
+            bot._append_frontend_log(
+                backend="telegram",
+                direction="incoming",
+                conversation_id="123",
+                sender_id="123",
+                text="hi",
+                logged_at="2026-03-10T13:05:00+00:00",
+            )
+            Path(td, "hourly").write_text("if it is six o clock send a daily summary", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+
+            self.assertEqual(bot.telegram.sent, [(123, "daily summary")])
+            self.assertIn("[Hourly routine]", bot.llm.messages[-1]["content"])
+            self.assertIn("workspace/hourly", bot.llm.messages[-1]["content"])
+            status = json.loads(Path(td, "hourly_status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["last_hourly_slot"], "2026-03-10T13:00:00-04:00")
+
+    def test_hourly_task_no_action_is_not_sent_or_repeated_in_same_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("NO_ACTION")
+            bot._append_frontend_log(
+                backend="telegram",
+                direction="incoming",
+                conversation_id="123",
+                sender_id="123",
+                text="hi",
+                logged_at="2026-03-10T13:05:00+00:00",
+            )
+            Path(td, "hourly").write_text("only act at six", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+            bot._poll_due_hourly_once()
+
+            self.assertEqual(bot.telegram.sent, [])
+            self.assertEqual(bot.llm.calls, 1)
 
 
     def test_telegram_sender_not_allowed_outside_configured_group(self) -> None:

@@ -87,6 +87,8 @@
     "log_level": "INFO",
     "workspace_dir": "workspace",
     "collector_status_file": "collector_status.json",
+    "hourly_file": "hourly",
+    "hourly_status_file": "hourly_status.json",
     "skills_dir": "skills",
     "enable_voice_notes": false,
     "voice_transcribe_command": [
