@@ -41,6 +41,14 @@ class DummyWhatsApp:
     def send_message(self, recipient: str, text: str) -> None:
         self.sent.append((recipient, text))
 
+
+class DummySignal:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_message(self, recipient: str, text: str) -> None:
+        self.sent.append((recipient, text))
+
 class DummyLLM:
     def __init__(self, reply: str) -> None:
         self.reply = reply
@@ -656,6 +664,22 @@ class BotTests(unittest.TestCase):
             bot._handle_message(1, "hi")
 
         self.assertTrue(any("Filtered <think> block(s) from llm output" in line for line in logs.output))
+
+    def test_handle_message_skips_empty_reply_after_think_filtering(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15551230000", allowed_sender_ids=["+15551230000"]),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = DummySignal()
+        bot.llm = DummyLLM("<think>private reasoning</think>")
+
+        handled = bot._handle_message("signal", "+15551230000", "+15551230000", "hi")
+
+        self.assertTrue(handled)
+        self.assertEqual(bot.signal.sent, [])
+        self.assertEqual(bot._history["signal:+15551230000"][1]["content"], "")
 
 
     def test_frontend_history_files_created_and_written(self) -> None:
