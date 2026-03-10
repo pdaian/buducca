@@ -2,6 +2,7 @@ from pathlib import Path
 import types
 import io
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from messaging_llm_bot.google_fi_client import GoogleFiClient, GoogleFiFrontendUnavailableError
@@ -264,6 +265,36 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertIs(bubbles, populated)
         self.assertEqual(selector, "mws-message-text-content")
+
+    def test_collect_bubble_entries_uses_most_recent_preceding_timestamp(self) -> None:
+        from messaging_llm_bot.google_fi_client import _collect_bubble_entries
+
+        page = Mock()
+        page.evaluate.return_value = [
+            {"text": "first message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
+            {"text": "second message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
+            {"text": "third message", "timestamp_text": "Mar 10, 2026, 1:25 PM"},
+        ]
+
+        entries = _collect_bubble_entries(page, "mws-message-text-content")
+
+        self.assertEqual(
+            entries,
+            [
+                {"text": "first message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
+                {"text": "second message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
+                {"text": "third message", "timestamp_text": "Mar 10, 2026, 1:25 PM"},
+            ],
+        )
+
+    def test_parse_google_messages_timestamp_infers_local_iso_timestamp(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 10, 14, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("Mar 10, 2026, 1:23 PM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-10T13:23:00+00:00")
 
 
 if __name__ == "__main__":
