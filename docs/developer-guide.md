@@ -21,6 +21,7 @@ Collectors:
 
 - code: `collectors/<collector_name>/__init__.py`
 - docs: `collectors/<collector_name>/README.md`
+- metadata: declare `DESCRIPTION`, `FILE_STRUCTURE`, and `GENERATED_FILES` so the bot can describe loaded collector outputs in its system prompt
 
 Compressors:
 
@@ -42,10 +43,12 @@ If you delete a plugin folder, it is not loaded.
 
 1. Create `collectors/<name>/__init__.py`.
 2. Expose either:
-   - `create_collector(config)` returning `name`, `interval_seconds`, and `run`, or
+   - `register_collector(config)` returning `name`, `description`, `interval_seconds`, `generated_files`, `file_structure`, and `run`, or
+   - `create_collector(config)` returning the same fields for backward compatibility, or
    - module constants + `run(workspace)`.
 3. Keep interactive setup out of the runtime loop; use a separate signup/setup command when needed.
 4. Add `collectors/<name>/README.md`.
+5. If the collector generates workspace files, describe them in `GENERATED_FILES`. Only enabled collectors that load successfully are exposed to the agent prompt.
 
 ## Style goals for contributions
 
