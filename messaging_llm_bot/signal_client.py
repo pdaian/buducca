@@ -480,6 +480,9 @@ class SignalClient:
         return False
 
     def send_message(self, recipient: str, text: str) -> None:
+        if not text.strip():
+            logging.info("Skipping empty Signal message for recipient=%s", recipient)
+            return
         group_id = self._extract_group_id_from_recipient(recipient)
 
         if group_id:
