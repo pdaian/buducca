@@ -10,6 +10,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 from .module_loader import iter_plugin_modules, load_module_from_file
+from .plugin_logging import log_plugin_event
 from .workspace import Workspace
 
 COLLECTOR_STATUS_FILE = "collector_status.json"
@@ -18,14 +19,26 @@ COLLECTOR_STATUS_FILE = "collector_status.json"
 @dataclass
 class Collector:
     name: str
+    description: str
     interval_seconds: float
     run: Callable[[Workspace], None]
+    generated_files: list[str]
+    module_files: list[str]
 
 
 @dataclass
 class CollectorManifest:
     name: str
+    description: str
     file_structure: list[str]
+    generated_files: list[str]
+
+
+@dataclass
+class CollectorRegistration:
+    collector: Collector
+    manifest: CollectorManifest
+    config_key: str
 
 
 class CollectorManager:
@@ -39,52 +52,92 @@ class CollectorManager:
     def _iter_module_files(self) -> list[Path]:
         return iter_plugin_modules(self.collectors_dir)
 
-    def load(self) -> list[Collector]:
-        collectors: list[Collector] = []
+    def _config_for_module(self, file_path: Path) -> tuple[str, dict[str, Any]]:
+        config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
+        cfg = self.config.get(config_key, {})
+        if not cfg and not config_key.endswith("_collector"):
+            cfg = self.config.get(f"{config_key}_collector", {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+        return config_key, cfg
+
+    @staticmethod
+    def _is_enabled(config: dict[str, Any]) -> bool:
+        return bool(config.get("enabled", True))
+
+    def _build_registration(self, module: ModuleType, file_path: Path, config: dict[str, Any]) -> CollectorRegistration:
+        default_name = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
+        readme_path = file_path.parent / "README.md"
+        default_structure = [str(file_path.as_posix())]
+        if readme_path.exists():
+            default_structure.append(str(readme_path.as_posix()))
+
+        if hasattr(module, "register_collector"):
+            registered = module.register_collector(config)
+            name = str(registered.get("name") or default_name)
+            description = str(registered.get("description") or getattr(module, "DESCRIPTION", "")).strip()
+            generated_files = [str(item) for item in registered.get("generated_files", getattr(module, "GENERATED_FILES", []))]
+            file_structure = [str(item) for item in registered.get("file_structure", getattr(module, "FILE_STRUCTURE", default_structure))]
+            run = registered.get("run")
+            if run is None or not callable(run):
+                raise RuntimeError(f"Collector file {file_path} register_collector(config) must return callable run(workspace)")
+            interval_seconds = float(registered.get("interval_seconds", getattr(module, "INTERVAL_SECONDS", 60.0)))
+        elif hasattr(module, "create_collector"):
+            collector = module.create_collector(config)
+            name = str(collector.get("name") or getattr(module, "NAME", default_name))
+            description = str(collector.get("description") or getattr(module, "DESCRIPTION", "")).strip()
+            generated_files = [str(item) for item in collector.get("generated_files", getattr(module, "GENERATED_FILES", []))]
+            file_structure = [str(item) for item in collector.get("file_structure", getattr(module, "FILE_STRUCTURE", default_structure))]
+            run = collector.get("run")
+            if run is None or not callable(run):
+                raise RuntimeError(f"Collector file {file_path} create_collector(config) must return callable run(workspace)")
+            interval_seconds = float(collector.get("interval_seconds", getattr(module, "INTERVAL_SECONDS", 60.0)))
+        else:
+            run = getattr(module, "run", None)
+            if run is None or not callable(run):
+                raise RuntimeError(f"Collector file {file_path} must expose run(workspace)")
+            name = getattr(module, "NAME", default_name)
+            description = str(getattr(module, "DESCRIPTION", "")).strip()
+            generated_files = [str(item) for item in getattr(module, "GENERATED_FILES", [])]
+            file_structure = [str(item) for item in getattr(module, "FILE_STRUCTURE", default_structure)]
+            interval_seconds = float(getattr(module, "INTERVAL_SECONDS", 60.0))
+
+        collector = Collector(
+            name=name,
+            description=description,
+            interval_seconds=interval_seconds,
+            run=run,
+            generated_files=generated_files,
+            module_files=file_structure,
+        )
+        manifest = CollectorManifest(name=name, description=description, file_structure=file_structure, generated_files=generated_files)
+        config_key, _ = self._config_for_module(file_path)
+        return CollectorRegistration(collector=collector, manifest=manifest, config_key=config_key)
+
+    def load_registrations(self) -> list[CollectorRegistration]:
+        registrations: list[CollectorRegistration] = []
         if not self.collectors_dir.exists():
-            return collectors
+            return registrations
 
         for file_path in self._iter_module_files():
-            module = self._load_module(file_path)
-            collectors.append(self._build_collector(module, file_path))
-        return collectors
+            config_key, config = self._config_for_module(file_path)
+            if not self._is_enabled(config):
+                log_plugin_event("collector", config_key, "skipped", reason="disabled")
+                continue
+            try:
+                module = self._load_module(file_path)
+                registration = self._build_registration(module, file_path, config)
+            except Exception as exc:
+                logging.warning("collector=%s event=skipped reason=load_failed error=%s", config_key, exc)
+                continue
+            registrations.append(registration)
+        return registrations
+
+    def load(self) -> list[Collector]:
+        return [registration.collector for registration in self.load_registrations()]
 
     def load_manifests(self) -> list[CollectorManifest]:
-        manifests: list[CollectorManifest] = []
-        if not self.collectors_dir.exists():
-            return manifests
-
-        for file_path in self._iter_module_files():
-            module = self._load_module(file_path)
-            name = getattr(module, "NAME", file_path.parent.name if file_path.name == "__init__.py" else file_path.stem)
-            default_structure = [
-                str(file_path.as_posix()),
-                str((file_path.parent / "README.md").as_posix()),
-            ]
-            file_structure = list(getattr(module, "FILE_STRUCTURE", default_structure))
-            manifests.append(CollectorManifest(name=name, file_structure=file_structure))
-        return manifests
-
-    def _build_collector(self, module: ModuleType, file_path: Path) -> Collector:
-        if hasattr(module, "create_collector"):
-            config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
-            cfg = self.config.get(config_key, {})
-            if not cfg and not config_key.endswith("_collector"):
-                cfg = self.config.get(f"{config_key}_collector", {})
-            collector = module.create_collector(cfg)
-            return Collector(
-                name=collector["name"],
-                interval_seconds=float(collector.get("interval_seconds", 60.0)),
-                run=collector["run"],
-            )
-
-        run = getattr(module, "run", None)
-        if run is None or not callable(run):
-            raise RuntimeError(f"Collector file {file_path} must expose run(workspace)")
-
-        name = getattr(module, "NAME", file_path.stem)
-        interval_seconds = float(getattr(module, "INTERVAL_SECONDS", 60.0))
-        return Collector(name=name, interval_seconds=interval_seconds, run=run)
+        return [registration.manifest for registration in self.load_registrations()]
 
 
 class CollectorRunner:
@@ -102,6 +155,8 @@ class CollectorRunner:
                 "last_error_at": None,
                 "last_error": None,
                 "interval_seconds": collector.interval_seconds,
+                "description": collector.description,
+                "generated_files": collector.generated_files,
             }
             for collector in collectors
         }
@@ -123,16 +178,17 @@ class CollectorRunner:
             if ts < next_run[collector.name]:
                 continue
             try:
+                log_plugin_event("collector", collector.name, "run_started", interval_seconds=collector.interval_seconds)
                 collector.run(self.workspace)
                 self._stats[collector.name]["runs"] += 1
                 self._stats[collector.name]["last_success_at"] = datetime.now(timezone.utc).isoformat()
                 self._stats[collector.name]["last_error"] = None
-                logging.info("Collector %s finished", collector.name)
+                log_plugin_event("collector", collector.name, "run_succeeded", runs=self._stats[collector.name]["runs"])
             except Exception as err:
                 self._stats[collector.name]["failures"] += 1
                 self._stats[collector.name]["last_error_at"] = datetime.now(timezone.utc).isoformat()
                 self._stats[collector.name]["last_error"] = str(err)
-                logging.exception("Collector %s failed", collector.name)
+                logging.exception("collector=%s event=run_failed failures=%s", collector.name, self._stats[collector.name]["failures"])
             next_run[collector.name] = ts + collector.interval_seconds
 
         self._write_status_snapshot()
