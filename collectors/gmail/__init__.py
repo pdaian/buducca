@@ -8,19 +8,18 @@ from assistant_framework.collector_shell import run_command
 from assistant_framework.workspace import Workspace
 
 NAME = "gmail"
+DESCRIPTION = "Collects recent Gmail messages and appends unseen items into workspace/gmail.recent."
 INTERVAL_SECONDS = 300
 STATE_FILE = "collectors/gmail.state.json"
 OUTPUT_FILE = "gmail.recent"
 FILE_STRUCTURE = ["collectors/gmail/__init__.py", "collectors/gmail/README.md"]
+GENERATED_FILES = [OUTPUT_FILE, STATE_FILE]
 
 
-def create_collector(config: dict):
+def register_collector(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     timeout = float(config.get("timeout_seconds", 90))
-    default_command = config.get("command") or os.environ.get(
-        "GMAIL_AGENTIC_COMMAND",
-        "google-agentic gmail list --format json --limit 50",
-    )
+    default_command = config.get("command") or os.environ.get("GMAIL_COMMAND", "")
     accounts = config.get("accounts") or [{"name": config.get("account_name", "default"), "command": default_command}]
 
     def _run(workspace: Workspace) -> None:
@@ -51,8 +50,9 @@ def create_collector(config: dict):
                 out.append(
                     {
                         "source": "gmail",
+                        "collector": NAME,
                         "account": account_name,
-                        "received_at": now,
+                        "collected_at": now,
                         "id": msg_id,
                         "thread_id": item.get("threadId"),
                         "from": item.get("from"),
@@ -67,4 +67,15 @@ def create_collector(config: dict):
             workspace.write_text(OUTPUT_FILE, "\n".join(json.dumps(i, ensure_ascii=False) for i in out) + "\n")
         workspace.write_text(STATE_FILE, json.dumps(state))
 
-    return {"name": NAME, "interval_seconds": interval, "run": _run}
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "interval_seconds": interval,
+        "generated_files": GENERATED_FILES,
+        "file_structure": FILE_STRUCTURE,
+        "run": _run,
+    }
+
+
+def create_collector(config: dict):
+    return register_collector(config)
