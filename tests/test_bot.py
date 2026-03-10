@@ -1587,6 +1587,7 @@ class BotTests(unittest.TestCase):
             cfg = BotConfig(
                 google_fi=GoogleFiConfig(
                     account="default",
+                    allowed_sender_ids=["+15550000000"],
                     store_unanswered_messages=True,
                 ),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
@@ -1608,6 +1609,36 @@ class BotTests(unittest.TestCase):
 
             recent = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8")
             self.assertIn("request that times out", recent)
+
+    def test_google_fi_uses_sent_at_for_logged_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                    allowed_sender_ids=["+15550000000"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="google_fi",
+                    conversation_id="thread-1",
+                    sender_id="+15553334444",
+                    text="collect me",
+                    sent_at="2026-03-10T13:23:00+00:00",
+                )
+            )
+
+            history_line = (Path(td) / "logs" / "google_fi.history").read_text(encoding="utf-8").splitlines()[0]
+            recent_line = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines()[0]
+
+            self.assertEqual(json.loads(history_line)["logged_at"], "2026-03-10T13:23:00+00:00")
+            self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
 
 
 if __name__ == "__main__":
