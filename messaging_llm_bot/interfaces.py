@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(slots=True)
+class IncomingMessage:
+    update_id: int
+    backend: str = "telegram"
+    conversation_id: str = ""
+    sender_id: str = ""
+    chat_id: int | None = None
+    text: str | None = None
+    voice_file_id: str | None = None
+    voice_file_path: str | None = None
+    sender_name: str | None = None
+    sender_contact: str | None = None
+    event_type: str = "message"
+
+    def __post_init__(self) -> None:
+        if self.chat_id is not None:
+            if not self.conversation_id:
+                self.conversation_id = str(self.chat_id)
+            if not self.sender_id:
+                self.sender_id = str(self.chat_id)
