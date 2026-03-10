@@ -15,6 +15,7 @@ class IncomingMessage:
     voice_file_path: str | None = None
     sender_name: str | None = None
     sender_contact: str | None = None
+    sent_at: str | None = None
     event_type: str = "message"
 
     def __post_init__(self) -> None:
