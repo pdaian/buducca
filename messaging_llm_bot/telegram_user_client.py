@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from .telegram_client import IncomingMessage
+from .interfaces import IncomingMessage
 
 
 class TelegramUserClient:
