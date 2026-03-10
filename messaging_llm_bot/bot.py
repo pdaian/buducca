@@ -15,13 +15,14 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Deque
 
-from assistant_framework import SkillManager, Workspace
+from assistant_framework import CollectorManager, SkillManager, Workspace
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
+from .interfaces import IncomingMessage
 from .llm_client import OpenAICompatibleClient
 from .signal_client import SignalClient, SignalFrontendUnavailableError
-from .telegram_client import IncomingMessage, TelegramClient
+from .telegram_client import TelegramClient
 from .telegram_user_client import TelegramUserClient
 from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 from .google_fi_client import GoogleFiClient, GoogleFiFrontendUnavailableError
@@ -169,6 +170,28 @@ class BotRunner:
             learnings_lines.append("- No learnings recorded yet.")
         sections.append("\n".join(learnings_lines))
 
+        collector_manifests = CollectorManager(
+            self.config.runtime.collectors_dir,
+            config=self._load_collector_prompt_config(),
+        ).load_manifests()
+        if collector_manifests:
+            collector_lines = [
+                "Loaded collector outputs available in the workspace:",
+                "Only collectors that are enabled and loaded without errors are listed here.",
+            ]
+            for manifest in collector_manifests:
+                description = manifest.description or "No description provided."
+                collector_lines.append(f"- {manifest.name}: {description}")
+                if manifest.generated_files:
+                    collector_lines.append("  generated workspace files:")
+                    for item in manifest.generated_files:
+                        collector_lines.append(f"    {item}")
+                if manifest.file_structure:
+                    collector_lines.append("  module files:")
+                    for item in manifest.file_structure:
+                        collector_lines.append(f"    {item}")
+            sections.append("\n".join(collector_lines))
+
         if self._skills:
             skill_rules = [
                 "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
@@ -196,6 +219,18 @@ class BotRunner:
             sections.append("\n".join(skill_rules))
 
         return f"{base_prompt}\n\n" + "\n\n".join(sections)
+
+    def _load_collector_prompt_config(self) -> dict[str, Any]:
+        config_path = Path(self.config.runtime.collector_config_path)
+        try:
+            raw = json.loads(config_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError:
+            logging.warning("collector_prompt_config event=skipped reason=invalid_json path=%s", config_path)
+            return {}
+        collectors = raw.get("collectors", {})
+        return collectors if isinstance(collectors, dict) else {}
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")
@@ -835,66 +870,66 @@ class BotRunner:
         if backend == "telegram":
             if not self._should_append_unanswered_message("telegram.recent", conversation_id, sender_id, text):
                 return
-            payload = {
-                "source": "frontend_log",
-                "account": "default",
-                "received_at": datetime.now(timezone.utc).isoformat(),
-                "direction": "incoming",
-                "conversation_id": conversation_id,
-                "sender_id": sender_id,
-                "text": text,
-            }
+            payload = self._build_frontend_record(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                account="default",
+                source="frontend_log",
+            )
             self._workspace.append_text("telegram.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
 
         if backend == "signal":
             if not self._should_append_unanswered_message("signal.messages.recent", conversation_id, sender_id, text):
                 return
-            payload = {
-                "received_at": datetime.now(timezone.utc).isoformat(),
-                "source": "frontend_log",
-                "account": "default",
-                "direction": "incoming",
-                "conversation_id": conversation_id,
-                "sender": sender_id,
-                "sender_name": sender_name,
-                "sender_contact": sender_contact or sender_id,
-                "text": text,
-            }
+            payload = self._build_frontend_record(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact or sender_id,
+                account="default",
+                source="frontend_log",
+            )
             self._workspace.append_text("signal.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
 
         if backend == "whatsapp":
             if not self._should_append_unanswered_message("whatsapp.messages.recent", conversation_id, sender_id, text):
                 return
-            payload = {
-                "received_at": datetime.now(timezone.utc).isoformat(),
-                "source": "frontend_log",
-                "account": self.config.whatsapp.account if self.config.whatsapp else "default",
-                "direction": "incoming",
-                "conversation_id": conversation_id,
-                "sender": sender_id,
-                "sender_name": sender_name,
-                "sender_contact": sender_contact or sender_id,
-                "text": text,
-            }
+            payload = self._build_frontend_record(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact or sender_id,
+                account=self.config.whatsapp.account if self.config.whatsapp else "default",
+                source="frontend_log",
+            )
             self._workspace.append_text("whatsapp.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
             return
 
         if backend == "google_fi":
             if not self._should_append_unanswered_message("google_fi.messages.recent", conversation_id, sender_id, text):
                 return
-            payload = {
-                "received_at": datetime.now(timezone.utc).isoformat(),
-                "source": "frontend_log",
-                "account": self.config.google_fi.account if self.config.google_fi else "default",
-                "direction": "incoming",
-                "conversation_id": conversation_id,
-                "sender": sender_id,
-                "sender_name": sender_name,
-                "sender_contact": sender_contact or sender_id,
-                "text": text,
-            }
+            payload = self._build_frontend_record(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact or sender_id,
+                account=self.config.google_fi.account if self.config.google_fi else "default",
+                source="frontend_log",
+            )
             self._workspace.append_text("google_fi.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _load_unanswered_recent_keys(self) -> None:
@@ -1026,9 +1061,40 @@ class BotRunner:
         sender_contact: str | None = None,
     ) -> None:
         history_file = f"logs/{backend}.history"
-        payload = {
-            "logged_at": datetime.now(timezone.utc).isoformat(),
+        payload = self._build_frontend_record(
+            backend=backend,
+            direction=direction,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            text=text,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+            source="frontend_log",
+            logged_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def _build_frontend_record(
+        self,
+        *,
+        backend: str,
+        direction: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
+        account: str | None = None,
+        source: str = "frontend_log",
+        logged_at: str | None = None,
+    ) -> dict[str, str | None]:
+        timestamp = logged_at or datetime.now(timezone.utc).isoformat()
+        return {
+            "logged_at": timestamp,
+            "collected_at": timestamp,
+            "source": source,
             "backend": backend,
+            "account": account or "default",
             "direction": direction,
             "conversation_id": conversation_id,
             "sender_id": sender_id,
@@ -1036,7 +1102,6 @@ class BotRunner:
             "sender_contact": sender_contact,
             "text": text,
         }
-        self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _is_authorized_frontend_sender(self, backend: str, conversation_id: str, sender_id: str) -> bool:
         if backend == "telegram":
@@ -1160,17 +1225,17 @@ class BotRunner:
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
                 if not self._should_append_unanswered_message("google_fi.calls.recent", conversation_id, sender_id, update.text):
                     return
-                payload = {
-                    "received_at": datetime.now(timezone.utc).isoformat(),
-                    "source": "frontend_log",
-                    "account": self.config.google_fi.account if self.config.google_fi else "default",
-                    "direction": "incoming",
-                    "conversation_id": conversation_id,
-                    "sender": sender_id,
-                    "sender_name": sender_name,
-                    "sender_contact": sender_contact or sender_id,
-                    "text": update.text,
-                }
+                payload = self._build_frontend_record(
+                    backend=backend,
+                    direction="incoming",
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    text=update.text,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact or sender_id,
+                    account=self.config.google_fi.account if self.config.google_fi else "default",
+                    source="frontend_log",
+                )
                 self._workspace.append_text("google_fi.calls.recent", json.dumps(payload, ensure_ascii=False) + "\n")
                 return
             if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
