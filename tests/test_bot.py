@@ -910,6 +910,47 @@ class BotTests(unittest.TestCase):
             self.assertIn("Configured file skill actions: read, append.", system_prompt)
             self.assertIn("File organization guidance: Store everything under assistant/.", system_prompt)
 
+    def test_system_prompt_includes_loaded_collector_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            collectors_dir = Path(td) / "collectors"
+            collectors_dir.mkdir(parents=True)
+            (collectors_dir / "demo.py").write_text(
+                'NAME = "demo"\n'
+                'DESCRIPTION = "Writes demo files."\n'
+                'GENERATED_FILES = ["demo.recent", "demo.state.json"]\n'
+                'FILE_STRUCTURE = ["collectors/demo.py", "collectors/demo/README.md"]\n'
+                "def create_collector(config):\n"
+                "    def run(workspace):\n"
+                "        return None\n"
+                "    return {\n"
+                '        "name": NAME,\n'
+                '        "description": DESCRIPTION,\n'
+                '        "generated_files": GENERATED_FILES,\n'
+                '        "file_structure": FILE_STRUCTURE,\n'
+                '        "run": run,\n'
+                "    }\n",
+                encoding="utf-8",
+            )
+            Path(td, "agent_config.json").write_text('{"collectors": {"demo": {"enabled": true}}}\n', encoding="utf-8")
+
+            runtime = RuntimeConfig(
+                workspace_dir=td,
+                skills_dir=str(Path(td) / "skills"),
+                collectors_dir=str(collectors_dir),
+                collector_config_path=str(Path(td) / "agent_config.json"),
+            )
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_message(1, "hi")
+
+            system_prompt = bot.llm.messages[0]["content"]
+            self.assertIn("Loaded collector outputs available in the workspace", system_prompt)
+            self.assertIn("demo: Writes demo files.", system_prompt)
+            self.assertIn("demo.recent", system_prompt)
+            self.assertIn("collectors/demo.py", system_prompt)
+
     def test_skill_call_output_executes_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
