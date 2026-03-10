@@ -54,6 +54,38 @@ class LoadingTests(unittest.TestCase):
             self.assertIn("demo_skill", skills)
             self.assertEqual(skills["demo_skill"].run(Workspace(Path(td) / "workspace"), {}), "package")
 
+    def test_skill_manager_loads_package_skill_with_relative_import(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            package = skills_dir / "demo_skill"
+            package.mkdir(parents=True)
+            (package / "helpers.py").write_text(
+                textwrap.dedent(
+                    """
+                    def render() -> str:
+                        return "package"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            (package / "__init__.py").write_text(
+                textwrap.dedent(
+                    """
+                    from .helpers import render
+
+                    NAME = "demo_skill"
+
+                    def run(workspace, args):
+                        return render()
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            skills = SkillManager(skills_dir).load()
+
+            self.assertEqual(skills["demo_skill"].run(Workspace(Path(td) / "workspace"), {}), "package")
+
     def test_skill_manager_reads_args_schema_from_skill_readme(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"

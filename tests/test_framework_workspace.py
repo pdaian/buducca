@@ -19,6 +19,16 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ws.resolve("../bad.txt")
 
+    def test_resolve_blocks_sibling_prefix_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "workspace"
+            sibling = Path(td) / "workspace-escape"
+            root.mkdir()
+            sibling.mkdir()
+            ws = Workspace(root)
+            with self.assertRaises(ValueError):
+                ws.resolve("../workspace-escape/secret.txt")
+
     def test_directory_and_move_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             ws = Workspace(td)

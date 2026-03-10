@@ -1,18 +1,39 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
 
+def _module_name_for_path(path: Path, *, kind: str) -> str:
+    resolved = path.resolve()
+    sanitized_parts = [
+        "".join(ch if ch.isalnum() else "_" for ch in part)
+        for part in resolved.parts
+    ]
+    if path.name == "__init__.py":
+        package_name = sanitized_parts[-2] if len(sanitized_parts) >= 2 else path.parent.name
+        return f"_codex_{kind}_{package_name}_{abs(hash(str(resolved.parent)))}"
+    stem = sanitized_parts[-1].rsplit(".", 1)[0]
+    return f"_codex_{kind}_{stem}_{abs(hash(str(resolved)))}"
+
+
 def load_module_from_file(path: Path, *, kind: str) -> ModuleType:
     """Load a Python module from a file path."""
-    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module_name = _module_name_for_path(path, kind=kind)
+    kwargs = {"submodule_search_locations": [str(path.parent)]} if path.name == "__init__.py" else {}
+    spec = importlib.util.spec_from_file_location(module_name, path, **kwargs)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load {kind} module from {path}")
 
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
     return module
 
 

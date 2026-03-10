@@ -8,10 +8,13 @@ class Workspace:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._resolved_root = self.root.resolve()
 
     def resolve(self, relative_path: str) -> Path:
-        target = (self.root / relative_path).resolve()
-        if not str(target).startswith(str(self.root.resolve())):
+        target = (self._resolved_root / relative_path).resolve()
+        try:
+            target.relative_to(self._resolved_root)
+        except ValueError as exc:
             raise ValueError(f"Path escapes workspace: {relative_path}")
         return target
 

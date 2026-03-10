@@ -9,8 +9,8 @@ Please set up signal-cli with your preferred method, then return to BUDUCCA:
 - Linked-device QR flow
 
 Relevant docs:
-- signal-cli wiki: https://github.com/pdaian/buducca
-- signal-cli registration methods: https://github.com/pdaian/buducca
+- signal-cli wiki: https://github.com/AsamK/signal-cli/wiki
+- signal-cli registration methods: https://github.com/AsamK/signal-cli/wiki/Registration-with-signal-cli
 """
 
 
