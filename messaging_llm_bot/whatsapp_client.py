@@ -3,21 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 from typing import Any
 
-
-@dataclass
-class IncomingMessage:
-    update_id: int
-    backend: str
-    conversation_id: str
-    sender_id: str
-    text: str | None = None
-    sender_name: str | None = None
-    sender_contact: str | None = None
+from .interfaces import IncomingMessage
 
 
 class WhatsAppFrontendUnavailableError(RuntimeError):
