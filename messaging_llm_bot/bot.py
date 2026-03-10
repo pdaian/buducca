@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Deque
 
 from assistant_framework import CollectorManager, SkillManager, Workspace
+from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
@@ -35,6 +36,8 @@ _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
 _TYPING_ACTION_INTERVAL_SECONDS = 4
 _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS = 5.0
 _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS = 60.0
+_MAX_REMINDER_FILE_CHARS = 4_000
+_MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
 
 
 class BotRunner:
@@ -258,6 +261,8 @@ class BotRunner:
             time.sleep(poll_interval)
 
     def _poll_frontends_once(self) -> None:
+        self._poll_due_reminders_once()
+
         if self.telegram and self.config.telegram:
             if self._telegram_retry_after is not None and time.time() < self._telegram_retry_after:
                 logging.debug("Telegram polling is in conflict backoff; skipping this cycle")
@@ -376,6 +381,184 @@ class BotRunner:
         if backend == "telegram" and conversation_id.lstrip("-").isdigit():
             return int(conversation_id)
         return f"{backend}:{conversation_id}"
+
+    def _poll_due_reminders_once(self) -> None:
+        reminders_text = self._workspace.read_text(REMINDERS_FILE, default="")
+        if not reminders_text.strip():
+            return
+
+        now_unix_time = int(time.time())
+        retained_lines: list[str] = []
+        changed = False
+
+        for raw_line in reminders_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                changed = True
+                continue
+
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                logging.warning("Skipping malformed reminder entry")
+                retained_lines.append(raw_line)
+                continue
+
+            if not isinstance(record, dict):
+                logging.warning("Skipping non-object reminder entry")
+                retained_lines.append(raw_line)
+                continue
+
+            unix_time = parse_unix_time(record.get("unix_time"))
+            prompt = str(record.get("prompt", "")).strip()
+            backend = str(record.get("backend", "")).strip()
+            conversation_id = str(record.get("conversation_id", "")).strip()
+
+            if unix_time is None or not prompt or not backend or not conversation_id:
+                logging.warning("Skipping invalid reminder entry with missing required fields")
+                retained_lines.append(raw_line)
+                continue
+
+            if unix_time > now_unix_time:
+                retained_lines.append(serialize_reminder_record(record))
+                continue
+
+            if self._run_due_reminder(record):
+                changed = True
+                continue
+
+            retained_lines.append(serialize_reminder_record(record))
+
+        if changed:
+            self._workspace.write_text(
+                REMINDERS_FILE,
+                "".join(f"{line}\n" for line in retained_lines if line.strip()),
+            )
+
+    def _run_due_reminder(self, record: dict[str, Any]) -> bool:
+        backend = str(record["backend"]).strip()
+        conversation_id = str(record["conversation_id"]).strip()
+        sender_id = str(record.get("sender_id", conversation_id)).strip() or conversation_id
+        sender_name = "Scheduled Reminder"
+        sender_contact = f"scheduled-reminder:{record.get('id', '')}"
+        reminder_text = self._build_due_reminder_text(record)
+        conversation_key = self._history_key(backend, conversation_id)
+
+        logging.info(
+            "Running scheduled reminder id=%s backend=%s conversation=%s",
+            record.get("id", ""),
+            backend,
+            conversation_id,
+        )
+        try:
+            with self._typing_indicator(backend, conversation_id):
+                prompt = self._build_messages(
+                    conversation_key,
+                    reminder_text,
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                )
+                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                reply = self._resolve_llm_reply(prompt, model_reply)
+        except RequestTimeoutError:
+            logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
+            return False
+        except Exception:
+            logging.exception("Scheduled reminder failed id=%s", record.get("id", ""))
+            return False
+
+        self._history[conversation_key].append({"role": "user", "content": reminder_text})
+        self._history[conversation_key].append(
+            {
+                "role": "assistant",
+                "content": self._summarize_skill_result_for_context("web_search", reply),
+            }
+        )
+
+        try:
+            for chunk in self._split_reply(reply):
+                self._send_message(backend, conversation_id, chunk)
+        except Exception:
+            logging.exception("Failed to send scheduled reminder reply id=%s", record.get("id", ""))
+            return False
+
+        self._append_agenta_query_log(
+            backend=backend,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            text=reminder_text,
+            reply=reply,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+        )
+        self._workspace.append_text(
+            "logs/reminders.history",
+            json.dumps(
+                {
+                    "logged_at": datetime.now(timezone.utc).isoformat(),
+                    "reminder": record,
+                    "reply": reply,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+        return True
+
+    def _build_due_reminder_text(self, record: dict[str, Any]) -> str:
+        unix_time = int(record["unix_time"])
+        scheduled_at = datetime.fromtimestamp(unix_time, tz=timezone.utc).isoformat()
+        lines = [
+            "[Scheduled reminder]",
+            f"- reminder_id: {record.get('id', '')}",
+            f"- scheduled_unix_time: {unix_time}",
+            f"- scheduled_at_utc: {scheduled_at}",
+            "",
+            "Predefined prompt:",
+            str(record["prompt"]).strip(),
+        ]
+
+        file_context = self._build_reminder_file_context(record.get("files"))
+        if file_context:
+            lines.extend(["", "Workspace file context:", file_context])
+        return "\n".join(lines)
+
+    def _build_reminder_file_context(self, files: Any) -> str:
+        if not isinstance(files, list):
+            return ""
+
+        snippets: list[str] = []
+        remaining_chars = _MAX_REMINDER_TOTAL_FILE_CHARS
+
+        for item in files:
+            relative_path = str(item).strip()
+            if not relative_path or remaining_chars <= 0:
+                continue
+            try:
+                file_path = self._workspace.resolve(relative_path)
+            except ValueError:
+                snippets.append(f"File `{relative_path}` is unavailable because the path escapes the workspace.")
+                continue
+            if not file_path.exists():
+                snippets.append(f"File `{relative_path}` is missing.")
+                continue
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                snippets.append(f"File `{relative_path}` is not UTF-8 text.")
+                continue
+
+            limit = min(_MAX_REMINDER_FILE_CHARS, remaining_chars)
+            excerpt = content[:limit]
+            remaining_chars -= len(excerpt)
+            if len(content) > len(excerpt):
+                excerpt += "\n[truncated]"
+            snippets.append(f"File: {relative_path}\n```text\n{excerpt}\n```")
+
+        return "\n\n".join(snippets)
 
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
