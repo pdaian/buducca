@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import which
 from typing import Any
@@ -378,6 +378,15 @@ def _message_bubble_selectors() -> list[str]:
     ]
 
 
+def _message_timestamp_selectors() -> list[str]:
+    return [
+        "mws-message-timestamp",
+        "[data-e2e-message-timestamp]",
+        "[data-e2e-timestamp]",
+        "[data-message-timestamp]",
+    ]
+
+
 def _find_message_bubbles(page: Any):
     for selector in _message_bubble_selectors():
         locator = page.locator(selector)
@@ -388,6 +397,111 @@ def _find_message_bubbles(page: Any):
             logger.debug("Failed counting bubbles for selector %r", selector, exc_info=True)
     fallback = "mws-text-message-content, mws-message-part-content, .text-msg, [data-e2e-message-text]"
     return page.locator(fallback), "fallback-bubbles"
+
+
+def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, str]]:
+    timestamp_selector = ", ".join(_message_timestamp_selectors())
+    try:
+        raw_entries = page.evaluate(
+            """
+            ({ bubbleSelector, timestampSelector }) => {
+              const bubbleElements = new Set(Array.from(document.querySelectorAll(bubbleSelector)));
+              const hasTimestamps = Boolean(timestampSelector && timestampSelector.trim());
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+              const entries = [];
+              let currentTimestamp = "";
+              let node = walker.currentNode;
+              while (node) {
+                const text = (node.innerText || node.textContent || "").trim();
+                if (bubbleElements.has(node)) {
+                  if (text) {
+                    entries.push({ text, timestamp_text: currentTimestamp });
+                  }
+                } else if (hasTimestamps && node.matches && node.matches(timestampSelector) && text) {
+                  currentTimestamp = text;
+                }
+                node = walker.nextNode();
+              }
+              return entries;
+            }
+            """,
+            {"bubbleSelector": bubble_selector, "timestampSelector": timestamp_selector},
+        )
+    except Exception:
+        logger.debug("Failed to collect inline timestamp metadata for message bubbles", exc_info=True)
+        return []
+
+    entries: list[dict[str, str]] = []
+    if not isinstance(raw_entries, list):
+        return entries
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        text = GoogleFiClient._first_text(item.get("text"))
+        if not text:
+            continue
+        timestamp_text = GoogleFiClient._first_text(item.get("timestamp_text")) or ""
+        entries.append({"text": text, "timestamp_text": timestamp_text})
+    return entries
+
+
+def _parse_google_messages_timestamp(value: str | None, *, reference: datetime | None = None) -> str | None:
+    if not value:
+        return None
+
+    cleaned = " ".join(value.replace("\n", " ").split())
+    cleaned = re.sub(r"^(sent|received)\s+", "", cleaned, flags=re.IGNORECASE)
+    if not cleaned:
+        return None
+
+    now = reference or datetime.now().astimezone()
+    local_tz = now.tzinfo or timezone.utc
+
+    relative_match = re.match(r"^(today|yesterday)\s+(.+)$", cleaned, flags=re.IGNORECASE)
+    if relative_match:
+        day_label = relative_match.group(1).lower()
+        time_part = relative_match.group(2).strip()
+        try:
+            parsed_time = datetime.strptime(time_part, "%I:%M %p")
+        except ValueError:
+            return None
+        day = now.date()
+        if day_label == "yesterday":
+            day = day.fromordinal(day.toordinal() - 1)
+        candidate = datetime.combine(day, parsed_time.time(), tzinfo=local_tz)
+        return candidate.isoformat()
+
+    formats = [
+        ("%a, %b %d, %Y, %I:%M %p", False),
+        ("%A, %B %d, %Y, %I:%M %p", False),
+        ("%b %d, %Y, %I:%M %p", False),
+        ("%B %d, %Y, %I:%M %p", False),
+        ("%a, %b %d, %I:%M %p", True),
+        ("%A, %B %d, %I:%M %p", True),
+        ("%b %d, %I:%M %p", True),
+        ("%B %d, %I:%M %p", True),
+        ("%I:%M %p", True),
+    ]
+    for fmt, needs_inference in formats:
+        try:
+            parsed = datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+        if fmt == "%I:%M %p":
+            candidate = datetime.combine(now.date(), parsed.time(), tzinfo=local_tz)
+            if candidate > now:
+                candidate -= timedelta(days=1)
+            return candidate.isoformat()
+        if needs_inference:
+            candidate = parsed.replace(year=now.year, tzinfo=local_tz)
+            if candidate > now:
+                try:
+                    candidate = candidate.replace(year=candidate.year - 1)
+                except ValueError:
+                    candidate -= timedelta(days=365)
+            return candidate.isoformat()
+        return parsed.replace(tzinfo=local_tz).isoformat()
+    return None
 
 
 def _expand_message_bubbles(page: Any, bubbles: Any, *, max_bubbles: int) -> int:
@@ -500,17 +614,26 @@ def receive_events(
                 bubble_total,
                 bubble_selector,
             )
-            for j in range(start_idx, bubble_count):
-                text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
-                if not text:
-                    logger.debug("Skipping empty bubble row=%s bubble=%s", idx, j)
-                    continue
+            bubble_entries = _collect_bubble_entries(page, bubble_selector)
+            if bubble_entries:
+                iter_entries = bubble_entries[start_idx:bubble_count]
+            else:
+                iter_entries = []
+                for j in range(start_idx, bubble_count):
+                    text = (bubbles.nth(j).inner_text(timeout=800) or "").strip()
+                    if not text:
+                        logger.debug("Skipping empty bubble row=%s bubble=%s", idx, j)
+                        continue
+                    iter_entries.append({"text": text, "timestamp_text": ""})
+            for entry in iter_entries:
+                text = entry["text"]
                 key = f"{conversation_id}::{text}"
                 if seen.get(conversation_id) == key:
                     logger.debug("Skipping duplicate seen event conversation_id=%s key=%r", conversation_id, key)
                     continue
                 seen[conversation_id] = key
                 extracted_sender_id = GoogleFiClient._phone_like_or_original(title) or conversation_id
+                sent_at = _parse_google_messages_timestamp(entry.get("timestamp_text"))
                 event = {
                     "conversation_id": conversation_id,
                     "sender_id": extracted_sender_id,
@@ -518,10 +641,12 @@ def receive_events(
                     "sender_contact": title or extracted_sender_id,
                     "text": text,
                 }
+                if sent_at:
+                    event["sent_at"] = sent_at
                 call_state = _parse_possible_call_state(text)
                 if call_state:
                     logger.debug("Captured call event conversation_id=%s state=%s text=%r", conversation_id, call_state, text)
-                    calls.append({**event, "status": call_state, "received_at": datetime.now(timezone.utc).isoformat()})
+                    calls.append({**event, "status": call_state, "received_at": sent_at or datetime.now(timezone.utc).isoformat()})
                 else:
                     logger.debug("Captured message event conversation_id=%s text=%r", conversation_id, text)
                     messages.append(event)
