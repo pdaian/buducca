@@ -1489,6 +1489,34 @@ class BotTests(unittest.TestCase):
             ]
             self.assertEqual(len(recent_lines), 1)
 
+
+    def test_google_fi_call_events_are_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            update = IncomingMessage(
+                update_id=1,
+                backend="google_fi",
+                conversation_id="thread-1",
+                sender_id="+15553334444",
+                text="[Call event] ringing",
+            )
+            setattr(update, "event_type", "call")
+            bot._handle_update(update)
+            bot._handle_update(update)
+
+            recent_lines = [
+                line for line in (Path(td) / "google_fi.calls.recent").read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            self.assertEqual(len(recent_lines), 1)
+
     def test_google_fi_timeout_is_stored_as_unprocessed_message(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
