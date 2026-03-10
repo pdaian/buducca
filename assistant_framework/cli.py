@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from assistant_framework import CollectorManager, CollectorRunner, SkillManager, Workspace
+from assistant_framework import CollectorManager, CollectorRunner, CompressorManager, CompressorRunner, SkillManager, Workspace
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:
@@ -22,6 +22,10 @@ def _load_collector_config(path: str) -> dict:
     return _read_json(path).get("collectors", {})
 
 
+def _load_compressor_config(path: str) -> dict:
+    return _read_json(path).get("compressors", {})
+
+
 def _run_collectors(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -31,6 +35,17 @@ def _run_collectors(args: argparse.Namespace) -> None:
     collectors = manager.load()
 
     CollectorRunner(workspace, collectors).run_forever()
+
+
+def _run_compressors(args: argparse.Namespace) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    workspace = Workspace(args.workspace)
+    compressor_config = _load_compressor_config(args.config)
+    manager = CompressorManager(args.compressors, config=compressor_config)
+    compressors = manager.load()
+
+    CompressorRunner(workspace, compressors).run_forever()
 
 
 def _run_skill(args: argparse.Namespace) -> None:
@@ -54,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
     collectors_parser.add_argument("--collectors", default="collectors", help="Collectors directory")
     collectors_parser.add_argument("--config", default="agent_config.json", help="Agent config JSON file")
     collectors_parser.set_defaults(handler=_run_collectors)
+
+    compressors_parser = subparsers.add_parser("compressors", help="Run background workspace compressors")
+    compressors_parser.add_argument("--workspace", default="workspace", help="Workspace directory")
+    compressors_parser.add_argument("--compressors", default="compressors", help="Compressors directory")
+    compressors_parser.add_argument("--config", default="compressors/config.json", help="Compressor config JSON file")
+    compressors_parser.set_defaults(handler=_run_compressors)
 
     skill_parser = subparsers.add_parser("skill", help="Run a skill against the workspace")
     skill_parser.add_argument("skill", help="Skill name")
