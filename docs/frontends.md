@@ -44,10 +44,9 @@ Global runtime:
 
 ## Allowlist overrides
 
+- Telegram chat allowlist: `telegram.allowed_chat_ids`
 - Signal sender allowlist: `signal.allowed_sender_ids`
 - Signal group allowlist override: `signal.allowed_group_ids_when_sender_not_allowed`
-- Telegram sender allowlist: `telegram.allowed_sender_ids`
-- Telegram group allowlist override: `telegram.allowed_group_ids_when_sender_not_allowed`
 
 ## Voice notes
 

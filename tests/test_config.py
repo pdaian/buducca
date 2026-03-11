@@ -174,6 +174,23 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
             self.assertIsNotNone(config.telegram)
             self.assertEqual(config.telegram.mode, "user")
+
+    def test_telegram_legacy_sender_allowlist_keys_are_ignored(self) -> None:
+        data = {
+            "telegram": {
+                "bot_token": "t",
+                "allowed_chat_ids": [123],
+                "allowed_sender_ids": [456],
+                "allowed_group_ids_when_sender_not_allowed": [789],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.telegram)
+            self.assertEqual(config.telegram.allowed_chat_ids, [123])
     def test_whatsapp_only_config_is_valid(self) -> None:
         data = {
             "whatsapp": {

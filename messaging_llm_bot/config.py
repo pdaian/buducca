@@ -17,8 +17,6 @@ class TelegramConfig:
     poll_interval_seconds: float = 1.0
     long_poll_timeout_seconds: int = 30
     allowed_chat_ids: list[int] = field(default_factory=list)
-    allowed_sender_ids: list[int] = field(default_factory=list)
-    allowed_group_ids_when_sender_not_allowed: list[int] = field(default_factory=list)
     process_pending_updates_on_startup: bool = False
     read_only: bool = False
     store_unanswered_messages: bool = False
@@ -125,6 +123,13 @@ def _strip_comment_keys(raw: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if not key.startswith("_")}
 
 
+def _normalize_telegram_config(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized = _strip_comment_keys(raw)
+    normalized.pop("allowed_sender_ids", None)
+    normalized.pop("allowed_group_ids_when_sender_not_allowed", None)
+    return normalized
+
+
 def _validate(config: BotConfig, *, config_path: Path) -> None:
     if not config.telegram and not config.signal and not config.whatsapp and not config.google_fi:
         raise ValueError("At least one frontend must be configured: telegram, signal, whatsapp, or google_fi")
@@ -206,7 +211,7 @@ def load_config(path: str | Path) -> BotConfig:
     signal_raw = raw.get("signal")
     whatsapp_raw = raw.get("whatsapp")
     google_fi_raw = raw.get("google_fi")
-    telegram = TelegramConfig(**_strip_comment_keys(telegram_raw)) if isinstance(telegram_raw, dict) else None
+    telegram = TelegramConfig(**_normalize_telegram_config(telegram_raw)) if isinstance(telegram_raw, dict) else None
     signal = SignalConfig(**_strip_comment_keys(signal_raw)) if isinstance(signal_raw, dict) else None
     whatsapp = WhatsAppConfig(**_strip_comment_keys(whatsapp_raw)) if isinstance(whatsapp_raw, dict) else None
     google_fi = GoogleFiConfig(**_strip_comment_keys(google_fi_raw)) if isinstance(google_fi_raw, dict) else None

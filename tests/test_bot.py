@@ -372,12 +372,11 @@ class BotTests(unittest.TestCase):
             self.assertEqual(trace["final_reply"], bot.telegram.sent[0][1])
 
 
-    def test_telegram_sender_not_allowed_outside_configured_group(self) -> None:
+    def test_telegram_chat_not_allowed_is_blocked(self) -> None:
         cfg = BotConfig(
             telegram=TelegramConfig(
                 bot_token="t",
-                allowed_sender_ids=[11],
-                allowed_group_ids_when_sender_not_allowed=[100],
+                allowed_chat_ids=[100],
             ),
             llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
             runtime=RuntimeConfig(),
@@ -390,12 +389,11 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
-    def test_telegram_sender_allowed_in_configured_group(self) -> None:
+    def test_telegram_allowed_chat_is_processed(self) -> None:
         cfg = BotConfig(
             telegram=TelegramConfig(
                 bot_token="t",
-                allowed_sender_ids=[11],
-                allowed_group_ids_when_sender_not_allowed=[100],
+                allowed_chat_ids=[100],
             ),
             llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
             runtime=RuntimeConfig(),
@@ -409,13 +407,13 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 1)
 
-    def test_telegram_user_mode_blocks_sender_when_allowed_sender_list_is_empty(self) -> None:
+    def test_telegram_user_mode_blocks_chat_not_in_allowed_chat_ids(self) -> None:
         cfg = BotConfig(
             telegram=TelegramConfig(
                 mode="user",
                 api_id=123,
                 api_hash="h",
-                allowed_sender_ids=[],
+                allowed_chat_ids=[100],
             ),
             llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
             runtime=RuntimeConfig(),
@@ -429,14 +427,13 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.calls, 0)
 
-    def test_telegram_user_mode_allows_configured_group_when_allowed_sender_list_is_empty(self) -> None:
+    def test_telegram_user_mode_allows_chat_in_allowed_chat_ids(self) -> None:
         cfg = BotConfig(
             telegram=TelegramConfig(
                 mode="user",
                 api_id=123,
                 api_hash="h",
-                allowed_sender_ids=[],
-                allowed_group_ids_when_sender_not_allowed=[100],
+                allowed_chat_ids=[100],
             ),
             llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
             runtime=RuntimeConfig(),

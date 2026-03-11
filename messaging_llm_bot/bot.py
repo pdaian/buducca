@@ -84,8 +84,6 @@ class BotRunner:
         )
 
         self._allowed_chat_ids = set(config.telegram.allowed_chat_ids) if config.telegram else set()
-        self._allowed_telegram_sender_ids = set(config.telegram.allowed_sender_ids) if config.telegram else set()
-        self._allowed_telegram_group_ids_when_sender_not_allowed = set(config.telegram.allowed_group_ids_when_sender_not_allowed) if config.telegram else set()
         self._allowed_signal_sender_ids = set(config.signal.allowed_sender_ids) if config.signal else set()
         self._allowed_signal_sender_ids_normalized = {
             self._normalize_signal_identifier(sender_id)
@@ -1611,23 +1609,8 @@ class BotRunner:
     def _is_authorized_frontend_sender(self, backend: str, conversation_id: str, sender_id: str) -> bool:
         if backend == "telegram":
             chat_id = int(conversation_id)
-            telegram_sender_id = int(sender_id)
             if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:
                 logging.warning("Blocked message from unauthorized telegram chat_id=%s", chat_id)
-                return False
-            sender_allowlist_required = bool(self._allowed_telegram_sender_ids) or (
-                bool(self.config.telegram) and self.config.telegram.mode == "user"
-            )
-            if sender_allowlist_required:
-                if telegram_sender_id in self._allowed_telegram_sender_ids:
-                    return True
-                if chat_id in self._allowed_telegram_group_ids_when_sender_not_allowed:
-                    return True
-                logging.warning(
-                    "Blocked message from unauthorized telegram sender_id=%s conversation_id=%s",
-                    sender_id,
-                    conversation_id,
-                )
                 return False
 
         if backend == "signal" and self.config.signal:
