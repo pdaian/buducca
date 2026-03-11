@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from assistant_framework.telegram_user_client import TelegramUserClient
@@ -35,7 +36,9 @@ class _FakeMessage:
     def __init__(self, message_id: int, text: str, sender: object) -> None:
         self.id = message_id
         self.message = text
+        self.text = text
         self._sender = sender
+        self.date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
     async def get_sender(self):
         return self._sender
@@ -101,6 +104,57 @@ class TelegramUserClientTests(unittest.TestCase):
             BotTelegramUserClient._extract_sender_contact(sender, "Announcements"),
             "Announcements (@announcements)",
         )
+        self.assertEqual(TelegramUserClient._extract_sender_name(sender), "Announcements")
+        self.assertEqual(
+            TelegramUserClient._extract_sender_contact(sender, "Announcements"),
+            "Announcements (@announcements)",
+        )
+
+    def test_get_recent_messages_includes_sender_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            session_path.with_suffix(".session").write_text("present", encoding="utf-8")
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42})()})()
+            fake_client = _FakeDialogClient(dialogs=[dialog], messages_by_chat={42: [_FakeMessage(5, "hello", sender)]})
+            client = TelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            result = client.get_recent_messages(since_timestamp=None, max_messages=10)
+
+            self.assertEqual(
+                result,
+                [
+                    {
+                        "chat_id": 42,
+                        "message_id": 5,
+                        "date": 1704067200,
+                        "text": "hello",
+                        "sender_id": "7",
+                        "sender_name": "Alice",
+                        "sender_contact": "Alice (@alice)",
+                    }
+                ],
+            )
+
+    def test_get_recent_messages_uses_message_sender_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            session_path.with_suffix(".session").write_text("present", encoding="utf-8")
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42})()})()
+            fake_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessageWithSenderFallback(5, "hello", sender, 7)]},
+            )
+            client = TelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            result = client.get_recent_messages(since_timestamp=None, max_messages=10)
+
+            self.assertEqual(result[0]["sender_id"], "7")
+            self.assertEqual(result[0]["sender_name"], "Alice")
+            self.assertEqual(result[0]["sender_contact"], "Alice (@alice)")
 
     def test_bot_client_persists_last_seen_message_ids(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -128,6 +182,7 @@ class TelegramUserClientTests(unittest.TestCase):
                         text="hello",
                         sender_name="Alice",
                         sender_contact="Alice (@alice)",
+                        sent_at="2024-01-01T00:00:00+00:00",
                     ),
                     IncomingMessage(
                         update_id=(42 * 1_000_000_000) + 8,
@@ -138,6 +193,7 @@ class TelegramUserClientTests(unittest.TestCase):
                         text="again",
                         sender_name="Alice",
                         sender_contact="Alice (@alice)",
+                        sent_at="2024-01-01T00:00:00+00:00",
                     ),
                 ],
             )

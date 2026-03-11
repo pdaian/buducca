@@ -81,12 +81,20 @@ class TelegramUserClient:
                     timestamp = int(message.date.replace(tzinfo=timezone.utc).timestamp())
                     if timestamp <= cutoff:
                         continue
+                    sender = await message.get_sender()
+                    sender_entity = self._resolve_sender_entity(message, sender, dialog.entity)
+                    sender_name = self._extract_sender_name(sender_entity)
+                    sender_contact = self._extract_sender_contact(sender_entity, sender_name)
+                    sender_id = getattr(sender_entity, "id", getattr(message, "sender_id", getattr(dialog.entity, "id", None)))
                     messages.append(
                         {
                             "chat_id": getattr(dialog.entity, "id", None),
                             "message_id": message.id,
                             "date": timestamp,
                             "text": message.text,
+                            "sender_id": str(sender_id) if sender_id is not None else None,
+                            "sender_name": sender_name,
+                            "sender_contact": sender_contact,
                         }
                     )
                     if len(messages) >= max_messages:
@@ -116,3 +124,45 @@ class TelegramUserClient:
         import asyncio
 
         asyncio.run(self._signup())
+
+    @staticmethod
+    def _resolve_sender_entity(message: object, sender: object, dialog_entity: object) -> object:
+        if sender is not None:
+            return sender
+        for attr_name in ("sender", "peer_id", "from_id", "chat"):
+            candidate = getattr(message, attr_name, None)
+            if candidate is not None:
+                return candidate
+        return dialog_entity
+
+    @staticmethod
+    def _extract_sender_name(sender: object) -> str | None:
+        title = str(getattr(sender, "title", "") or "").strip()
+        if title:
+            return title
+        first_name = str(getattr(sender, "first_name", "") or "").strip()
+        last_name = str(getattr(sender, "last_name", "") or "").strip()
+        full_name = " ".join(part for part in [first_name, last_name] if part)
+        if full_name:
+            return full_name
+        username = str(getattr(sender, "username", "") or "").strip()
+        return username or None
+
+    @staticmethod
+    def _extract_sender_contact(sender: object, sender_name: str | None) -> str | None:
+        sender_id = getattr(sender, "id", None)
+        username = str(getattr(sender, "username", "") or "").strip()
+        if username:
+            if sender_name and sender_name != username:
+                return f"{sender_name} (@{username})"
+            return f"@{username}"
+        title = str(getattr(sender, "title", "") or "").strip()
+        if title:
+            if sender_id is not None:
+                return f"{title} <id:{sender_id}>"
+            return title
+        if sender_id is not None:
+            if sender_name:
+                return f"{sender_name} <id:{sender_id}>"
+            return f"id:{sender_id}"
+        return sender_name
