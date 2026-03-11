@@ -88,6 +88,9 @@ class TelegramUserClient:
 
     @staticmethod
     def _extract_sender_name(sender: object) -> str | None:
+        title = str(getattr(sender, "title", "") or "").strip()
+        if title:
+            return title
         first_name = str(getattr(sender, "first_name", "") or "").strip()
         last_name = str(getattr(sender, "last_name", "") or "").strip()
         full_name = " ".join(part for part in [first_name, last_name] if part)
@@ -104,6 +107,11 @@ class TelegramUserClient:
             if sender_name and sender_name != username:
                 return f"{sender_name} (@{username})"
             return f"@{username}"
+        title = str(getattr(sender, "title", "") or "").strip()
+        if title:
+            if sender_id is not None:
+                return f"{title} <id:{sender_id}>"
+            return title
         if sender_id is not None:
             if sender_name:
                 return f"{sender_name} <id:{sender_id}>"

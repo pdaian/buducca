@@ -26,13 +26,15 @@ class TelegramClient:
             text = message.get("text")
             voice = message.get("voice", {})
             chat = message.get("chat", {})
-            sender = message.get("from", {})
+            sender = message.get("from")
+            sender_chat = message.get("sender_chat")
+            effective_sender = sender if isinstance(sender, dict) and sender else sender_chat
             voice_file_id = voice.get("file_id") if isinstance(voice, dict) else None
             if (not text and not voice_file_id) or "id" not in chat:
                 continue
-            sender_name = self._extract_sender_name(sender)
-            sender_contact = self._extract_sender_contact(sender, sender_name)
-            sender_id = sender.get("id") if isinstance(sender, dict) else None
+            sender_name = self._extract_sender_name(effective_sender)
+            sender_contact = self._extract_sender_contact(effective_sender, sender_name)
+            sender_id = effective_sender.get("id") if isinstance(effective_sender, dict) else None
             messages.append(
                 IncomingMessage(
                     update_id=update["update_id"],
@@ -52,6 +54,9 @@ class TelegramClient:
     def _extract_sender_name(sender: Any) -> str | None:
         if not isinstance(sender, dict):
             return None
+        title = str(sender.get("title") or "").strip()
+        if title:
+            return title
         first_name = str(sender.get("first_name") or "").strip()
         last_name = str(sender.get("last_name") or "").strip()
         full_name = " ".join(part for part in [first_name, last_name] if part)
@@ -71,6 +76,11 @@ class TelegramClient:
             if sender_name and sender_name != username:
                 return f"{sender_name} (@{username})"
             return f"@{username}"
+        title = str(sender.get("title") or "").strip()
+        if title:
+            if sender_id is not None:
+                return f"{title} <id:{sender_id}>"
+            return title
         if sender_id is not None:
             if sender_name:
                 return f"{sender_name} <id:{sender_id}>"

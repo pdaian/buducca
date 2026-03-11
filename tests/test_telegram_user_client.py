@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from assistant_framework.telegram_user_client import TelegramUserClient
+from messaging_llm_bot.telegram_user_client import TelegramUserClient as BotTelegramUserClient
 
 
 class _FakeClient:
@@ -53,6 +54,15 @@ class TelegramUserClientTests(unittest.TestCase):
             self.assertEqual(result, [])
             self.assertTrue(fake_client.connected)
             self.assertEqual(fake_client.dialog_calls, 0)
+
+    def test_extract_sender_name_and_contact_support_channel_accounts(self) -> None:
+        sender = type("Sender", (), {"id": 99, "title": "Announcements", "username": "announcements"})()
+
+        self.assertEqual(BotTelegramUserClient._extract_sender_name(sender), "Announcements")
+        self.assertEqual(
+            BotTelegramUserClient._extract_sender_contact(sender, "Announcements"),
+            "Announcements (@announcements)",
+        )
 
 
 if __name__ == "__main__":
