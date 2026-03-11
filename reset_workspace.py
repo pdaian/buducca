@@ -9,20 +9,27 @@ runs.
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 from pathlib import Path
+
+from assistant_framework.config_files import load_json_path, load_named_config_map
 
 
 DEFAULT_WORKSPACE = "workspace"
 
 
 def _load_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        payload = load_json_path(path)
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_optional_named_map(path: Path, *, section_name: str | None = None) -> dict:
+    try:
+        return load_named_config_map(path, section_name=section_name)
+    except ValueError:
         return {}
 
 
@@ -65,18 +72,20 @@ def _gather_targets(repo_root: Path) -> list[Path]:
     config = _load_json(repo_root / "config.json")
     runtime = config.get("runtime", {}) if isinstance(config, dict) else {}
     workspace_dir = Path(runtime.get("workspace_dir", DEFAULT_WORKSPACE))
-    collector_config_path = runtime.get("collector_config_path", "agent_config.json")
+    collector_config_path = runtime.get("collector_config_path", "config/collectors")
 
-    agent_config = _load_json(repo_root / collector_config_path) if isinstance(collector_config_path, str) and collector_config_path.strip() else {}
+    agent_config = (
+        _load_optional_named_map(repo_root / collector_config_path, section_name="collectors")
+        if isinstance(collector_config_path, str) and collector_config_path.strip()
+        else {}
+    )
     collector_cfg = {}
     if isinstance(agent_config, dict):
-        collectors = agent_config.get("collectors", {})
-        if isinstance(collectors, dict):
-            telegram_recent = collectors.get("telegram_recent", {})
-            if not isinstance(telegram_recent, dict) or not telegram_recent:
-                telegram_recent = collectors.get("telegram_recent_collector", {})
-            if isinstance(telegram_recent, dict):
-                collector_cfg = telegram_recent.get("user_client", {}) or {}
+        telegram_recent = agent_config.get("telegram_recent", {})
+        if not isinstance(telegram_recent, dict) or not telegram_recent:
+            telegram_recent = agent_config.get("telegram_recent_collector", {})
+        if isinstance(telegram_recent, dict):
+            collector_cfg = telegram_recent.get("user_client", {}) or {}
     session_path = collector_cfg.get("session_path")
 
     targets: set[Path] = set()

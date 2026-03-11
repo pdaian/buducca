@@ -1,0 +1,12 @@
+{
+  "accounts": [
+    {
+      "name": "workspace_a",
+      "command": "python3 scripts/export_slack_recent_a.py"
+    },
+    {
+      "name": "workspace_b",
+      "command": "python3 scripts/export_slack_recent_b.py"
+    }
+  ]
+}

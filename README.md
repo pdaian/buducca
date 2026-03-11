@@ -31,12 +31,10 @@ Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small
 > Messaging frontends rely on third-party networks. Transport metadata and platform visibility still apply.
 
 ```bash
-cp config.example.json config.json
-cp agent_config.example.json agent_config.json
-python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
-cp compressors/config.example.json compressors/config.json
-python3 -m assistant_framework.cli compressors --workspace workspace --compressors compressors --config compressors/config.json
-python3 run_bot.py --config config.json
+cp -R config.example config
+python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config config/collectors
+python3 -m assistant_framework.cli compressors --workspace workspace --compressors compressors --config config/compressors
+python3 run_bot.py --config config
 ```
 
 ## Explore and modify

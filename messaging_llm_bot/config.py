@@ -6,6 +6,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
+from assistant_framework.config_files import load_json_path
+
 
 @dataclass
 class TelegramConfig:
@@ -90,7 +92,7 @@ class RuntimeConfig:
     hourly_status_file: str = "hourly_status.json"
     skills_dir: str = "skills"
     collectors_dir: str = "collectors"
-    collector_config_path: str = "agent_config.json"
+    collector_config_path: str = "config/collectors"
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
@@ -273,7 +275,9 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
 
 def load_config(path: str | Path) -> BotConfig:
     config_path = Path(path)
-    raw = _read_json(config_path)
+    raw = load_json_path(config_path)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config root must be a JSON object: {config_path}")
 
     telegram_raw = raw.get("telegram")
     signal_raw = raw.get("signal")

@@ -3,28 +3,24 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
-from typing import Any
 
 from assistant_framework import CollectorManager, CollectorRunner, CompressorManager, CompressorRunner, SkillManager, Workspace
+from assistant_framework.config_files import load_named_config_map
 from assistant_framework.traces import load_trace, replay_trace
 
 
-def _read_json(path: str | Path) -> dict[str, Any]:
-    file_path = Path(path)
+def _load_collector_config(path: str) -> dict:
     try:
-        with file_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        return load_named_config_map(path, section_name="collectors")
+    except ValueError:
         return {}
 
 
-def _load_collector_config(path: str) -> dict:
-    return _read_json(path).get("collectors", {})
-
-
 def _load_compressor_config(path: str) -> dict:
-    return _read_json(path).get("compressors", {})
+    try:
+        return load_named_config_map(path, section_name="compressors")
+    except ValueError:
+        return {}
 
 
 def _run_collectors(args: argparse.Namespace) -> None:
@@ -94,13 +90,13 @@ def build_parser() -> argparse.ArgumentParser:
     collectors_parser = subparsers.add_parser("collectors", help="Run background data collectors")
     collectors_parser.add_argument("--workspace", default="workspace", help="Workspace directory")
     collectors_parser.add_argument("--collectors", default="collectors", help="Collectors directory")
-    collectors_parser.add_argument("--config", default="agent_config.json", help="Agent config JSON file")
+    collectors_parser.add_argument("--config", default="config/collectors", help="Collector config JSON file or directory")
     collectors_parser.set_defaults(handler=_run_collectors)
 
     compressors_parser = subparsers.add_parser("compressors", help="Run background workspace compressors")
     compressors_parser.add_argument("--workspace", default="workspace", help="Workspace directory")
     compressors_parser.add_argument("--compressors", default="compressors", help="Compressors directory")
-    compressors_parser.add_argument("--config", default="compressors/config.json", help="Compressor config JSON file")
+    compressors_parser.add_argument("--config", default="config/compressors", help="Compressor config JSON file or directory")
     compressors_parser.set_defaults(handler=_run_compressors)
 
     skill_parser = subparsers.add_parser("skill", help="Run a skill against the workspace")

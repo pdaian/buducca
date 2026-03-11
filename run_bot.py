@@ -11,8 +11,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Telegram + OpenAI-compatible bot")
     parser.add_argument(
         "--config",
-        default="config.json",
-        help="Path to the bot configuration file (JSON)",
+        default="config",
+        help="Path to the bot configuration file or directory",
     )
     return parser.parse_args()
 

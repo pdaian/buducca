@@ -344,6 +344,53 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(path)
 
+    def test_directory_config_loads_localized_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config_dir = Path(td) / "config"
+            config_dir.mkdir()
+            (config_dir / "telegram.json").write_text(
+                json.dumps({"bot_token": "t", "long_poll_timeout_seconds": 10}),
+                encoding="utf-8",
+            )
+            (config_dir / "llm.json").write_text(
+                json.dumps({"base_url": "https://x", "api_key": "k", "model": "m"}),
+                encoding="utf-8",
+            )
+            (config_dir / "runtime.json").write_text(
+                json.dumps({"workspace_dir": "workspace"}),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_dir)
+
+            self.assertIsNotNone(config.telegram)
+            self.assertEqual(config.telegram.bot_token, "t")
+            self.assertEqual(config.runtime.workspace_dir, "workspace")
+
+    def test_directory_config_loads_contacts_from_workspace_relative_to_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "telegram.json").write_text(
+                json.dumps({"bot_token": "t", "long_poll_timeout_seconds": 10}),
+                encoding="utf-8",
+            )
+            (config_dir / "llm.json").write_text(
+                json.dumps({"base_url": "https://x", "api_key": "k", "model": "m"}),
+                encoding="utf-8",
+            )
+            (root / "workspace" / "assistant" / "people").mkdir(parents=True)
+            (root / "workspace" / "assistant" / "people" / "contacts.json").write_text(
+                json.dumps([{"name": "Alice", "platform": "telegram", "recipient": 123}]),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_dir)
+
+            self.assertEqual(len(config.contacts), 1)
+            self.assertEqual(config.contacts[0].name, "Alice")
+
 
 if __name__ == "__main__":
     unittest.main()

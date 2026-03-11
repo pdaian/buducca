@@ -22,7 +22,7 @@ def run_signup(config_path: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Signal signup helper")
-    parser.add_argument("--config", default="config.json", help="Bot config JSON file")
+    parser.add_argument("--config", default="config", help="Bot config JSON file or directory")
     return parser.parse_args()
 
 

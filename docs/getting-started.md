@@ -3,27 +3,25 @@
 ## 1) Prepare config files
 
 ```bash
-cp config.example.json config.json
-cp agent_config.example.json agent_config.json
+cp -R config.example config
 ```
 
 ## 2) Run collectors
 
 ```bash
-python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config agent_config.json
+python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config config/collectors
 ```
 
 ## 3) Run compressors
 
 ```bash
-cp compressors/config.example.json compressors/config.json
-python3 -m assistant_framework.cli compressors --workspace workspace --compressors compressors --config compressors/config.json
+python3 -m assistant_framework.cli compressors --workspace workspace --compressors compressors --config config/compressors
 ```
 
 ## 4) Run the messaging bot
 
 ```bash
-python3 run_bot.py --config config.json
+python3 run_bot.py --config config
 ```
 
 ## Useful local commands

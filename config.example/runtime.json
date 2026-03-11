@@ -1,0 +1,35 @@
+{
+  "request_timeout_seconds": 300,
+  "log_level": "INFO",
+  "workspace_dir": "workspace",
+  "collector_status_file": "collector_status.json",
+  "hourly_file": "hourly",
+  "hourly_status_file": "hourly_status.json",
+  "skills_dir": "skills",
+  "collectors_dir": "collectors",
+  "collector_config_path": "config/collectors",
+  "enable_voice_notes": false,
+  "voice_transcribe_command": [
+    "whisper",
+    "--model",
+    "base.en",
+    "--output_dir",
+    "{input_dir}",
+    "--output_format",
+    "txt",
+    "{input}"
+  ],
+  "max_reply_chunk_chars": 4096,
+  "debug": false,
+  "enable_message_send_skill": false,
+  "contacts_file": "assistant/people/contacts.json",
+  "_warning_enable_message_send_skill": "Warning: enabling this can leak data via prompt injection, model insecurity, or other means.",
+  "file_skill_actions": [
+    "read",
+    "write",
+    "append",
+    "move",
+    "create_dir",
+    "delete_dir"
+  ]
+}

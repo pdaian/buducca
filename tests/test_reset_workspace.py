@@ -21,8 +21,10 @@ class ResetWorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(td)
             (repo_root / "config.json").write_text("{}", encoding="utf-8")
-            (repo_root / "agent_config.json").write_text(
-                json.dumps({"collectors": {"telegram_recent": {"user_client": {"session_path": "runtime_state/telegram_user"}}}}),
+            (repo_root / "config").mkdir()
+            (repo_root / "config" / "collectors").mkdir(parents=True)
+            (repo_root / "config" / "collectors" / "telegram_recent.json").write_text(
+                json.dumps({"user_client": {"session_path": "runtime_state/telegram_user"}}),
                 encoding="utf-8",
             )
 

@@ -11,7 +11,14 @@ class CLITests(unittest.TestCase):
         args = parser.parse_args(["compressors"])
         self.assertEqual(args.workspace, "workspace")
         self.assertEqual(args.compressors, "compressors")
-        self.assertEqual(args.config, "compressors/config.json")
+        self.assertEqual(args.config, "config/compressors")
+
+    def test_collectors_command_defaults(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["collectors"])
+        self.assertEqual(args.workspace, "workspace")
+        self.assertEqual(args.collectors, "collectors")
+        self.assertEqual(args.config, "config/collectors")
 
     def test_trace_command_defaults(self) -> None:
         parser = build_parser()

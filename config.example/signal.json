@@ -1,0 +1,29 @@
+{
+  "account": "+15551234567",
+  "poll_interval_seconds": 0.5,
+  "allowed_sender_ids": [],
+  "allowed_group_ids_when_sender_not_allowed": [
+    "AQi7f+/4S3mQv6s5hN2xwQ=="
+  ],
+  "receive_command": [
+    "signal-cli",
+    "-o",
+    "json",
+    "-a",
+    "+15551234567",
+    "receive",
+    "--timeout",
+    "1"
+  ],
+  "send_command": [
+    "signal-cli",
+    "-a",
+    "+15551234567",
+    "send",
+    "-m",
+    "{message}",
+    "{recipient}"
+  ],
+  "read_only": false,
+  "store_unanswered_messages": false
+}

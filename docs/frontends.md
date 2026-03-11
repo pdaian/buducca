@@ -4,7 +4,7 @@ BUDUCCA frontends are bidirectional adapters: they receive messages and send rep
 
 ## Telegram
 
-Set `telegram.mode` in `config.json`:
+Set `telegram.mode` in `config/telegram.json`:
 
 - `"bot"` for bot-token mode.
 - `"user"` for full-account mode via Telethon session.
@@ -17,22 +17,22 @@ User-mode note:
 
 ## Signal
 
-Configure `signal` in `config.json` and point BUDUCCA to your `signal-cli` setup.
+Configure `signal` in `config/signal.json` and point BUDUCCA to your `signal-cli` setup.
 
 One-time signup/help command:
 
 ```bash
-python3 -m messaging_llm_bot.signal_signup --config config.json
+python3 -m messaging_llm_bot.signal_signup --config config
 ```
 
 ## WhatsApp
 
-Configure `whatsapp` in `config.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
+Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
 
 One-time signup/help command:
 
 ```bash
-python3 -m messaging_llm_bot.whatsapp_signup --config config.json
+python3 -m messaging_llm_bot.whatsapp_signup --config config
 ```
 
 WhatsApp linking is handled by the external bridge behind those commands, not by BUDUCCA itself. Start that bridge in QR/pairing mode, then scan the QR from your phone in WhatsApp under `Settings -> Linked Devices -> Link a Device`.

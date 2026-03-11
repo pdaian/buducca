@@ -26,7 +26,18 @@ Collectors:
 Compressors:
 
 - code: `compressors/<compressor_name>/__init__.py`
-- optional config: `compressors/config.json`
+- optional config: `config/compressors/<compressor_name>.json`
+
+## Config layout
+
+- Bot/runtime config can be a single JSON file or a directory tree.
+- Directory config is loaded dynamically by JSON path:
+  - `config/telegram.json` -> `telegram`
+  - `config/llm.json` -> `llm`
+  - `config/runtime.json` -> `runtime`
+  - `config/collectors/gmail.json` -> `collectors.gmail`
+  - `config/compressors/file_size.json` -> `compressors.file_size`
+- `index.json` may be used to assign config to a directory key directly.
 
 If you delete a plugin folder, it is not loaded.
 

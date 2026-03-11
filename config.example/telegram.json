@@ -1,0 +1,12 @@
+{
+  "bot_token": "123456:replace-with-your-telegram-token",
+  "poll_interval_seconds": 0.2,
+  "long_poll_timeout_seconds": 30,
+  "allowed_chat_ids": [],
+  "read_only": false,
+  "mode": "bot",
+  "api_id": 123456,
+  "api_hash": "replace-with-your-telegram-api-hash",
+  "session_path": "data/telegram_user",
+  "store_unanswered_messages": false
+}

@@ -1,0 +1,9 @@
+{
+  "accounts": [
+    {
+      "name": "main",
+      "following_command": "python3 scripts/export_twitter_following.py",
+      "dms_command": "python3 scripts/export_twitter_dms.py"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "accounts": [
+    {
+      "name": "personal",
+      "command": "python3 /absolute/path/to/gmail_personal_export.py"
+    },
+    {
+      "name": "work",
+      "command": "python3 /absolute/path/to/gmail_work_export.py"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "accounts": [
+    "primary@example.com",
+    {
+      "name": "work@example.com",
+      "command_template": "python3 collectors/google_calendar/google_calendar_api.py --account {account} --time-min {month_start} --time-max {month_end}"
+    }
+  ]
+}

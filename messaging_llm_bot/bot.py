@@ -18,6 +18,7 @@ from typing import Any, Deque
 
 from assistant_framework import CollectorManager, SkillManager, Workspace
 from assistant_framework.action_runtime import ActionEnvelope, append_action_audit, decide_action, load_action_policy
+from assistant_framework.config_files import load_named_config_map
 from assistant_framework.ingestion import ingest_attachment
 from assistant_framework.memory import ensure_memory_layout, list_records, mark_routine_run, mark_task_notified
 from assistant_framework.retrieval import append_sources, format_evidence_context, search_workspace
@@ -270,16 +271,14 @@ class BotRunner:
         return present
 
     def _load_collector_prompt_config(self) -> dict[str, Any]:
-        config_path = Path(self.config.runtime.collector_config_path)
         try:
-            raw = json.loads(config_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+            return load_named_config_map(self.config.runtime.collector_config_path, section_name="collectors")
+        except ValueError:
+            logging.warning(
+                "collector_prompt_config event=skipped reason=invalid_config path=%s",
+                self.config.runtime.collector_config_path,
+            )
             return {}
-        except json.JSONDecodeError:
-            logging.warning("collector_prompt_config event=skipped reason=invalid_json path=%s", config_path)
-            return {}
-        collectors = raw.get("collectors", {})
-        return collectors if isinstance(collectors, dict) else {}
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")

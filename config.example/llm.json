@@ -1,0 +1,12 @@
+{
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "replace-with-api-key",
+  "model": "gpt-4o-mini",
+  "endpoint_path": "/chat/completions",
+  "system_prompt": "You are a concise and helpful assistant.",
+  "temperature": 0.2,
+  "max_tokens": 400,
+  "history_messages": 8,
+  "system_prompt_timezone": "America/New_York",
+  "file_task_layout_prompt": "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (assistant/notes, assistant/lists, assistant/health, assistant/finance, assistant/people, assistant/travel). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."
+}

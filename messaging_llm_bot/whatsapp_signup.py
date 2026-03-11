@@ -9,7 +9,7 @@ Set up a WhatsApp bridge that exposes receive/send commands, then pair it with W
 - Scan the QR code from WhatsApp on your phone:
   WhatsApp -> Settings -> Linked Devices -> Link a Device
 - Keep the bridge session/state files persisted so future runs stay linked.
-- Point `whatsapp.receive_command` and `whatsapp.send_command` in config.json at that bridge.
+- Point `whatsapp.receive_command` and `whatsapp.send_command` in `config/whatsapp.json` at that bridge.
 
 The built-in `messaging_llm_bot.whatsapp_client` module is only a JSON command adapter. It does not create the QR code or perform WhatsApp account linking by itself.
 """
@@ -23,7 +23,7 @@ def run_signup(config_path: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="WhatsApp signup helper")
-    parser.add_argument("--config", default="config.json", help="Bot config JSON file")
+    parser.add_argument("--config", default="config", help="Bot config JSON file or directory")
     return parser.parse_args()
 
 
