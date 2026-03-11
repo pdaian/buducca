@@ -1085,6 +1085,40 @@ class BotTests(unittest.TestCase):
             self.assertIn("Configured file skill actions: read, append.", system_prompt)
             self.assertIn("File organization guidance: Store everything under assistant/.", system_prompt)
 
+    def test_message_send_skill_is_disabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "message_send.py").write_text(
+                'NAME = "message_send"\nDESCRIPTION = "Sends messages."\n\n'
+                'def run(workspace, args):\n    return "ok"\n',
+                encoding="utf-8",
+            )
+
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+
+            self.assertNotIn("message_send", bot._skills)
+
+    def test_message_send_skill_can_be_enabled_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "message_send.py").write_text(
+                'NAME = "message_send"\nDESCRIPTION = "Sends messages."\n\n'
+                'def run(workspace, args):\n    return "ok"\n',
+                encoding="utf-8",
+            )
+
+            runtime = RuntimeConfig(
+                workspace_dir=td,
+                skills_dir=str(skills_dir),
+                enable_message_send_skill=True,
+            )
+            bot = self.make_bot(runtime=runtime)
+
+            self.assertIn("message_send", bot._skills)
+
     def test_system_prompt_includes_loaded_collector_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             collectors_dir = Path(td) / "collectors"

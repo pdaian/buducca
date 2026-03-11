@@ -88,6 +88,7 @@ class RuntimeConfig:
     enable_voice_notes: bool = False
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
+    enable_message_send_skill: bool = False
     file_skill_actions: list[str] = field(default_factory=lambda: ["read", "write", "append", "move", "create_dir", "delete_dir"])
     action_policy_file: str = "assistant/action_policy.json"
     enable_reply_citations: bool = True
@@ -118,6 +119,10 @@ def _read_json(path: Path) -> dict[str, Any]:
             f"{pointer}"
         )
         raise ValueError(message) from exc
+
+
+def _strip_comment_keys(raw: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in raw.items() if not key.startswith("_")}
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
@@ -201,15 +206,16 @@ def load_config(path: str | Path) -> BotConfig:
     signal_raw = raw.get("signal")
     whatsapp_raw = raw.get("whatsapp")
     google_fi_raw = raw.get("google_fi")
-    telegram = TelegramConfig(**telegram_raw) if isinstance(telegram_raw, dict) else None
-    signal = SignalConfig(**signal_raw) if isinstance(signal_raw, dict) else None
-    whatsapp = WhatsAppConfig(**whatsapp_raw) if isinstance(whatsapp_raw, dict) else None
-    google_fi = GoogleFiConfig(**google_fi_raw) if isinstance(google_fi_raw, dict) else None
+    telegram = TelegramConfig(**_strip_comment_keys(telegram_raw)) if isinstance(telegram_raw, dict) else None
+    signal = SignalConfig(**_strip_comment_keys(signal_raw)) if isinstance(signal_raw, dict) else None
+    whatsapp = WhatsAppConfig(**_strip_comment_keys(whatsapp_raw)) if isinstance(whatsapp_raw, dict) else None
+    google_fi = GoogleFiConfig(**_strip_comment_keys(google_fi_raw)) if isinstance(google_fi_raw, dict) else None
     try:
-        llm = LLMConfig(**raw["llm"])
+        llm = LLMConfig(**_strip_comment_keys(raw["llm"]))
     except KeyError as exc:
         raise ValueError("Missing required top-level section: llm") from exc
-    runtime = RuntimeConfig(**raw.get("runtime", {}))
+    runtime_raw = raw.get("runtime", {})
+    runtime = RuntimeConfig(**_strip_comment_keys(runtime_raw if isinstance(runtime_raw, dict) else {}))
 
     config = BotConfig(telegram=telegram, signal=signal, whatsapp=whatsapp, google_fi=google_fi, llm=llm, runtime=runtime)
     _validate(config, config_path=config_path)

@@ -139,6 +139,8 @@ class BotRunner:
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
+        if not self.config.runtime.enable_message_send_skill:
+            self._skills.pop("message_send", None)
         self._current_evidence = []
 
     @property
