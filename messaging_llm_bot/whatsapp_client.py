@@ -7,7 +7,7 @@ from pathlib import Path
 from shutil import which
 from typing import Any
 
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 
 
 class WhatsAppFrontendUnavailableError(RuntimeError):
@@ -133,7 +133,8 @@ class WhatsAppClient:
             if not isinstance(item, dict):
                 continue
             text_value = self._first_text(item.get("text"), item.get("body"), item.get("message"))
-            if not text_value:
+            attachments = self._extract_attachments(item)
+            if not text_value and not attachments:
                 continue
             conversation_id = self._first_text(
                 item.get("conversation_id"), item.get("chat_id"), item.get("chatId"), item.get("room_id")
@@ -152,6 +153,7 @@ class WhatsAppClient:
                     text=text_value,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
+                    attachments=attachments,
                 )
             )
         return messages
@@ -185,6 +187,53 @@ class WhatsAppClient:
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"WhatsApp send command failed: {stderr}")
+
+    def send_file(self, recipient: str, file_path: str, caption: str | None = None) -> None:
+        self._validate_send_command()
+        path = Path(file_path)
+        if not path.exists():
+            raise RuntimeError(f"WhatsApp attachment file not found: {file_path}")
+        if all("{attachment}" not in part for part in self.send_command):
+            raise RuntimeError("WhatsApp send_command must include a {attachment} placeholder for file sends.")
+        command = [
+            part.replace("{recipient}", recipient).replace("{message}", caption or "").replace("{attachment}", str(path))
+            for part in self.send_command
+        ]
+        command = self._normalize_command_paths(command)
+        missing_script = self._missing_python_script(command)
+        if missing_script:
+            raise WhatsAppFrontendUnavailableError(
+                f"WhatsApp frontend disabled: script {missing_script!r} does not exist"
+            )
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise WhatsAppFrontendUnavailableError(
+                f"WhatsApp frontend disabled: executable {exc.filename!r} was not found"
+            ) from exc
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or "no stderr"
+            raise RuntimeError(f"WhatsApp send attachment command failed: {stderr}")
+
+    def _extract_attachments(self, item: dict[str, Any]) -> list[IncomingAttachment]:
+        raw = item.get("attachments")
+        if not isinstance(raw, list):
+            return []
+        attachments: list[IncomingAttachment] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            file_path = self._first_text(entry.get("path"), entry.get("file_path"))
+            if not file_path:
+                continue
+            attachments.append(
+                IncomingAttachment(
+                    file_path=file_path,
+                    filename=self._first_text(entry.get("name"), entry.get("filename")),
+                    mime_type=self._first_text(entry.get("mime_type"), entry.get("content_type")),
+                )
+            )
+        return attachments
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from .http import HttpClient
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 
 
 class TelegramClient:
@@ -23,14 +25,16 @@ class TelegramClient:
         messages: list[IncomingMessage] = []
         for update in data.get("result", []):
             message = update.get("message", {})
-            text = message.get("text")
+            text = message.get("text") or message.get("caption")
             voice = message.get("voice", {})
             chat = message.get("chat", {})
             sender = message.get("from")
             sender_chat = message.get("sender_chat")
             effective_sender = sender if isinstance(sender, dict) and sender else sender_chat
             voice_file_id = voice.get("file_id") if isinstance(voice, dict) else None
-            if (not text and not voice_file_id) or "id" not in chat:
+            attachments = self._extract_attachments(message)
+            sent_at = self._extract_sent_at(message.get("date"))
+            if (not text and not voice_file_id and not attachments) or "id" not in chat:
                 continue
             sender_name = self._extract_sender_name(effective_sender)
             sender_contact = self._extract_sender_contact(effective_sender, sender_name)
@@ -46,9 +50,60 @@ class TelegramClient:
                     voice_file_id=voice_file_id,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
+                    sent_at=sent_at,
+                    attachments=attachments,
                 )
             )
         return messages
+
+    @staticmethod
+    def _extract_sent_at(raw_timestamp: Any) -> str | None:
+        try:
+            timestamp = int(raw_timestamp)
+        except (TypeError, ValueError):
+            return None
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+    def _extract_attachments(self, message: dict[str, Any]) -> list[IncomingAttachment]:
+        attachments: list[IncomingAttachment] = []
+        document = message.get("document")
+        if isinstance(document, dict) and document.get("file_id"):
+            attachments.append(
+                IncomingAttachment(
+                    file_id=str(document["file_id"]),
+                    filename=str(document.get("file_name") or "document"),
+                    mime_type=str(document.get("mime_type") or "") or None,
+                )
+            )
+
+        for key in ("audio", "video", "animation"):
+            payload = message.get(key)
+            if isinstance(payload, dict) and payload.get("file_id"):
+                attachments.append(
+                    IncomingAttachment(
+                        file_id=str(payload["file_id"]),
+                        filename=str(payload.get("file_name") or key),
+                        mime_type=str(payload.get("mime_type") or "") or None,
+                    )
+                )
+
+        photos = message.get("photo")
+        if isinstance(photos, list) and photos:
+            candidates = [item for item in photos if isinstance(item, dict) and item.get("file_id")]
+            if candidates:
+                best = max(candidates, key=lambda item: int(item.get("file_size") or 0))
+                photo_id = str(best["file_id"])
+                suffix = mimetypes.guess_extension("image/jpeg") or ".jpg"
+                attachments.append(
+                    IncomingAttachment(
+                        file_id=photo_id,
+                        filename=f"photo_{photo_id}{suffix}",
+                        mime_type="image/jpeg",
+                    )
+                )
+        return attachments
 
     @staticmethod
     def _extract_sender_name(sender: Any) -> str | None:
@@ -119,3 +174,19 @@ class TelegramClient:
         data = self.http_client.post_json(f"{self.base_url}/sendChatAction", payload)
         if not data.get("ok"):
             raise RuntimeError(f"Telegram sendChatAction failed: {data}")
+
+    def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
+        payload = Path(file_path)
+        data = self.http_client.post_multipart(
+            f"{self.base_url}/sendDocument",
+            fields={"chat_id": chat_id, "caption": caption or ""},
+            files={
+                "document": (
+                    payload.name,
+                    payload.read_bytes(),
+                    mimetypes.guess_type(payload.name)[0] or "application/octet-stream",
+                )
+            },
+        )
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegram sendDocument failed: {data}")

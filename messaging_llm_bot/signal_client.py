@@ -8,7 +8,7 @@ from shutil import which
 from pathlib import Path
 from typing import Any
 
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 
 class SignalFrontendUnavailableError(RuntimeError):
     """Raised when Signal frontend is not runnable in current environment."""
@@ -108,7 +108,7 @@ class SignalClient:
                 continue
 
             envelope = payload.get("envelope") or {}
-            conversation_id, sender, text, voice_file_path = self._extract_message_fields(envelope)
+            conversation_id, sender, text, voice_file_path, attachments = self._extract_message_fields(envelope)
             if not conversation_id or not sender:
                 if self._debug:
                     logging.debug(
@@ -119,7 +119,7 @@ class SignalClient:
                         envelope.get("sourceUuid") if isinstance(envelope, dict) else None,
                     )
                 continue
-            if not text and not voice_file_path:
+            if not text and not voice_file_path and not attachments:
                 if self._debug:
                     data_message = envelope.get("dataMessage") if isinstance(envelope, dict) else None
                     sync_message = envelope.get("syncMessage") if isinstance(envelope, dict) else None
@@ -146,6 +146,7 @@ class SignalClient:
                     text=text,
                     voice_file_path=voice_file_path,
                     sender_name=sender_name,
+                    attachments=attachments,
                 )
             )
         return messages
@@ -209,7 +210,10 @@ class SignalClient:
             return sender_name
         return self._contact_names.get(sender)
 
-    def _extract_message_fields(self, envelope: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
+    def _extract_message_fields(
+        self,
+        envelope: dict[str, Any],
+    ) -> tuple[str, str, str | None, str | None, list[IncomingAttachment]]:
         sender = self._first_non_empty_string(
             envelope.get("sourceNumber"),
             envelope.get("source"),
@@ -225,15 +229,16 @@ class SignalClient:
             )
             text = data_message.get("message")
             voice_file_path = self._find_voice_attachment_path(data_message)
-            if sender and conversation_id and (text or voice_file_path):
-                return conversation_id, sender, text, voice_file_path
+            attachments = self._extract_non_voice_attachments(data_message)
+            if sender and conversation_id and (text or voice_file_path or attachments):
+                return conversation_id, sender, text, voice_file_path, attachments
 
         sync_message = envelope.get("syncMessage") or {}
         if not isinstance(sync_message, dict):
-            return "", "", None, None
+            return "", "", None, None, []
         sent_message = sync_message.get("sentMessage") or {}
         if not isinstance(sent_message, dict):
-            return "", "", None, None
+            return "", "", None, None, []
 
         group_id = self._extract_group_id(sent_message)
         if group_id:
@@ -250,7 +255,8 @@ class SignalClient:
         source = sender or self.account
         text = sent_message.get("message")
         voice_file_path = self._find_voice_attachment_path(sent_message)
-        return destination, source, text, voice_file_path
+        attachments = self._extract_non_voice_attachments(sent_message)
+        return destination, source, text, voice_file_path, attachments
 
     def _extract_group_id(self, message: dict[str, Any]) -> str:
         group_info = message.get("groupInfo")
@@ -354,13 +360,13 @@ class SignalClient:
         return "not registered" in normalized
 
     def _find_voice_attachment_path(self, data_message: dict[str, Any]) -> str | None:
-        attachments = data_message.get("attachments") or []
-        if not isinstance(attachments, list):
+        attachments = self._message_attachments(data_message)
+        if attachments is None:
             if self._debug:
                 logging.debug(
                     "Signal attachments payload is not a list: type=%s value=%r",
-                    type(attachments).__name__,
-                    attachments,
+                    type(data_message.get("attachments")).__name__,
+                    data_message.get("attachments"),
                 )
             return None
         if self._debug:
@@ -377,8 +383,9 @@ class SignalClient:
             for field in ("storedFilename", "filename"):
                 candidate = attachment.get(field)
                 if isinstance(candidate, str) and candidate.strip():
-                    path = Path(candidate.strip())
-                    resolved = str(path if path.is_absolute() else Path.cwd() / path)
+                    resolved = self._resolve_attachment_path(candidate)
+                    if not resolved:
+                        continue
                     if self._debug:
                         resolved_path = Path(resolved)
                         exists = resolved_path.exists()
@@ -415,7 +422,7 @@ class SignalClient:
                 logging.debug("Signal attachment looked like voice but had no filename fields: %s", attachment)
         return None
 
-    def _resolve_voice_attachment_id_path(self, attachment_id: Any) -> str | None:
+    def _resolve_attachment_id_path(self, attachment_id: Any) -> str | None:
         if not isinstance(attachment_id, str) or not attachment_id.strip():
             return None
 
@@ -450,6 +457,57 @@ class SignalClient:
                 if match.is_file():
                     return str(match)
         return None
+
+    def _resolve_voice_attachment_id_path(self, attachment_id: Any) -> str | None:
+        return self._resolve_attachment_id_path(attachment_id)
+
+    def _resolve_attachment_path(self, value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = Path(value.strip())
+        if candidate.is_absolute():
+            return str(candidate)
+        return str(Path.cwd() / candidate)
+
+    def _message_attachments(self, message: dict[str, Any]) -> list[dict[str, Any]] | None:
+        attachments = message.get("attachments") or []
+        if not isinstance(attachments, list):
+            return None
+        return [item for item in attachments if isinstance(item, dict)]
+
+    def _extract_non_voice_attachments(self, message: dict[str, Any]) -> list[IncomingAttachment]:
+        attachments = self._message_attachments(message)
+        if attachments is None:
+            return []
+
+        collected: list[IncomingAttachment] = []
+        for attachment in attachments:
+            if self._is_voice_attachment(attachment):
+                continue
+
+            resolved_path = None
+            for field in ("storedFilename", "filename"):
+                resolved_path = self._resolve_attachment_path(attachment.get(field))
+                if resolved_path:
+                    break
+            if not resolved_path:
+                resolved_path = self._resolve_attachment_id_path(attachment.get("id"))
+            if not resolved_path:
+                continue
+
+            collected.append(
+                IncomingAttachment(
+                    file_path=resolved_path,
+                    filename=self._first_non_empty_string(
+                        attachment.get("filename"),
+                        attachment.get("storedFilename"),
+                        Path(resolved_path).name,
+                    )
+                    or None,
+                    mime_type=self._first_non_empty_string(attachment.get("contentType")) or None,
+                )
+            )
+        return collected
 
     def _is_voice_attachment(self, attachment: dict[str, Any]) -> bool:
         content_type = str(attachment.get("contentType") or "").lower()
@@ -487,3 +545,19 @@ class SignalClient:
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"Signal send command failed: {stderr}")
+
+    def send_file(self, recipient: str, file_path: str, caption: str | None = None) -> None:
+        path = Path(file_path)
+        if not path.exists():
+            raise RuntimeError(f"Signal attachment file not found: {file_path}")
+
+        group_id = self._extract_group_id_from_recipient(recipient)
+        if group_id:
+            command = ["signal-cli", "-a", self.account, "send", "-m", caption or "", "-a", str(path), "-g", group_id]
+        else:
+            command = ["signal-cli", "-a", self.account, "send", "-m", caption or "", "-a", str(path), recipient]
+
+        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or "no stderr"
+            raise RuntimeError(f"Signal send attachment command failed: {stderr}")

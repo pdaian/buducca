@@ -35,6 +35,11 @@ class Workspace:
         with file_path.open("a", encoding="utf-8") as f:
             f.write(content)
 
+    def write_bytes(self, relative_path: str, content: bytes) -> None:
+        file_path = self.resolve(relative_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(content)
+
     def create_dir(self, relative_path: str) -> None:
         dir_path = self.resolve(relative_path)
         dir_path.mkdir(parents=True, exist_ok=True)

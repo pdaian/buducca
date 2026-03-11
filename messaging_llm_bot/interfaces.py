@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass(slots=True)
+class IncomingAttachment:
+    file_id: str | None = None
+    file_path: str | None = None
+    filename: str | None = None
+    mime_type: str | None = None
+    content: bytes | None = None
 
 
 @dataclass(slots=True)
@@ -17,6 +26,7 @@ class IncomingMessage:
     sender_contact: str | None = None
     sent_at: str | None = None
     event_type: str = "message"
+    attachments: list[IncomingAttachment] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.chat_id is not None:

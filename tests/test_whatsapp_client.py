@@ -10,7 +10,7 @@ from messaging_llm_bot.whatsapp_client import WhatsAppClient, WhatsAppFrontendUn
 
 class WhatsAppClientTests(unittest.TestCase):
     def test_get_updates_parses_list_payload(self) -> None:
-        payload = '[{"conversation_id":"group:Family|g1","sender_id":"+15550001","text":"hello","sender_name":"Alice"}]'
+        payload = '[{"conversation_id":"group:Family|g1","sender_id":"+15550001","text":"hello","sender_name":"Alice","attachments":[{"path":"/tmp/a.pdf","name":"a.pdf","mime_type":"application/pdf"}]}]'
         with patch("messaging_llm_bot.whatsapp_client.subprocess.run") as run:
             run.return_value = Mock(returncode=0, stdout=payload, stderr="")
             with patch("messaging_llm_bot.whatsapp_client.which", return_value="/usr/bin/python3"):
@@ -20,6 +20,17 @@ class WhatsAppClientTests(unittest.TestCase):
         self.assertEqual(updates[0].backend, "whatsapp")
         self.assertEqual(updates[0].conversation_id, "group:Family|g1")
         self.assertEqual(updates[0].sender_contact, "Alice")
+        self.assertEqual(updates[0].attachments[0].filename, "a.pdf")
+
+    def test_get_updates_accepts_attachment_only_message(self) -> None:
+        payload = '[{"conversation_id":"chat-1","sender_id":"+15550001","attachments":[{"path":"/tmp/a.pdf","name":"a.pdf"}]}]'
+        with patch("messaging_llm_bot.whatsapp_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.whatsapp_client.which", return_value="/usr/bin/python3"):
+                client = WhatsAppClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].attachments[0].file_path, "/tmp/a.pdf")
 
     def test_send_message_replaces_placeholders(self) -> None:
         with patch("messaging_llm_bot.whatsapp_client.subprocess.run") as run:

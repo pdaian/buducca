@@ -25,6 +25,23 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].text, "hello")
         self.assertEqual(updates[1].voice_file_path.endswith("voice.ogg"), True)
 
+    def test_parses_non_voice_attachment_messages(self) -> None:
+        stdout = (
+            '{"envelope":{"source":"+15550001","dataMessage":{"attachments":[{"contentType":"application/pdf","storedFilename":"docs/file.pdf"}]}}}'
+        )
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = stdout
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(len(updates[0].attachments), 1)
+        self.assertTrue(updates[0].attachments[0].file_path.endswith("docs/file.pdf"))
+
 
     def test_parses_sync_sent_message_for_note_to_self(self) -> None:
         stdout = (

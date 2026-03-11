@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
+from datetime import timezone
 from pathlib import Path
 
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 
 
 class TelegramUserClient:
@@ -79,12 +81,14 @@ class TelegramUserClient:
                 async for message in client.iter_messages(entity, limit=self.message_limit, min_id=min_id, reverse=True):
                     max_id = max(max_id, int(getattr(message, "id", 0) or 0))
                     text = str(getattr(message, "message", "") or "").strip()
-                    if not text:
+                    attachments = await self._extract_attachments(message)
+                    if not text and not attachments:
                         continue
                     sender = await message.get_sender()
                     sender_id = int(getattr(sender, "id", chat_id) or chat_id)
                     sender_name = self._extract_sender_name(sender)
                     sender_contact = self._extract_sender_contact(sender, sender_name)
+                    sent_at = getattr(message, "date", None)
                     updates.append(
                         IncomingMessage(
                             update_id=(chat_id * 1_000_000_000) + int(message.id),
@@ -95,6 +99,8 @@ class TelegramUserClient:
                             text=text,
                             sender_name=sender_name,
                             sender_contact=sender_contact,
+                            sent_at=sent_at.astimezone(timezone.utc).isoformat() if sent_at else None,
+                            attachments=attachments,
                         )
                     )
                 if max_id > min_id:
@@ -120,8 +126,51 @@ class TelegramUserClient:
     def send_message(self, chat_id: int, text: str) -> None:
         asyncio.run(self._send_message_async(chat_id, text))
 
+    async def _send_file_async(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
+        client = self._ensure_client()
+        async with client:
+            await client.send_file(chat_id, file_path, caption=caption or None)
+
+    def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
+        asyncio.run(self._send_file_async(chat_id, file_path, caption))
+
     def send_typing_action(self, chat_id: int) -> None:
         _ = chat_id
+
+    async def _extract_attachments(self, message: object) -> list[IncomingAttachment]:
+        attachment = await self._extract_attachment(message)
+        return [attachment] if attachment else []
+
+    async def _extract_attachment(self, message: object) -> IncomingAttachment | None:
+        if not getattr(message, "media", None):
+            return None
+
+        filename = None
+        mime_type = None
+        document = getattr(message, "document", None)
+        if document is not None:
+            mime_type = str(getattr(document, "mime_type", "") or "") or None
+            for attribute in getattr(document, "attributes", []) or []:
+                candidate = str(getattr(attribute, "file_name", "") or "").strip()
+                if candidate:
+                    filename = candidate
+                    break
+        elif getattr(message, "photo", None) is not None:
+            filename = f"photo_{getattr(message, 'id', 'telegram')}.jpg"
+            mime_type = "image/jpeg"
+
+        if not filename:
+            suffix = mimetypes.guess_extension(mime_type or "") or ""
+            filename = f"attachment_{getattr(message, 'id', 'telegram')}{suffix}"
+
+        payload = await message.download_media(file=bytes)
+        if not isinstance(payload, (bytes, bytearray)):
+            return None
+        return IncomingAttachment(
+            filename=filename,
+            mime_type=mime_type,
+            content=bytes(payload),
+        )
 
     @staticmethod
     def _extract_sender_name(sender: object) -> str | None:

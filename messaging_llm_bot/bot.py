@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import re
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from typing import Any, Deque
 
 from assistant_framework import CollectorManager, SkillManager, Workspace
 from assistant_framework.action_runtime import ActionEnvelope, append_action_audit, decide_action, load_action_policy
+from assistant_framework.ingestion import ingest_attachment
 from assistant_framework.memory import ensure_memory_layout, list_records, mark_routine_run, mark_task_notified
 from assistant_framework.retrieval import append_sources, format_evidence_context, search_workspace
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
@@ -24,7 +26,7 @@ from assistant_framework.traces import write_trace
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 from .llm_client import OpenAICompatibleClient
 from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import TelegramClient
@@ -213,6 +215,9 @@ class BotRunner:
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
                 "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
                 "When workspace evidence is provided, prefer it over memory guesses and cite the source paths you used.",
+                "Incoming attachments are saved under workspace/attachments/YYYY-MM-DD/.",
+                "Saved filenames include the sending platform, sender name, and Unix timestamp; PDFs also get a sibling .ocr.txt file when local extraction or OCR succeeds.",
+                "If attachment paths or OCR text are included in a user turn, use them as first-party workspace context.",
             ]
 
             if "file" in self._skills:
@@ -1716,26 +1721,29 @@ class BotRunner:
             if backend == "signal" and sender_name:
                 sender_contact = f"{sender_name} <{sender_id}>"
 
+        attachment_context = self._save_incoming_attachments(update, backend=backend, sender_name=sender_name, sender_id=sender_id)
+
         if update.text:
+            message_text = f"{update.text}\n\n{attachment_context}" if attachment_context else update.text
             self._append_frontend_log(
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
                 sender_id=sender_id,
-                text=update.text,
+                text=message_text,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
                 logged_at=sent_at,
             )
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
-                if not self._should_append_unanswered_message("google_fi.calls.recent", conversation_id, sender_id, update.text):
+                if not self._should_append_unanswered_message("google_fi.calls.recent", conversation_id, sender_id, message_text):
                     return
                 payload = self._build_frontend_record(
                     backend=backend,
                     direction="incoming",
                     conversation_id=conversation_id,
                     sender_id=sender_id,
-                    text=update.text,
+                    text=message_text,
                     sender_name=sender_name,
                     sender_contact=sender_contact or sender_id,
                     account=self.config.google_fi.account if self.config.google_fi else "default",
@@ -1749,23 +1757,39 @@ class BotRunner:
                     backend=backend,
                     conversation_id=conversation_id,
                     sender_id=sender_id,
-                    text=update.text,
+                    text=message_text,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                     logged_at=sent_at,
                 )
                 return
-            was_handled = self._handle_message(backend, conversation_id, sender_id, update.text, sender_name, sender_contact)
+            was_handled = self._handle_message(backend, conversation_id, sender_id, message_text, sender_name, sender_contact)
             if backend == "google_fi" and not was_handled:
                 self._append_unanswered_collector_log(
                     backend=backend,
                     conversation_id=conversation_id,
                     sender_id=sender_id,
-                    text=update.text,
+                    text=message_text,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                     logged_at=sent_at,
                 )
+            return
+
+        if attachment_context:
+            if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
+                return
+            self._append_frontend_log(
+                backend=backend,
+                direction="incoming",
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=attachment_context,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+                logged_at=sent_at,
+            )
+            self._handle_message(backend, conversation_id, sender_id, attachment_context, sender_name, sender_contact)
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
@@ -1967,6 +1991,123 @@ class BotRunner:
         )
         logging.info("Replied to %s conversation=%s", backend, conversation_id)
         return True
+
+    def _save_incoming_attachments(
+        self,
+        update: IncomingMessage,
+        *,
+        backend: str,
+        sender_name: str | None,
+        sender_id: str,
+    ) -> str:
+        attachments = getattr(update, "attachments", None) or []
+        if not attachments:
+            return ""
+
+        sent_at = self._parse_sent_at(getattr(update, "sent_at", None)) or datetime.now(timezone.utc)
+        date_dir = sent_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        unix_timestamp = int(sent_at.timestamp())
+        sender_token = self._sanitize_attachment_name(sender_name or sender_id or "unknown")
+
+        lines = [
+            "[Attachments]",
+            f"- storage_root: attachments/{date_dir}/",
+        ]
+        for index, attachment in enumerate(attachments, start=1):
+            relative_path = self._persist_attachment_file(
+                attachment,
+                backend=backend,
+                sender_token=sender_token,
+                unix_timestamp=unix_timestamp,
+                date_dir=date_dir,
+                index=index,
+            )
+            if not relative_path:
+                continue
+            lines.append(f"- saved: {relative_path}")
+            if relative_path.lower().endswith(".pdf"):
+                ingested = ingest_attachment(self._workspace.resolve(relative_path))
+                attachment_text = str(ingested.get("text") or "").strip()
+                if attachment_text:
+                    ocr_path = f"{relative_path}.ocr.txt"
+                    self._workspace.write_text(ocr_path, attachment_text + "\n")
+                    lines.append(f"- pdf_text: {ocr_path}")
+                    lines.extend(self._format_attachment_text(attachment_text))
+        return "\n".join(lines) if len(lines) > 2 else ""
+
+    def _persist_attachment_file(
+        self,
+        attachment: IncomingAttachment,
+        *,
+        backend: str,
+        sender_token: str,
+        unix_timestamp: int,
+        date_dir: str,
+        index: int,
+    ) -> str:
+        suffix = self._attachment_suffix(attachment)
+        file_name = f"{backend}_{sender_token}_{unix_timestamp}"
+        if index > 1:
+            file_name = f"{file_name}_{index:02d}"
+        relative_path = f"attachments/{date_dir}/{file_name}{suffix}"
+
+        if attachment.content is not None:
+            self._workspace.write_bytes(relative_path, attachment.content)
+            return relative_path
+
+        if attachment.file_id and backend == "telegram" and self.telegram:
+            upstream_path = self.telegram.get_file_path(attachment.file_id)
+            self._workspace.write_bytes(relative_path, self.telegram.download_file(upstream_path))
+            return relative_path
+
+        if attachment.file_path:
+            source_path = Path(attachment.file_path)
+            if not source_path.exists():
+                logging.warning("Attachment source file is missing: %s", source_path)
+                return ""
+            self._workspace.write_bytes(relative_path, source_path.read_bytes())
+            return relative_path
+
+        logging.warning("Attachment skipped because no content source was available: %s", attachment)
+        return ""
+
+    @staticmethod
+    def _sanitize_attachment_name(value: str) -> str:
+        token = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("._-")
+        return token or "unknown"
+
+    @staticmethod
+    def _parse_sent_at(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _format_attachment_text(text: str, limit: int = 4000) -> list[str]:
+        snippet = text[:limit].strip()
+        if not snippet:
+            return []
+        return ["", "[Attachment text]", snippet]
+
+    @staticmethod
+    def _attachment_suffix(attachment: IncomingAttachment) -> str:
+        filename = str(attachment.filename or "").strip()
+        if filename:
+            suffix = Path(filename).suffix
+            if suffix:
+                return suffix
+        mime_type = str(attachment.mime_type or "").strip()
+        if mime_type:
+            guessed = mimetypes.guess_extension(mime_type)
+            if guessed:
+                return guessed
+        file_path = str(attachment.file_path or "").strip()
+        if file_path:
+            return Path(file_path).suffix
+        return ""
 
     @contextmanager
     def _typing_indicator(self, backend: str, conversation_id: str):

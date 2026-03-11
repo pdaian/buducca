@@ -10,7 +10,7 @@ from messaging_llm_bot.google_fi_client import GoogleFiClient, GoogleFiFrontendU
 
 class GoogleFiClientTests(unittest.TestCase):
     def test_get_updates_parses_messages_and_calls(self) -> None:
-        payload = '{"messages":[{"conversation_id":"thread-1","sender_id":"+15550001","text":"hello"}],"calls":[{"conversation_id":"thread-1","sender_id":"+15550001","status":"missed"}]}'
+        payload = '{"messages":[{"conversation_id":"thread-1","sender_id":"+15550001","text":"hello","attachments":[{"path":"/tmp/file.pdf","name":"file.pdf"}]}],"calls":[{"conversation_id":"thread-1","sender_id":"+15550001","status":"missed"}]}'
         with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
             run.return_value = Mock(returncode=0, stdout=payload, stderr="")
             with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
@@ -18,7 +18,18 @@ class GoogleFiClientTests(unittest.TestCase):
                 updates = client.get_updates()
         self.assertEqual(len(updates), 2)
         self.assertEqual(updates[0].backend, "google_fi")
+        self.assertEqual(updates[0].attachments[0].filename, "file.pdf")
         self.assertEqual(updates[1].event_type, "call")
+
+    def test_get_updates_accepts_attachment_only_message(self) -> None:
+        payload = '{"messages":[{"conversation_id":"thread-1","sender_id":"+15550001","attachments":[{"path":"/tmp/file.pdf","name":"file.pdf"}]}]}'
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].attachments[0].file_path, "/tmp/file.pdf")
 
     def test_send_message_replaces_placeholders(self) -> None:
         with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:

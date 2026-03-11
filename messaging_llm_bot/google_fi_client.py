@@ -12,7 +12,7 @@ from pathlib import Path
 from shutil import which
 from typing import Any
 
-from .interfaces import IncomingMessage
+from .interfaces import IncomingAttachment, IncomingMessage
 
 GOOGLE_MESSAGES_URL = "https://messages.google.com/web/conversations"
 logger = logging.getLogger(__name__)
@@ -98,6 +98,27 @@ class GoogleFiClient:
             stderr = proc.stderr.strip() or proc.stdout.strip() or "no stderr"
             raise RuntimeError(f"Google Fi send command failed: {stderr}")
 
+    def send_file(self, recipient: str, file_path: str, caption: str | None = None) -> None:
+        self._validate(self.send_command, name="send")
+        path = Path(file_path)
+        if not path.exists():
+            raise RuntimeError(f"Google Fi attachment file not found: {file_path}")
+        if all("{attachment}" not in part for part in self.send_command):
+            raise RuntimeError("Google Fi send_command must include a {attachment} placeholder for file sends.")
+        command = [
+            part.replace("{recipient}", recipient).replace("{message}", caption or "").replace("{attachment}", str(path))
+            for part in self.send_command
+        ]
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise GoogleFiFrontendUnavailableError(
+                f"Google Fi frontend disabled: executable {exc.filename!r} was not found"
+            ) from exc
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or proc.stdout.strip() or "no stderr"
+            raise RuntimeError(f"Google Fi send attachment command failed: {stderr}")
+
     def _parse_updates(self, stdout: str) -> list[IncomingMessage]:
         text = stdout.strip()
         if not text:
@@ -131,11 +152,12 @@ class GoogleFiClient:
         if not isinstance(item, dict):
             return None
         text_value = self._first_text(item.get("text"), item.get("body"), item.get("message"), item.get("content"))
+        attachments = self._extract_attachments(item)
         conversation_id = self._first_text(item.get("conversation_id"), item.get("thread_id"), item.get("chat_id"), item.get("chatId"))
         sender_id = self._pick_sender_id(
             item.get("sender_id"), item.get("from"), item.get("number"), item.get("sender"), item.get("sender_contact")
         )
-        if not text_value or not conversation_id or not sender_id:
+        if (not text_value and not attachments) or not conversation_id or not sender_id:
             return None
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
         sender_contact = self._first_text(item.get("sender_contact"), sender_name, sender_id)
@@ -148,6 +170,7 @@ class GoogleFiClient:
             sender_name=sender_name,
             sender_contact=sender_contact,
             event_type="message",
+            attachments=attachments,
         )
 
     def _parse_call(self, item: Any) -> IncomingMessage | None:
@@ -211,6 +234,26 @@ class GoogleFiClient:
             if normalized and normalized != candidate:
                 return normalized
         return cls._phone_like_or_original(first_text)
+
+    def _extract_attachments(self, item: dict[str, Any]) -> list[IncomingAttachment]:
+        raw = item.get("attachments")
+        if not isinstance(raw, list):
+            return []
+        attachments: list[IncomingAttachment] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            file_path = self._first_text(entry.get("path"), entry.get("file_path"))
+            if not file_path:
+                continue
+            attachments.append(
+                IncomingAttachment(
+                    file_path=file_path,
+                    filename=self._first_text(entry.get("name"), entry.get("filename")),
+                    mime_type=self._first_text(entry.get("mime_type"), entry.get("content_type")),
+                )
+            )
+        return attachments
 
 
 def _open_messages_page(options: BrowserOptions):

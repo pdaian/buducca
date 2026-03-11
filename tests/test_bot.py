@@ -10,6 +10,7 @@ from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
 from messaging_llm_bot.config import BotConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
+from messaging_llm_bot.interfaces import IncomingAttachment
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
 
 
@@ -31,6 +32,9 @@ class DummyTelegram:
 
     def download_file(self, file_path: str) -> bytes:
         return self.file_bytes
+
+    def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
+        self.sent.append((chat_id, f"FILE:{file_path}:{caption or ''}"))
 
 
 
@@ -203,6 +207,36 @@ class BotTests(unittest.TestCase):
             log = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
             self.assertIn('"query": "hi"', log)
             self.assertIn('"reply": "hello"', log)
+
+    def test_handle_update_saves_attachment_under_dated_workspace_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("received")
+            bot.telegram.file_path = "docs/source.pdf"
+            bot.telegram.file_bytes = b"%PDF-1.4 dummy"
+            bot._save_incoming_attachments = lambda update, **kwargs: "[Attachments]\n- saved: attachments/2026-03-10/telegram_Alice_1710000000.pdf"
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    sender_name="Alice",
+                    text="see file",
+                    sent_at="2024-03-09T16:00:00+00:00",
+                    attachments=[IncomingAttachment(file_id="doc-id", filename="source.pdf", mime_type="application/pdf")],
+                )
+            )
+
+            self.assertEqual(bot.telegram.sent, [(1, "received")])
+            self.assertIn("[Attachments]", bot.llm.messages[-1]["content"])
 
     def test_hourly_task_sends_to_latest_logged_conversation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
