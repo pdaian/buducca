@@ -730,44 +730,53 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
         logger.debug("Google Fi parsed relative timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, parsed)
         return parsed
 
-    formats = [
-        ("%a, %b %d, %Y, %I:%M %p", False),
-        ("%A, %B %d, %Y, %I:%M %p", False),
-        ("%b %d, %Y, %I:%M %p", False),
-        ("%B %d, %Y, %I:%M %p", False),
-        ("%a, %b %d, %I:%M %p", True),
-        ("%A, %B %d, %I:%M %p", True),
-        ("%b %d, %I:%M %p", True),
-        ("%B %d, %I:%M %p", True),
-        ("%I:%M %p", True),
+    explicit_formats = [
+        "%a, %b %d, %Y, %I:%M %p",
+        "%A, %B %d, %Y, %I:%M %p",
+        "%b %d, %Y, %I:%M %p",
+        "%B %d, %Y, %I:%M %p",
     ]
-    for fmt, needs_inference in formats:
+    for fmt in explicit_formats:
         try:
             parsed = datetime.strptime(cleaned, fmt)
         except ValueError:
             continue
-        if fmt == "%I:%M %p":
-            candidate = datetime.combine(now.date(), parsed.time(), tzinfo=local_tz)
-            if candidate > now:
-                candidate -= timedelta(days=1)
-            rendered = candidate.isoformat()
-            logger.debug("Google Fi parsed inferred same-day timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
-            return rendered
-        if needs_inference:
-            candidate = parsed.replace(year=now.year, tzinfo=local_tz)
-            if candidate > now:
-                try:
-                    candidate = candidate.replace(year=candidate.year - 1)
-                except ValueError:
-                    candidate -= timedelta(days=365)
-            rendered = candidate.isoformat()
-            logger.debug("Google Fi parsed inferred-year timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
-            return rendered
         rendered = parsed.replace(tzinfo=local_tz).isoformat()
         logger.debug("Google Fi parsed explicit timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
         return rendered
-    logger.debug("Google Fi timestamp parser could not parse raw=%r cleaned=%r", value, cleaned)
-    return None
+
+    inferred_year_formats = [
+        "%a, %b %d, %I:%M %p",
+        "%A, %B %d, %I:%M %p",
+        "%b %d, %I:%M %p",
+        "%B %d, %I:%M %p",
+    ]
+    for fmt in inferred_year_formats:
+        for candidate_year in (now.year, now.year - 1):
+            candidate_text = f"{cleaned}, {candidate_year}"
+            candidate_fmt = f"{fmt}, %Y"
+            try:
+                candidate = datetime.strptime(candidate_text, candidate_fmt).replace(tzinfo=local_tz)
+            except ValueError:
+                continue
+            if candidate > now:
+                continue
+            rendered = candidate.isoformat()
+            logger.debug("Google Fi parsed inferred-year timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
+            return rendered
+
+    try:
+        parsed = datetime.strptime(cleaned, "%I:%M %p")
+    except ValueError:
+        logger.debug("Google Fi timestamp parser could not parse raw=%r cleaned=%r", value, cleaned)
+        return None
+
+    candidate = datetime.combine(now.date(), parsed.time(), tzinfo=local_tz)
+    if candidate > now:
+        candidate -= timedelta(days=1)
+    rendered = candidate.isoformat()
+    logger.debug("Google Fi parsed inferred same-day timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
+    return rendered
 
 
 def _expand_message_bubbles(page: Any, bubbles: Any, *, max_bubbles: int) -> int:

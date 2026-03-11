@@ -414,6 +414,15 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(parsed, "2026-03-10T13:23:00+00:00")
 
+    def test_parse_google_messages_timestamp_infers_previous_year_without_warning_prone_parse(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 1, 5, 14, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("Dec 31, 11:59 PM", reference=reference)
+
+        self.assertEqual(parsed, "2025-12-31T23:59:00+00:00")
+
 
 if __name__ == "__main__":
     unittest.main()
