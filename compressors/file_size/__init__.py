@@ -26,6 +26,8 @@ def create_compressor(config: dict):
             lines = workspace.read_text(rel.as_posix(), default="").splitlines()
             if len(lines) <= max_lines:
                 continue
+            removed = "\n".join(lines[:-max_lines]) + "\n"
+            workspace.archive_text(rel.as_posix(), removed, reason="file_size")
             truncated = "\n".join(lines[-max_lines:]) + "\n"
             workspace.write_text(rel.as_posix(), truncated)
 

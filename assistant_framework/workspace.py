@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 
@@ -38,6 +39,20 @@ class Workspace:
     def create_dir(self, relative_path: str) -> None:
         dir_path = self.resolve(relative_path)
         dir_path.mkdir(parents=True, exist_ok=True)
+
+    def archive_text(self, relative_path: str, content: str, *, reason: str = "") -> str:
+        if not content:
+            return ""
+        archive_file = (self.root.parent / "data" / "archives" / relative_path).resolve()
+        archive_file.parent.mkdir(parents=True, exist_ok=True)
+        stamped_reason = f" reason={reason}" if reason else ""
+        header = f"# archived_at={datetime.now(timezone.utc).isoformat()}{stamped_reason}\n"
+        with archive_file.open("a", encoding="utf-8") as f:
+            f.write(header)
+            f.write(content)
+            if not content.endswith("\n"):
+                f.write("\n")
+        return str(archive_file)
 
     def delete_dir(self, relative_path: str) -> None:
         dir_path = self.resolve(relative_path)

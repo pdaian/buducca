@@ -42,6 +42,10 @@ class FileSizeCompressorTests(unittest.TestCase):
             self.assertEqual(len(lines), 200)
             self.assertEqual(lines[0], "line-50")
             self.assertEqual(lines[-1], "line-249")
+            archive_path = ws.root.parent / "data" / "archives" / "notes.txt"
+            self.assertTrue(archive_path.exists())
+            self.assertIn("line-0", archive_path.read_text(encoding="utf-8"))
+            self.assertIn("line-49", archive_path.read_text(encoding="utf-8"))
 
 
 class LLMCompressorTests(unittest.TestCase):
@@ -71,6 +75,26 @@ class LLMCompressorTests(unittest.TestCase):
             compressor["run"](ws)
             second_backup = ws.read_text("learnings.back")
             self.assertEqual(second_backup, "A\nA\nB\n")
+            archive_path = ws.root.parent / "data" / "archives" / "learnings"
+            self.assertTrue(archive_path.exists())
+            archived = archive_path.read_text(encoding="utf-8")
+            self.assertIn("A", archived)
+
+    def test_llm_compressor_uses_removed_output_when_command_returns_json(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ws = Workspace(Path(td) / "workspace")
+            ws.write_text("learnings", "keep\nremove\n")
+            command = (
+                "python3 -c \"import json,sys; "
+                "print(json.dumps({'compressed_content':'keep\\n','removed_content':'remove\\n'}))\""
+            )
+            compressor = create_llm_compressor({"command": command, "files": [{"path": "learnings", "interval_seconds": 0}]})
+
+            compressor["run"](ws)
+
+            self.assertEqual(ws.read_text("learnings"), "keep\n")
+            archive_path = ws.root.parent / "data" / "archives" / "learnings"
+            self.assertIn("remove\n", archive_path.read_text(encoding="utf-8"))
 
 
 class CompressorLoadingTests(unittest.TestCase):

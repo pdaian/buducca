@@ -33,7 +33,27 @@ def main() -> int:
     header = f"# Memory compressed at {now}\n" if now else ""
     prompt_note = f"# Prompt: {prompt}\n" if prompt else ""
     compressed = _dedupe_lines(content)
-    sys.stdout.write(f"{header}{prompt_note}{compressed}".strip() + "\n")
+    removed = ""
+    compressed_lines = {line.strip().lower() for line in compressed.splitlines() if line.strip()}
+    removed_lines: list[str] = []
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.lower() in compressed_lines:
+            compressed_lines.remove(line.lower())
+            continue
+        removed_lines.append(raw)
+    if removed_lines:
+        removed = "\n".join(removed_lines) + "\n"
+    sys.stdout.write(
+        json.dumps(
+            {
+                "compressed_content": f"{header}{prompt_note}{compressed}".strip() + "\n",
+                "removed_content": removed,
+            }
+        )
+    )
     return 0
 
 

@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import shlex
 from pathlib import Path
+from difflib import SequenceMatcher
 
 from assistant_framework.collector_shell import run_command
 from assistant_framework.workspace import Workspace
@@ -17,8 +18,30 @@ def _default_prompt_template() -> str:
         "Current date/time (UTC, accurate to the minute): {now}\n\n"
         "You are running a memory compressor for {file_path}. "
         "Remove redundant information while preserving all important, non-overlapping details. "
-        "Return ONLY the new file contents."
+        'Return JSON with keys "compressed_content" and "removed_content".'
     )
+
+
+def _extract_removed_content(original: str, compressed: str) -> str:
+    matcher = SequenceMatcher(a=original, b=compressed)
+    chunks = [original[i1:i2] for tag, i1, i2, _, _ in matcher.get_opcodes() if tag in {"delete", "replace"} and original[i1:i2]]
+    return "".join(chunks)
+
+
+def _parse_llm_output(output: str, original: str) -> tuple[str, str]:
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        compressed = output
+        return compressed, _extract_removed_content(original, compressed)
+    if not isinstance(parsed, dict):
+        compressed = output
+        return compressed, _extract_removed_content(original, compressed)
+    compressed = str(parsed.get("compressed_content", ""))
+    removed = str(parsed.get("removed_content", ""))
+    if not removed:
+        removed = _extract_removed_content(original, compressed)
+    return compressed, removed
 
 
 def create_compressor(config: dict):
@@ -62,13 +85,21 @@ def create_compressor(config: dict):
                 "current_date_time": now_iso,
                 "prompt": prompt,
                 "content": current_content,
+                "response_format": {
+                    "type": "json",
+                    "schema": {
+                        "compressed_content": "string",
+                        "removed_content": "string",
+                    },
+                },
             }
             code, stdout, stderr = run_command([*shlex.split(command), json.dumps(payload)], timeout_seconds=timeout)
             if code != 0:
                 raise RuntimeError(f"llm compression failed for {path}: {stderr.strip()}")
-            compressed = stdout
+            compressed, removed = _parse_llm_output(stdout, current_content)
             if not compressed.endswith("\n"):
                 compressed += "\n"
+            workspace.archive_text(path, removed, reason="llm_based")
 
             backup_path = str(file_cfg.get("backup_path", f"{path}.back")).strip()
             backup_stamp_path = str(file_cfg.get("backup_stamp_path", f"{backup_path}.date")).strip()
