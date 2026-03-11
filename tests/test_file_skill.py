@@ -149,6 +149,61 @@ class FileSkillTests(unittest.TestCase):
             )
             self.assertEqual(delete_result, "Deleted directory: docs")
 
+    def test_workspace_prefix_is_filtered_from_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+
+            write_result = self.module.run(
+                workspace,
+                {
+                    "action": "write",
+                    "paths": ["workspace/notes/todo.txt", "nested/workspace/notes/next.txt"],
+                    "contents": ["hello", "today"],
+                },
+            )
+            read_result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["workspace/notes/todo.txt", "nested/workspace/notes/next.txt"]},
+            )
+
+            self.assertEqual(
+                write_result,
+                "Wrote 5 character(s) to notes/todo.txt.\nWrote 5 character(s) to nested/notes/next.txt.",
+            )
+            self.assertEqual(read_result, "notes/todo.txt:\nhello\n\nnested/notes/next.txt:\ntoday")
+
+    def test_workspace_prefix_is_filtered_from_directories_and_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+
+            create_result = self.module.run(
+                workspace,
+                {"action": "create_dir", "directories": ["workspace/docs", "nested/workspace/archive/2026"]},
+            )
+            self.assertEqual(
+                create_result,
+                "Created directory: docs\nCreated directory: nested/archive/2026",
+            )
+
+            self.module.run(
+                workspace,
+                {
+                    "action": "write",
+                    "paths": ["workspace/docs/a.txt"],
+                    "content": "a",
+                },
+            )
+
+            move_result = self.module.run(
+                workspace,
+                {
+                    "action": "move",
+                    "paths": ["workspace/docs/a.txt"],
+                    "destination_dir": "nested/workspace/archive/2026",
+                },
+            )
+            self.assertEqual(move_result, "Moved docs/a.txt to nested/archive/2026/a.txt.")
+
 
 if __name__ == "__main__":
     unittest.main()

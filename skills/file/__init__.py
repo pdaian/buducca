@@ -21,19 +21,26 @@ def _normalize_list(value: Any) -> list[str] | None:
     if value is None:
         return None
     if isinstance(value, list):
-        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        cleaned = [_normalize_workspace_path(str(item).strip()) for item in value if str(item).strip()]
         return cleaned
-    item = str(value).strip()
+    item = _normalize_workspace_path(str(value).strip())
     if not item:
         return []
     return [item]
+
+
+def _normalize_workspace_path(path: str) -> str:
+    normalized = path.strip()
+    while "workspace/" in normalized:
+        normalized = normalized.replace("workspace/", "")
+    return normalized
 
 
 def _resolve_paths(args: dict[str, Any]) -> list[str] | None:
     paths = _normalize_list(args.get("paths"))
     if paths is not None:
         return paths
-    path = str(args.get("path", "")).strip()
+    path = _normalize_workspace_path(str(args.get("path", "")).strip())
     if not path:
         return None
     return [path]
@@ -142,7 +149,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
                 return _read(workspace, paths, read_line_limit)
 
             if action == "move":
-                destination_dir = str(args.get("destination_dir", "")).strip()
+                destination_dir = _normalize_workspace_path(str(args.get("destination_dir", "")).strip())
                 if not destination_dir:
                     return "Missing required arg `destination_dir` for action `move`."
                 return _move(workspace, paths, destination_dir)
