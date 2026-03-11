@@ -18,6 +18,7 @@ def load_message_send_module():
 
 
 def write_config(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -64,10 +65,9 @@ class MessageSendSkillTests(unittest.TestCase):
                 "mode": "bot",
                 "allowed_chat_ids": [],
             }
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             result = self.module.run(
                 workspace,
                 {
@@ -114,10 +114,9 @@ class MessageSendSkillTests(unittest.TestCase):
                 "receive_command": ["python3", "-m", "messaging_llm_bot.google_fi_client", "receive"],
                 "send_command": ["python3", "-m", "messaging_llm_bot.google_fi_client", "send"],
             }
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             result = self.module.run(
                 workspace,
                 {
@@ -158,10 +157,9 @@ class MessageSendSkillTests(unittest.TestCase):
                 "send_command": ["signal-cli", "send"],
                 "read_only": True,
             }
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             result = self.module.run(
                 workspace,
                 {
@@ -204,10 +202,9 @@ class MessageSendSkillTests(unittest.TestCase):
                 "receive_command": ["python3", "-m", "messaging_llm_bot.whatsapp_client", "receive"],
                 "send_command": ["python3", "-m", "messaging_llm_bot.whatsapp_client", "send"],
             }
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             result = self.module.run(
                 workspace,
                 {
@@ -224,6 +221,30 @@ class MessageSendSkillTests(unittest.TestCase):
                 "signal: send failed: signal transport unavailable\n"
                 "whatsapp: Missing required recipient for backend `whatsapp`.",
             )
+
+    def test_rejects_config_path_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = base_config()
+            config["telegram"] = {
+                "bot_token": "123:test",
+                "mode": "bot",
+                "allowed_chat_ids": [],
+            }
+            config_path = Path(td) / "config.json"
+            write_config(config_path, config)
+
+            workspace = Workspace(Path(td) / "workspace")
+            result = self.module.run(
+                workspace,
+                {
+                    "backend": "telegram",
+                    "recipient": 123456789,
+                    "message": "hello",
+                    "config_path": "../config.json",
+                },
+            )
+
+            self.assertEqual(result, "Path escapes workspace: ../config.json")
 
     def test_build_action_requires_approval(self) -> None:
         action = self.module.build_action({"backend": "telegram", "recipient": 1, "message": "hi"})

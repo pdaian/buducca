@@ -204,6 +204,17 @@ class FileSkillTests(unittest.TestCase):
             )
             self.assertEqual(move_result, "Moved docs/a.txt to nested/archive/2026/a.txt.")
 
+    def test_rejects_paths_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+
+            result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["../outside.txt"]},
+            )
+
+            self.assertEqual(result, "Path escapes workspace: ../outside.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

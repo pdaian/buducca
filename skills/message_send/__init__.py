@@ -46,20 +46,7 @@ def _resolve_config_path(workspace: Workspace, raw_path: Any) -> Path:
     config_path = str(raw_path or "config.json").strip()
     if not config_path:
         config_path = "config.json"
-
-    candidate = Path(config_path)
-    if candidate.is_absolute():
-        return candidate
-
-    candidates = [
-        Path.cwd() / candidate,
-        workspace.root.parent / candidate,
-        workspace.root / candidate,
-    ]
-    for option in candidates:
-        if option.exists():
-            return option
-    return candidates[0]
+    return workspace.resolve(config_path)
 
 
 def _normalize_backend_name(value: Any) -> str:

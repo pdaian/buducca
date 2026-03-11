@@ -18,6 +18,7 @@ def load_attach_file_module():
 
 
 def write_config(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -60,10 +61,9 @@ class AttachFileSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             config = base_config()
             config["telegram"] = {"bot_token": "123:test", "mode": "bot"}
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             workspace.write_text("reports/latest.txt", "hello")
             result = self.module.run(
                 workspace,
@@ -83,10 +83,9 @@ class AttachFileSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             config = base_config()
             config["telegram"] = {"bot_token": "123:test", "mode": "bot"}
-            config_path = Path(td) / "config.json"
-            write_config(config_path, config)
-
             workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
             result = self.module.run(
                 workspace,
                 {
@@ -98,3 +97,24 @@ class AttachFileSkillTests(unittest.TestCase):
             )
 
             self.assertEqual(result, "File not found: missing.txt")
+
+    def test_rejects_config_path_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = base_config()
+            config["telegram"] = {"bot_token": "123:test", "mode": "bot"}
+            config_path = Path(td) / "config.json"
+            write_config(config_path, config)
+
+            workspace = Workspace(Path(td) / "workspace")
+            workspace.write_text("reports/latest.txt", "hello")
+            result = self.module.run(
+                workspace,
+                {
+                    "backend": "telegram",
+                    "recipient": 123456789,
+                    "path": "reports/latest.txt",
+                    "config_path": "../config.json",
+                },
+            )
+
+            self.assertEqual(result, "Path escapes workspace: ../config.json")
