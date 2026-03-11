@@ -85,9 +85,10 @@ class TelegramUserClient:
                     if not text and not attachments:
                         continue
                     sender = await message.get_sender()
-                    sender_id = int(getattr(sender, "id", chat_id) or chat_id)
-                    sender_name = self._extract_sender_name(sender)
-                    sender_contact = self._extract_sender_contact(sender, sender_name)
+                    sender_entity = self._resolve_sender_entity(message, sender, entity)
+                    sender_id = int(getattr(sender_entity, "id", getattr(message, "sender_id", chat_id)) or chat_id)
+                    sender_name = self._extract_sender_name(sender_entity)
+                    sender_contact = self._extract_sender_contact(sender_entity, sender_name)
                     sent_at = getattr(message, "date", None)
                     updates.append(
                         IncomingMessage(
@@ -112,6 +113,16 @@ class TelegramUserClient:
 
             updates.sort(key=lambda item: item.update_id)
             return updates
+
+    @staticmethod
+    def _resolve_sender_entity(message: object, sender: object, dialog_entity: object) -> object:
+        if sender is not None:
+            return sender
+        for attr_name in ("sender", "peer_id", "from_id", "chat"):
+            candidate = getattr(message, attr_name, None)
+            if candidate is not None:
+                return candidate
+        return dialog_entity
 
     def get_updates(self, offset: int | None = None, timeout_seconds: int = 30) -> list[IncomingMessage]:
         _ = offset

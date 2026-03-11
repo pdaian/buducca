@@ -41,6 +41,13 @@ class _FakeMessage:
         return self._sender
 
 
+class _FakeMessageWithSenderFallback(_FakeMessage):
+    def __init__(self, message_id: int, text: str, sender: object, sender_id: int) -> None:
+        super().__init__(message_id, text, sender=None)
+        self.sender = sender
+        self.sender_id = sender_id
+
+
 class _FakeDialogClient(_FakeClient):
     def __init__(self, dialogs: list[object], messages_by_chat: dict[int, list[_FakeMessage]]) -> None:
         super().__init__(authorized=True)
@@ -160,6 +167,25 @@ class TelegramUserClientTests(unittest.TestCase):
                 session_path.with_suffix(".updates.json").read_text(encoding="utf-8"),
                 '{"42":9}',
             )
+
+    def test_bot_client_uses_message_sender_fallback_when_get_sender_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42})()})()
+            fake_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessageWithSenderFallback(5, "hello", sender, 7)]},
+            )
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            updates = client.get_updates()
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(updates[0].sender_id, "7")
+            self.assertEqual(updates[0].sender_name, "Alice")
+            self.assertEqual(updates[0].sender_contact, "Alice (@alice)")
 
 
 if __name__ == "__main__":
