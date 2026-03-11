@@ -20,9 +20,11 @@ class WhatsAppSignupTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertEqual(code, 0)
         self.assertIn("WhatsApp signup is not automated", output)
+        self.assertIn("whatsapp.receive_command", output)
         self.assertIn("QR", output)
         self.assertIn("Linked Devices", output)
-        self.assertIn("receive_command", output)
+        self.assertIn("bridge.py pair", output)
+        self.assertIn("python3 run_bot.py --config config", output)
 
 
 if __name__ == "__main__":

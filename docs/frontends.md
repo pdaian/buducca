@@ -29,13 +29,78 @@ python3 -m messaging_llm_bot.signal_signup --config config
 
 Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
 
+Backend flow:
+
+- `run_bot.py` loads `Bot`, which creates `WhatsAppClient` from `whatsapp.receive_command` and `whatsapp.send_command`.
+- On each poll, `WhatsAppClient.get_updates()` runs `receive_command` as a subprocess and expects JSON on stdout.
+- The JSON is normalized into internal `IncomingMessage` objects, then processed by the same bot pipeline used by the other frontends.
+- When the bot replies, `WhatsAppClient.send_message()` runs `send_command` with `{recipient}` and `{message}` replaced.
+- BUDUCCA does not talk to Meta/WhatsApp directly. The actual network session, QR login, and linked-device state live in the external bridge behind those commands.
+
 One-time signup/help command:
 
 ```bash
 python3 -m messaging_llm_bot.whatsapp_signup --config config
 ```
 
-WhatsApp linking is handled by the external bridge behind those commands, not by BUDUCCA itself. Start that bridge in QR/pairing mode, then scan the QR from your phone in WhatsApp under `Settings -> Linked Devices -> Link a Device`.
+There is no separate BUDUCCA-side WhatsApp signup API. The real setup is:
+
+```bash
+cp -R config.example config
+python3 -m messaging_llm_bot.whatsapp_signup --config config
+```
+
+Then replace the default stub commands in `config/whatsapp.json` with your actual bridge commands. Example shape:
+
+```json
+{
+  "account": "personal",
+  "poll_interval_seconds": 1.0,
+  "allowed_sender_ids": [],
+  "allowed_group_ids_when_sender_not_allowed": [],
+  "receive_command": [
+    "python3",
+    "/opt/whatsapp-bridge/bridge.py",
+    "receive",
+    "--session",
+    "data/whatsapp-personal"
+  ],
+  "send_command": [
+    "python3",
+    "/opt/whatsapp-bridge/bridge.py",
+    "send",
+    "--session",
+    "data/whatsapp-personal",
+    "--recipient",
+    "{recipient}",
+    "--message",
+    "{message}"
+  ]
+}
+```
+
+Typical bridge signup sequence:
+
+```bash
+python3 /opt/whatsapp-bridge/bridge.py pair --session data/whatsapp-personal
+python3 /opt/whatsapp-bridge/bridge.py receive --session data/whatsapp-personal
+```
+
+During `pair`, scan the QR from WhatsApp on your phone:
+
+```text
+WhatsApp -> Settings -> Linked Devices -> Link a Device
+```
+
+After pairing, test the bridge commands directly before starting the bot:
+
+```bash
+python3 /opt/whatsapp-bridge/bridge.py receive --session data/whatsapp-personal
+python3 /opt/whatsapp-bridge/bridge.py send --session data/whatsapp-personal --recipient "group:Family|g1" --message "test"
+python3 run_bot.py --config config
+```
+
+If you keep the built-in default commands, WhatsApp will stay in stub mode and will not connect to a real account.
 
 ## Common behavior flags
 
