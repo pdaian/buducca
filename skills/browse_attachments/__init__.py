@@ -49,3 +49,11 @@ def run(workspace: Workspace, args: dict) -> str:
                 item["ocr_text"] = ocr_path.read_text(encoding="utf-8").strip()
         items.append(item)
     return json.dumps({"items": items}, ensure_ascii=False, indent=2)
+
+
+def register() -> dict[str, object]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+    }

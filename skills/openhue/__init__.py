@@ -147,3 +147,11 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     if errors:
         response.append("Failed: " + " | ".join(errors))
     return "\n".join(response) if response else "No changes applied."
+
+
+def register() -> dict[str, Any]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+    }

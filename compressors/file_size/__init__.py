@@ -15,7 +15,7 @@ def _iter_target_files(root: Path, include_patterns: list[str]) -> list[Path]:
     return sorted(set(files))
 
 
-def create_compressor(config: dict):
+def register_compressor(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     include_patterns = list(config.get("include", ["*"]))
     max_lines = int(config.get("max_lines", 200))

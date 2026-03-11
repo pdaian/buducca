@@ -46,34 +46,17 @@ class SkillManager:
 
     def _build_skill(self, module: ModuleType, file_path: Path) -> Skill:
         args_schema = self._resolve_args_schema(module, file_path)
-
-        if hasattr(module, "register"):
-            registered = module.register()
-            return Skill(
-                name=registered["name"],
-                description=registered.get("description", ""),
-                run=registered["run"],
-                requires_llm_response=bool(registered.get("requires_llm_response", False)),
-                args_schema=str(registered.get("args_schema") or args_schema),
-                build_action=registered.get("build_action"),
-                source_path=file_path,
-                readme_path=file_path.parent / "README.md",
-            )
-
-        run = getattr(module, "run", None)
-        if run is None or not callable(run):
-            raise RuntimeError(f"Skill file {file_path} must expose callable run(workspace, args)")
-
-        name = getattr(module, "NAME", file_path.stem)
-        description = getattr(module, "DESCRIPTION", "")
-        requires_llm_response = bool(getattr(module, "REQUIRES_LLM_RESPONSE", False))
+        register = getattr(module, "register", None)
+        if register is None or not callable(register):
+            raise RuntimeError(f"Skill file {file_path} must expose register()")
+        registered = register()
         return Skill(
-            name=name,
-            description=description,
-            run=run,
-            requires_llm_response=requires_llm_response,
-            args_schema=args_schema,
-            build_action=getattr(module, "build_action", None),
+            name=registered["name"],
+            description=registered.get("description", ""),
+            run=registered["run"],
+            requires_llm_response=bool(registered.get("requires_llm_response", False)),
+            args_schema=str(registered.get("args_schema") or args_schema),
+            build_action=registered.get("build_action"),
             source_path=file_path,
             readme_path=file_path.parent / "README.md",
         )

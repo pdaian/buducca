@@ -20,6 +20,9 @@ class LoadingTests(unittest.TestCase):
                     def run(workspace, args):
                         workspace.write_text("x.txt", "ok")
                         return "done"
+
+                    def register():
+                        return {"name": NAME, "run": run}
                     """
                 ),
                 encoding="utf-8",
@@ -44,6 +47,9 @@ class LoadingTests(unittest.TestCase):
                     NAME = "demo_skill"
                     def run(workspace, args):
                         return "package"
+
+                    def register():
+                        return {"name": NAME, "run": run}
                     """
                 ),
                 encoding="utf-8",
@@ -77,6 +83,9 @@ class LoadingTests(unittest.TestCase):
 
                     def run(workspace, args):
                         return render()
+
+                    def register():
+                        return {"name": NAME, "run": run}
                     """
                 ),
                 encoding="utf-8",
@@ -97,6 +106,9 @@ class LoadingTests(unittest.TestCase):
                     NAME = "demo_skill"
                     def run(workspace, args):
                         return "ok"
+
+                    def register():
+                        return {"name": NAME, "run": run}
                     '''
                 ),
                 encoding="utf-8",
@@ -134,6 +146,9 @@ class LoadingTests(unittest.TestCase):
 
                     def run(workspace, args):
                         return "ok"
+
+                    def register():
+                        return {"name": NAME, "run": run, "build_action": build_action}
                     """
                 ),
                 encoding="utf-8",
@@ -155,6 +170,9 @@ class LoadingTests(unittest.TestCase):
                     REQUIRES_LLM_RESPONSE = True
                     def run(workspace, args):
                         return "done"
+
+                    def register():
+                        return {"name": NAME, "run": run, "requires_llm_response": REQUIRES_LLM_RESPONSE}
                     """
                 ),
                 encoding="utf-8",
@@ -170,7 +188,12 @@ class LoadingTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir()
             skill_file = skills_dir / "demo.py"
-            skill_file.write_text("NAME='demo'\ndef run(workspace, args):\n    return 'ok'\n", encoding="utf-8")
+            skill_file.write_text(
+                "NAME='demo'\n"
+                "def run(workspace, args):\n    return 'ok'\n"
+                "def register():\n    return {'name': NAME, 'run': run}\n",
+                encoding="utf-8",
+            )
 
             manager = SkillManager(skills_dir)
             self.assertIn("demo", manager.load())
@@ -178,14 +201,14 @@ class LoadingTests(unittest.TestCase):
             skill_file.unlink()
             self.assertNotIn("demo", manager.load())
 
-    def test_collector_manager_loads_create_collector(self) -> None:
+    def test_collector_manager_loads_register_collector(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             collectors_dir = Path(td) / "collectors"
             collectors_dir.mkdir()
             (collectors_dir / "demo_collector.py").write_text(
                 textwrap.dedent(
                     """
-                    def create_collector(config):
+                    def register_collector(config):
                         def run(workspace):
                             workspace.write_text("collector.txt", config.get("value", "none"))
                         return {"name": "demo", "interval_seconds": 1, "run": run}
@@ -213,7 +236,7 @@ class LoadingTests(unittest.TestCase):
                     GENERATED_FILES = ["good.recent"]
                     FILE_STRUCTURE = ["collectors/good.py", "collectors/good/README.md"]
 
-                    def create_collector(config):
+                    def register_collector(config):
                         def run(workspace):
                             return None
                         return {
@@ -229,7 +252,7 @@ class LoadingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (collectors_dir / "disabled.py").write_text(
-                "def run(workspace):\n    return None\n",
+                "def register_collector(config):\n    return {'name': 'disabled', 'run': lambda workspace: None}\n",
                 encoding="utf-8",
             )
             (collectors_dir / "broken.py").write_text(
@@ -259,7 +282,7 @@ class LoadingTests(unittest.TestCase):
             init_file.write_text(
                 textwrap.dedent(
                     """
-                    def create_collector(config):
+                    def register_collector(config):
                         def run(workspace):
                             workspace.write_text("collector.txt", config.get("value", "none"))
                         return {"name": "demo", "interval_seconds": 1, "run": run}

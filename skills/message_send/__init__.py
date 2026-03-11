@@ -268,3 +268,13 @@ def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
         writes=[],
         requires_approval=True,
     )
+
+
+def register() -> dict[str, Any]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+        "args_schema": ARGS_SCHEMA,
+        "build_action": build_action,
+    }

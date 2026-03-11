@@ -521,3 +521,12 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         lines.append(page_text)
 
     return "\n".join(lines)
+
+
+def register() -> dict[str, Any]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+        "requires_llm_response": REQUIRES_LLM_RESPONSE,
+    }

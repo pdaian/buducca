@@ -3,9 +3,9 @@ import tempfile
 import unittest
 
 from assistant_framework.workspace import Workspace
-from collectors.google_calendar import create_collector as create_calendar_collector
-from collectors.twitter_recent import create_collector as create_twitter_collector
-from collectors.gmail import create_collector as create_gmail_collector
+from collectors.google_calendar import register_collector as register_calendar_collector
+from collectors.twitter_recent import register_collector as register_twitter_collector
+from collectors.gmail import register_collector as register_gmail_collector
 
 
 class _FakeRunner:
@@ -20,7 +20,7 @@ class NewCollectorsTests(unittest.TestCase):
     def test_twitter_writes_following_and_dms_separately(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
-            collector = create_twitter_collector(
+            collector = register_twitter_collector(
                 {
                     "following_command": "following",
                     "dms_command": "dms",
@@ -46,7 +46,7 @@ class NewCollectorsTests(unittest.TestCase):
     def test_google_calendar_creates_account_month_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
-            collector = create_calendar_collector(
+            collector = register_calendar_collector(
                 {
                     "accounts": ["a@example.com"],
                     "command_template": "echo calendar",
@@ -68,7 +68,7 @@ class NewCollectorsTests(unittest.TestCase):
     def test_gmail_supports_multiple_accounts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
-            collector = create_gmail_collector(
+            collector = register_gmail_collector(
                 {
                     "accounts": [
                         {"name": "personal", "command": "gmail-a"},

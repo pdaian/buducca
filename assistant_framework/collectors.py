@@ -55,8 +55,6 @@ class CollectorManager:
     def _config_for_module(self, file_path: Path) -> tuple[str, dict[str, Any]]:
         config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
         cfg = self.config.get(config_key, {})
-        if not cfg and not config_key.endswith("_collector"):
-            cfg = self.config.get(f"{config_key}_collector", {})
         if not isinstance(cfg, dict):
             cfg = {}
         return config_key, cfg
@@ -72,35 +70,18 @@ class CollectorManager:
         if readme_path.exists():
             default_structure.append(str(readme_path.as_posix()))
 
-        if hasattr(module, "register_collector"):
-            registered = module.register_collector(config)
-            name = str(registered.get("name") or default_name)
-            description = str(registered.get("description") or getattr(module, "DESCRIPTION", "")).strip()
-            generated_files = [str(item) for item in registered.get("generated_files", getattr(module, "GENERATED_FILES", []))]
-            file_structure = [str(item) for item in registered.get("file_structure", getattr(module, "FILE_STRUCTURE", default_structure))]
-            run = registered.get("run")
-            if run is None or not callable(run):
-                raise RuntimeError(f"Collector file {file_path} register_collector(config) must return callable run(workspace)")
-            interval_seconds = float(registered.get("interval_seconds", getattr(module, "INTERVAL_SECONDS", 60.0)))
-        elif hasattr(module, "create_collector"):
-            collector = module.create_collector(config)
-            name = str(collector.get("name") or getattr(module, "NAME", default_name))
-            description = str(collector.get("description") or getattr(module, "DESCRIPTION", "")).strip()
-            generated_files = [str(item) for item in collector.get("generated_files", getattr(module, "GENERATED_FILES", []))]
-            file_structure = [str(item) for item in collector.get("file_structure", getattr(module, "FILE_STRUCTURE", default_structure))]
-            run = collector.get("run")
-            if run is None or not callable(run):
-                raise RuntimeError(f"Collector file {file_path} create_collector(config) must return callable run(workspace)")
-            interval_seconds = float(collector.get("interval_seconds", getattr(module, "INTERVAL_SECONDS", 60.0)))
-        else:
-            run = getattr(module, "run", None)
-            if run is None or not callable(run):
-                raise RuntimeError(f"Collector file {file_path} must expose run(workspace)")
-            name = getattr(module, "NAME", default_name)
-            description = str(getattr(module, "DESCRIPTION", "")).strip()
-            generated_files = [str(item) for item in getattr(module, "GENERATED_FILES", [])]
-            file_structure = [str(item) for item in getattr(module, "FILE_STRUCTURE", default_structure)]
-            interval_seconds = float(getattr(module, "INTERVAL_SECONDS", 60.0))
+        register = getattr(module, "register_collector", None)
+        if register is None or not callable(register):
+            raise RuntimeError(f"Collector file {file_path} must expose register_collector(config)")
+        registered = register(config)
+        name = str(registered.get("name") or default_name)
+        description = str(registered.get("description") or getattr(module, "DESCRIPTION", "")).strip()
+        generated_files = [str(item) for item in registered.get("generated_files", getattr(module, "GENERATED_FILES", []))]
+        file_structure = [str(item) for item in registered.get("file_structure", getattr(module, "FILE_STRUCTURE", default_structure))]
+        run = registered.get("run")
+        if run is None or not callable(run):
+            raise RuntimeError(f"Collector file {file_path} register_collector(config) must return callable run(workspace)")
+        interval_seconds = float(registered.get("interval_seconds", getattr(module, "INTERVAL_SECONDS", 60.0)))
 
         collector = Collector(
             name=name,

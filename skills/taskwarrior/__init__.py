@@ -125,3 +125,11 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return _run_task_command(["task", *task_ids, "modify", *fields])
 
     return "Unsupported action. Use one of: list, add, done, modify."
+
+
+def register() -> dict[str, Any]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+    }

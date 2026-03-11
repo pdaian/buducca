@@ -44,25 +44,19 @@ class CompressorManager:
         return compressors
 
     def _build_compressor(self, module: ModuleType, file_path: Path) -> Compressor:
-        if hasattr(module, "create_compressor"):
-            config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
-            cfg = self.config.get(config_key, {})
-            if not cfg and not config_key.endswith("_compressor"):
-                cfg = self.config.get(f"{config_key}_compressor", {})
-            compressor = module.create_compressor(cfg)
-            return Compressor(
-                name=compressor["name"],
-                interval_seconds=float(compressor.get("interval_seconds", 60.0)),
-                run=compressor["run"],
-            )
-
-        run = getattr(module, "run", None)
-        if run is None or not callable(run):
-            raise RuntimeError(f"Compressor file {file_path} must expose run(workspace)")
-
-        name = getattr(module, "NAME", file_path.stem)
-        interval_seconds = float(getattr(module, "INTERVAL_SECONDS", 60.0))
-        return Compressor(name=name, interval_seconds=interval_seconds, run=run)
+        register = getattr(module, "register_compressor", None)
+        if register is None or not callable(register):
+            raise RuntimeError(f"Compressor file {file_path} must expose register_compressor(config)")
+        config_key = file_path.parent.name if file_path.name == "__init__.py" else file_path.stem
+        cfg = self.config.get(config_key, {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+        compressor = register(cfg)
+        return Compressor(
+            name=compressor["name"],
+            interval_seconds=float(compressor.get("interval_seconds", 60.0)),
+            run=compressor["run"],
+        )
 
 
 class CompressorRunner:

@@ -1346,7 +1346,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
@@ -1366,7 +1367,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills" / "echo"
             skills_dir.mkdir(parents=True)
             (skills_dir / "__init__.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             (skills_dir / "README.md").write_text(
@@ -1391,7 +1393,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
@@ -1409,7 +1412,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
@@ -1427,7 +1431,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"{args.get(\'count\')}:{args.get(\'text\')}"\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"{args.get(\'count\')}:{args.get(\'text\')}"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
@@ -1445,7 +1450,8 @@ class BotTests(unittest.TestCase):
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
@@ -1470,7 +1476,8 @@ class BotTests(unittest.TestCase):
             bot.llm = DummyLLM("should-not-be-used")
 
             (skills_root / "echo.py").write_text(
-                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n',
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1524,7 +1531,8 @@ class BotTests(unittest.TestCase):
             (skills_dir / "echo.py").write_text(
                 'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n'
                 'ARGS_SCHEMA = "{ text: string }"\n\n'
-                'def run(workspace, args):\n    return args.get("text", "")\n',
+                'def run(workspace, args):\n    return args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run, "args_schema": ARGS_SCHEMA}\n',
                 encoding="utf-8",
             )
 
@@ -1560,7 +1568,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "file.py").write_text(
                 'NAME = "file"\nDESCRIPTION = "File ops."\n\n'
-                'def run(workspace, args):\n    return "ok"\n',
+                'def run(workspace, args):\n    return "ok"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1596,7 +1605,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "message_send.py").write_text(
                 'NAME = "message_send"\nDESCRIPTION = "Sends messages."\n\n'
-                'def run(workspace, args):\n    return "ok"\n',
+                'def run(workspace, args):\n    return "ok"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1611,7 +1621,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "message_send.py").write_text(
                 'NAME = "message_send"\nDESCRIPTION = "Sends messages."\n\n'
-                'def run(workspace, args):\n    return "ok"\n',
+                'def run(workspace, args):\n    return "ok"\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1633,7 +1644,7 @@ class BotTests(unittest.TestCase):
                 'DESCRIPTION = "Writes demo files."\n'
                 'GENERATED_FILES = ["demo.recent", "demo.state.json"]\n'
                 'FILE_STRUCTURE = ["collectors/demo.py", "collectors/demo/README.md"]\n'
-                "def create_collector(config):\n"
+                "def register_collector(config):\n"
                 "    def run(workspace):\n"
                 "        return None\n"
                 "    return {\n"
@@ -1679,7 +1690,7 @@ class BotTests(unittest.TestCase):
                 'DESCRIPTION = "Writes demo files."\n'
                 'GENERATED_FILES = ["demo.recent", "demo.empty", "demo.missing"]\n'
                 'FILE_STRUCTURE = ["collectors/demo.py", "collectors/demo/README.md", "collectors/demo/missing.md"]\n'
-                "def create_collector(config):\n"
+                "def register_collector(config):\n"
                 "    def run(workspace):\n"
                 "        return None\n"
                 "    return {\n"
@@ -1725,7 +1736,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
                 'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
-                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n',
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1744,7 +1756,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
                 'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
-                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n',
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 
@@ -1855,7 +1868,8 @@ class BotTests(unittest.TestCase):
             skills_dir.mkdir(parents=True)
             (skills_dir / "echo.py").write_text(
                 'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
-                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n',
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
                 encoding="utf-8",
             )
 

@@ -43,7 +43,7 @@ def _parse_llm_output(output: str, original: str) -> tuple[str, str]:
     return compressed, removed
 
 
-def create_compressor(config: dict):
+def register_compressor(config: dict):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
     command = str(config.get("command", "python3 scripts/memory_compressor.py"))
     timeout = float(config.get("timeout_seconds", 90))

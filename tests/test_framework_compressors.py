@@ -6,8 +6,8 @@ from pathlib import Path
 
 from assistant_framework.compressors import Compressor, CompressorManager, CompressorRunner
 from assistant_framework.workspace import Workspace
-from compressors.file_size import create_compressor as create_file_size_compressor
-from compressors.llm_based import create_compressor as create_llm_compressor
+from compressors.file_size import register_compressor as register_file_size_compressor
+from compressors.llm_based import register_compressor as register_llm_compressor
 
 
 class CompressorRunnerTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class FileSizeCompressorTests(unittest.TestCase):
             ws = Workspace(td)
             ws.write_text("notes.txt", "".join(f"line-{i}\n" for i in range(250)))
 
-            compressor = create_file_size_compressor({})
+            compressor = register_file_size_compressor({})
             compressor["run"](ws)
 
             lines = ws.read_text("notes.txt").splitlines()
@@ -53,7 +53,7 @@ class LLMCompressorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ws = Workspace(td)
             ws.write_text("learnings", "A\nA\nB\n")
-            compressor = create_llm_compressor(
+            compressor = register_llm_compressor(
                 {
                     "command": "python3 scripts/memory_compressor.py",
                     "files": [
@@ -88,7 +88,7 @@ class LLMCompressorTests(unittest.TestCase):
                 "python3 -c \"import json,sys; "
                 "print(json.dumps({'compressed_content':'keep\\n','removed_content':'remove\\n'}))\""
             )
-            compressor = create_llm_compressor({"command": command, "files": [{"path": "learnings", "interval_seconds": 0}]})
+            compressor = register_llm_compressor({"command": command, "files": [{"path": "learnings", "interval_seconds": 0}]})
 
             compressor["run"](ws)
 
@@ -98,14 +98,14 @@ class LLMCompressorTests(unittest.TestCase):
 
 
 class CompressorLoadingTests(unittest.TestCase):
-    def test_compressor_manager_loads_create_compressor(self) -> None:
+    def test_compressor_manager_loads_register_compressor(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             compressors_dir = Path(td) / "compressors"
             compressors_dir.mkdir()
             (compressors_dir / "demo_compressor.py").write_text(
                 textwrap.dedent(
                     """
-                    def create_compressor(config):
+                    def register_compressor(config):
                         def run(workspace):
                             workspace.write_text("compressor.txt", config.get("value", "none"))
                         return {"name": "demo", "interval_seconds": 1, "run": run}

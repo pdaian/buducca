@@ -23,3 +23,11 @@ def run(workspace: Workspace, args: dict) -> str:
         rel = path.relative_to(workspace.root)
         lines.append(f"- {rel} ({path.stat().st_size} bytes)")
     return "\n".join(lines)
+
+
+def register() -> dict[str, object]:
+    return {
+        "name": NAME,
+        "description": DESCRIPTION,
+        "run": run,
+    }

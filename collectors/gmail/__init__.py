@@ -90,7 +90,3 @@ def register_collector(config: dict):
         "file_structure": FILE_STRUCTURE,
         "run": _run,
     }
-
-
-def create_collector(config: dict):
-    return register_collector(config)
