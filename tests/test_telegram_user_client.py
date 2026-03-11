@@ -51,11 +51,23 @@ class _FakeMessageWithSenderFallback(_FakeMessage):
         self.sender_id = sender_id
 
 
+class _FakeMessageWithResolvableSender(_FakeMessage):
+    def __init__(self, message_id: int, text: str, sender_id: int) -> None:
+        super().__init__(message_id, text, sender=None)
+        self.sender_id = sender_id
+
+
 class _FakeDialogClient(_FakeClient):
-    def __init__(self, dialogs: list[object], messages_by_chat: dict[int, list[_FakeMessage]]) -> None:
+    def __init__(
+        self,
+        dialogs: list[object],
+        messages_by_chat: dict[int, list[_FakeMessage]],
+        entities: dict[object, object] | None = None,
+    ) -> None:
         super().__init__(authorized=True)
         self._dialogs = dialogs
         self._messages_by_chat = messages_by_chat
+        self._entities = entities or {}
         self.iter_messages_calls: list[tuple[int, int, int, bool]] = []
 
     async def iter_dialogs(self, limit=50):
@@ -69,6 +81,9 @@ class _FakeDialogClient(_FakeClient):
         for message in self._messages_by_chat.get(chat_id, []):
             if message.id > min_id:
                 yield message
+
+    async def get_entity(self, entity):
+        return self._entities.get(entity)
 
 
 class TelegramUserClientTests(unittest.TestCase):
@@ -156,6 +171,26 @@ class TelegramUserClientTests(unittest.TestCase):
             self.assertEqual(result[0]["sender_name"], "Alice")
             self.assertEqual(result[0]["sender_contact"], "Alice (@alice)")
 
+    def test_get_recent_messages_resolves_sender_entity_from_sender_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            session_path.with_suffix(".session").write_text("present", encoding="utf-8")
+            resolved_sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42, "title": "Group"})()})()
+            fake_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessageWithResolvableSender(5, "hello", 7)]},
+                entities={7: resolved_sender},
+            )
+            client = TelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            result = client.get_recent_messages(since_timestamp=None, max_messages=10)
+
+            self.assertEqual(result[0]["sender_id"], "7")
+            self.assertEqual(result[0]["sender_name"], "Alice")
+            self.assertEqual(result[0]["sender_contact"], "Alice (@alice)")
+
     def test_bot_client_persists_last_seen_message_ids(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             session_path = Path(td) / "telegram_user"
@@ -232,6 +267,26 @@ class TelegramUserClientTests(unittest.TestCase):
             fake_client = _FakeDialogClient(
                 dialogs=[dialog],
                 messages_by_chat={42: [_FakeMessageWithSenderFallback(5, "hello", sender, 7)]},
+            )
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            updates = client.get_updates()
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(updates[0].sender_id, "7")
+            self.assertEqual(updates[0].sender_name, "Alice")
+            self.assertEqual(updates[0].sender_contact, "Alice (@alice)")
+
+    def test_bot_client_resolves_sender_entity_from_sender_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            resolved_sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42, "title": "Group"})()})()
+            fake_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessageWithResolvableSender(5, "hello", 7)]},
+                entities={7: resolved_sender},
             )
             client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
             client._ensure_client = lambda: fake_client  # type: ignore[assignment]

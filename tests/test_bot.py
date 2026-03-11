@@ -945,6 +945,33 @@ class BotTests(unittest.TestCase):
             self.assertEqual(events[0]["sender_name"], "Alice")
             self.assertEqual(events[0]["sender_contact"], "Alice (@alice_tg)")
 
+    def test_telegram_unanswered_log_includes_sender_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    sender_name="Alice",
+                    sender_contact="Alice (@alice_tg)",
+                    text="collect me",
+                )
+            )
+
+            recent = [json.loads(line) for line in (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(recent[0]["sender_name"], "Alice")
+            self.assertEqual(recent[0]["sender_contact"], "Alice (@alice_tg)")
+
     def test_sender_context_is_added_to_llm_prompt(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()

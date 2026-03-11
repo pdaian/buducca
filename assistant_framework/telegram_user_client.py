@@ -82,7 +82,7 @@ class TelegramUserClient:
                     if timestamp <= cutoff:
                         continue
                     sender = await message.get_sender()
-                    sender_entity = self._resolve_sender_entity(message, sender, dialog.entity)
+                    sender_entity = await self._resolve_sender_entity(client, message, sender, dialog.entity)
                     sender_name = self._extract_sender_name(sender_entity)
                     sender_contact = self._extract_sender_contact(sender_entity, sender_name)
                     sender_id = getattr(sender_entity, "id", getattr(message, "sender_id", getattr(dialog.entity, "id", None)))
@@ -126,12 +126,30 @@ class TelegramUserClient:
         asyncio.run(self._signup())
 
     @staticmethod
-    def _resolve_sender_entity(message: object, sender: object, dialog_entity: object) -> object:
+    async def _resolve_sender_entity(client: object, message: object, sender: object, dialog_entity: object) -> object:
         if sender is not None:
             return sender
-        for attr_name in ("sender", "peer_id", "from_id", "chat"):
+        for attr_name in ("sender", "chat"):
             candidate = getattr(message, attr_name, None)
             if candidate is not None:
+                return candidate
+        for candidate in (
+            getattr(message, "sender_id", None),
+            getattr(message, "from_id", None),
+            getattr(message, "peer_id", None),
+            dialog_entity,
+        ):
+            if candidate is None:
+                continue
+            get_entity = getattr(client, "get_entity", None)
+            if callable(get_entity):
+                try:
+                    resolved = await get_entity(candidate)
+                except Exception:
+                    resolved = None
+                if resolved is not None:
+                    return resolved
+            if candidate is not dialog_entity:
                 return candidate
         return dialog_entity
 

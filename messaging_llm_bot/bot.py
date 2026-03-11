@@ -1374,6 +1374,8 @@ class BotRunner:
                 conversation_id=conversation_id,
                 sender_id=sender_id,
                 text=text,
+                sender_name=sender_name,
+                sender_contact=sender_contact or sender_id,
                 account="default",
                 source="frontend_log",
                 logged_at=logged_at,
