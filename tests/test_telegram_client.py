@@ -28,6 +28,10 @@ class FakeHttp:
                     },
                     {
                         "update_id": 4,
+                        "message": {"chat": {"id": 9}, "audio": {"file_id": "audio-id", "mime_type": "audio/ogg"}},
+                    },
+                    {
+                        "update_id": 5,
                         "message": {
                             "chat": {"id": 9},
                             "from": {"id": 123, "first_name": "Alice"},
@@ -53,15 +57,17 @@ class TelegramClientTests(unittest.TestCase):
     def test_get_updates_supports_voice_and_text(self) -> None:
         client = TelegramClient(bot_token="token", http_client=FakeHttp())
         updates = client.get_updates()
-        self.assertEqual(len(updates), 4)
+        self.assertEqual(len(updates), 5)
         self.assertEqual(updates[0].text, "hello")
         self.assertEqual(updates[1].text, "posted as channel")
         self.assertEqual(updates[2].voice_file_id, "voice-id")
-        self.assertEqual(updates[3].text, "see attachment")
-        self.assertEqual(len(updates[3].attachments), 1)
-        self.assertEqual(updates[3].attachments[0].file_id, "doc-id")
-        self.assertEqual(updates[3].attachments[0].filename, "report.pdf")
-        self.assertIsNotNone(updates[3].sent_at)
+        self.assertEqual(updates[3].voice_file_id, "audio-id")
+        self.assertEqual(updates[3].attachments, [])
+        self.assertEqual(updates[4].text, "see attachment")
+        self.assertEqual(len(updates[4].attachments), 1)
+        self.assertEqual(updates[4].attachments[0].file_id, "doc-id")
+        self.assertEqual(updates[4].attachments[0].filename, "report.pdf")
+        self.assertIsNotNone(updates[4].sent_at)
         self.assertEqual(updates[0].sender_id, "123")
         self.assertEqual(updates[0].sender_name, "Alice")
         self.assertEqual(updates[0].sender_contact, "Alice (@alice_tg)")

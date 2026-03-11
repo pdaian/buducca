@@ -27,11 +27,14 @@ class TelegramClient:
             message = update.get("message", {})
             text = message.get("text") or message.get("caption")
             voice = message.get("voice", {})
+            audio = message.get("audio", {})
             chat = message.get("chat", {})
             sender = message.get("from")
             sender_chat = message.get("sender_chat")
             effective_sender = sender if isinstance(sender, dict) and sender else sender_chat
             voice_file_id = voice.get("file_id") if isinstance(voice, dict) else None
+            if not voice_file_id and isinstance(audio, dict):
+                voice_file_id = audio.get("file_id")
             attachments = self._extract_attachments(message)
             sent_at = self._extract_sent_at(message.get("date"))
             if (not text and not voice_file_id and not attachments) or "id" not in chat:
@@ -80,7 +83,7 @@ class TelegramClient:
                 )
             )
 
-        for key in ("audio", "video", "animation"):
+        for key in ("video", "animation"):
             payload = message.get(key)
             if isinstance(payload, dict) and payload.get("file_id"):
                 attachments.append(
