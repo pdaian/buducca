@@ -79,6 +79,20 @@ class GoogleFiClientTests(unittest.TestCase):
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].sender_id, "+15551112222")
 
+    def test_get_updates_preserves_message_sent_at_timestamp(self) -> None:
+        payload = (
+            '{"messages":[{"conversation_id":"thread-1","sender_id":"+15550001","text":"hello",'
+            '"sent_at":"2026-03-10T13:23:00-05:00"}]}'
+        )
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sent_at, "2026-03-10T13:23:00-05:00")
+
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
     def test_browser_options_stores_profile_under_top_level_data_dir(self) -> None:

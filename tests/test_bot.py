@@ -1887,6 +1887,30 @@ class BotTests(unittest.TestCase):
             ]
             self.assertEqual(len(recent_lines), 1)
 
+    def test_telegram_unanswered_messages_are_deduplicated_by_update_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            update = IncomingMessage(
+                update_id=42,
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="collect me",
+            )
+            bot._handle_update(update)
+            bot._handle_update(update)
+
+            recent_lines = [line for line in (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(recent_lines), 1)
+
 
     def test_google_fi_call_events_are_deduplicated(self) -> None:
         with tempfile.TemporaryDirectory() as td:

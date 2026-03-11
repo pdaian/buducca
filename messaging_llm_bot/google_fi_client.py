@@ -161,6 +161,7 @@ class GoogleFiClient:
             return None
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
         sender_contact = self._first_text(item.get("sender_contact"), sender_name, sender_id)
+        sent_at = self._extract_sent_at(item)
         return IncomingMessage(
             update_id=self._next_update_id(),
             backend="google_fi",
@@ -169,6 +170,7 @@ class GoogleFiClient:
             text=text_value,
             sender_name=sender_name,
             sender_contact=sender_contact,
+            sent_at=sent_at,
             event_type="message",
             attachments=attachments,
         )
@@ -185,6 +187,7 @@ class GoogleFiClient:
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
         sender_contact = self._first_text(item.get("sender_contact"), sender_name, sender_id)
         call_state = self._first_text(item.get("status"), item.get("state"), item.get("call_state")) or "received"
+        sent_at = self._extract_sent_at(item)
         return IncomingMessage(
             update_id=self._next_update_id(),
             backend="google_fi",
@@ -193,6 +196,7 @@ class GoogleFiClient:
             text=f"[Call event] {call_state}",
             sender_name=sender_name,
             sender_contact=sender_contact,
+            sent_at=sent_at,
             event_type="call",
         )
 
@@ -234,6 +238,39 @@ class GoogleFiClient:
             if normalized and normalized != candidate:
                 return normalized
         return cls._phone_like_or_original(first_text)
+
+    @staticmethod
+    def _extract_sent_at(item: dict[str, Any]) -> str | None:
+        for key in ("sent_at", "timestamp", "received_at", "date", "time"):
+            value = item.get(key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, (int, float)):
+                timestamp = float(value)
+                if timestamp > 1_000_000_000_000:
+                    timestamp /= 1000.0
+                return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if not cleaned:
+                    continue
+                if cleaned.isdigit():
+                    timestamp = float(cleaned)
+                    if timestamp > 1_000_000_000_000:
+                        timestamp /= 1000.0
+                    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                try:
+                    parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+                except ValueError:
+                    parsed = None
+                if parsed is not None:
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return parsed.isoformat()
+                parsed_google_timestamp = _parse_google_messages_timestamp(cleaned)
+                if parsed_google_timestamp:
+                    return parsed_google_timestamp
+        return None
 
     def _extract_attachments(self, item: dict[str, Any]) -> list[IncomingAttachment]:
         raw = item.get("attachments")
