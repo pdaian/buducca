@@ -176,22 +176,29 @@ class BotRunner:
             config=self._load_collector_prompt_config(),
         ).load_manifests()
         if collector_manifests:
+            workspace_root = Path(self.config.runtime.workspace_dir)
+            collectors_root = Path(self.config.runtime.collectors_dir).parent
             collector_lines = [
                 "Loaded collector outputs available in the workspace:",
                 "Only collectors that are enabled and loaded without errors are listed here.",
             ]
             for manifest in collector_manifests:
+                generated_files = self._existing_nonempty_prompt_files(manifest.generated_files, base_dir=workspace_root)
+                module_files = self._existing_nonempty_prompt_files(manifest.file_structure, base_dir=collectors_root)
+                if not generated_files and not module_files:
+                    continue
                 description = manifest.description or "No description provided."
                 collector_lines.append(f"- {manifest.name}: {description}")
-                if manifest.generated_files:
+                if generated_files:
                     collector_lines.append("  generated workspace files:")
-                    for item in manifest.generated_files:
+                    for item in generated_files:
                         collector_lines.append(f"    {item}")
-                if manifest.file_structure:
+                if module_files:
                     collector_lines.append("  module files:")
-                    for item in manifest.file_structure:
+                    for item in module_files:
                         collector_lines.append(f"    {item}")
-            sections.append("\n".join(collector_lines))
+            if len(collector_lines) > 2:
+                sections.append("\n".join(collector_lines))
 
         if self._skills:
             skill_rules = [
@@ -222,6 +229,24 @@ class BotRunner:
             sections.append("\n".join(skill_rules))
 
         return f"{base_prompt}\n\n" + "\n\n".join(sections)
+
+    @staticmethod
+    def _existing_nonempty_prompt_files(items: list[str], *, base_dir: Path) -> list[str]:
+        present: list[str] = []
+        for item in items:
+            path_text = str(item).strip()
+            if not path_text:
+                continue
+            path = Path(path_text)
+            if not path.is_absolute():
+                path = base_dir / path
+            try:
+                if not path.is_file() or path.stat().st_size <= 0:
+                    continue
+            except OSError:
+                continue
+            present.append(path_text)
+        return present
 
     def _load_collector_prompt_config(self) -> dict[str, Any]:
         config_path = Path(self.config.runtime.collector_config_path)

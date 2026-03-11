@@ -1152,6 +1152,11 @@ class BotTests(unittest.TestCase):
                 "    }\n",
                 encoding="utf-8",
             )
+            demo_docs = collectors_dir / "demo"
+            demo_docs.mkdir()
+            (demo_docs / "README.md").write_text("collector docs\n", encoding="utf-8")
+            Path(td, "demo.recent").write_text("recent data\n", encoding="utf-8")
+            Path(td, "demo.state.json").write_text("{\"ok\": true}\n", encoding="utf-8")
             Path(td, "agent_config.json").write_text('{"collectors": {"demo": {"enabled": true}}}\n', encoding="utf-8")
 
             runtime = RuntimeConfig(
@@ -1171,6 +1176,55 @@ class BotTests(unittest.TestCase):
             self.assertIn("demo: Writes demo files.", system_prompt)
             self.assertIn("demo.recent", system_prompt)
             self.assertIn("collectors/demo.py", system_prompt)
+
+    def test_system_prompt_omits_missing_or_empty_collector_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            collectors_dir = Path(td) / "collectors"
+            collectors_dir.mkdir(parents=True)
+            (collectors_dir / "demo.py").write_text(
+                'NAME = "demo"\n'
+                'DESCRIPTION = "Writes demo files."\n'
+                'GENERATED_FILES = ["demo.recent", "demo.empty", "demo.missing"]\n'
+                'FILE_STRUCTURE = ["collectors/demo.py", "collectors/demo/README.md", "collectors/demo/missing.md"]\n'
+                "def create_collector(config):\n"
+                "    def run(workspace):\n"
+                "        return None\n"
+                "    return {\n"
+                '        "name": NAME,\n'
+                '        "description": DESCRIPTION,\n'
+                '        "generated_files": GENERATED_FILES,\n'
+                '        "file_structure": FILE_STRUCTURE,\n'
+                '        "run": run,\n'
+                "    }\n",
+                encoding="utf-8",
+            )
+            demo_docs = collectors_dir / "demo"
+            demo_docs.mkdir()
+            (demo_docs / "README.md").write_text("", encoding="utf-8")
+            Path(td, "demo.recent").write_text("recent data\n", encoding="utf-8")
+            Path(td, "demo.empty").write_text("", encoding="utf-8")
+            Path(td, "agent_config.json").write_text('{"collectors": {"demo": {"enabled": true}}}\n', encoding="utf-8")
+
+            runtime = RuntimeConfig(
+                workspace_dir=td,
+                skills_dir=str(Path(td) / "skills"),
+                collectors_dir=str(collectors_dir),
+                collector_config_path=str(Path(td) / "agent_config.json"),
+            )
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_message(1, "hi")
+
+            system_prompt = bot.llm.messages[0]["content"]
+            self.assertIn("demo: Writes demo files.", system_prompt)
+            self.assertIn("demo.recent", system_prompt)
+            self.assertIn("collectors/demo.py", system_prompt)
+            self.assertNotIn("demo.empty", system_prompt)
+            self.assertNotIn("demo.missing", system_prompt)
+            self.assertNotIn("collectors/demo/README.md", system_prompt)
+            self.assertNotIn("collectors/demo/missing.md", system_prompt)
 
     def test_skill_call_output_executes_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
