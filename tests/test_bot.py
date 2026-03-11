@@ -107,6 +107,18 @@ class PollingTelegram:
         return result
 
 
+class PollingTelegramWithSend(PollingTelegram):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.sent = []
+
+    def send_message(self, chat_id: int, text: str) -> None:
+        self.sent.append((chat_id, text))
+
+    def send_typing_action(self, chat_id: int) -> None:
+        return None
+
+
 class PollingSignal:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -2099,6 +2111,53 @@ class BotTests(unittest.TestCase):
         bot.run_forever()
 
         self.assertEqual(bot.telegram.calls[0], (None, bot.config.telegram.long_poll_timeout_seconds))
+
+    def test_run_forever_does_not_skip_recent_history_in_telegram_user_mode(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(
+                mode="user",
+                api_id=123,
+                api_hash="hash",
+                process_pending_updates_on_startup=False,
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = PollingTelegramWithSend(
+            responses=[
+                [IncomingMessage(update_id=5, backend="telegram", conversation_id="1", sender_id="1", text="recent")],
+                KeyboardInterrupt(),
+            ]
+        )
+        bot.llm = DummyLLM("hello")
+
+        bot.run_forever()
+
+        self.assertEqual(bot.telegram.calls[0], (None, bot.config.telegram.long_poll_timeout_seconds))
+        self.assertEqual(bot.telegram.calls[1], (6, bot.config.telegram.long_poll_timeout_seconds))
+        self.assertEqual(bot.telegram.sent, [(1, "hello")])
+
+    def test_run_forever_processes_signal_messages_without_startup_skip(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15550000000", allowed_sender_ids=["+15551112222"]),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = PollingSignal(
+            responses=[
+                [IncomingMessage(update_id=5, backend="signal", conversation_id="+15551112222", sender_id="+15551112222", text="recent")],
+                KeyboardInterrupt(),
+            ]
+        )
+        bot.llm = DummyLLM("hello")
+        bot._send_message = lambda backend, conversation_id, text: None
+
+        bot.run_forever()
+
+        self.assertEqual(bot.signal.calls, 2)
+        self.assertEqual(bot.llm.calls, 1)
 
     def test_poll_frontends_disables_signal_when_unavailable(self) -> None:
         bot = self.make_bot()

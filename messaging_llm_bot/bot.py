@@ -490,7 +490,11 @@ class BotRunner:
                 logging.debug("Telegram polling is in conflict backoff; skipping this cycle")
             else:
                 try:
-                    if self._telegram_offset is None and not self.config.telegram.process_pending_updates_on_startup:
+                    if (
+                        self._telegram_offset is None
+                        and self.config.telegram.mode == "bot"
+                        and not self.config.telegram.process_pending_updates_on_startup
+                    ):
                         self._telegram_offset = self._offset
                         pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
                         if pending_updates:
