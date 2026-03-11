@@ -1158,6 +1158,144 @@ class BotTests(unittest.TestCase):
             self.assertIn("collector:telegram_recent", sent)
             self.assertIn("last_success_at", sent)
 
+    def test_skill_command_lists_available_skills_without_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n',
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/skill")
+
+            self.assertEqual(bot.llm.calls, 0)
+            sent = bot.telegram.sent[0][1]
+            self.assertIn("Skill command", sent)
+            self.assertIn("echo: Echoes text.", sent)
+
+    def test_skill_command_shows_skill_documentation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills" / "echo"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "__init__.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return args.get("text", "")\n',
+                encoding="utf-8",
+            )
+            (skills_dir / "README.md").write_text(
+                "# Echo skill\n\n## What it does\nReturns the provided text.\n\n## Args schema\n```ts\n{text?: string}\n```\n",
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(Path(td) / "skills"))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/skill echo")
+
+            self.assertEqual(bot.llm.calls, 0)
+            sent = bot.telegram.sent[0][1]
+            self.assertIn("Skill: echo", sent)
+            self.assertIn("Returns the provided text.", sent)
+            self.assertIn("{text?: string}", sent)
+
+    def test_skill_command_runs_skill_passthrough(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n',
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, '/skill echo {"text":"hello"}')
+
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertEqual(bot.telegram.sent[0][1], "echo:hello")
+
+    def test_skill_command_runs_key_value_passthrough(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"echo:{args.get(\'text\', \'\')}"\n',
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/skill echo text:hello")
+
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertEqual(bot.telegram.sent[0][1], "echo:hello")
+
+    def test_skill_command_runs_multiline_key_value_passthrough(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return f"{args.get(\'count\')}:{args.get(\'text\')}"\n',
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/skill echo text:hello there\ncount:2")
+
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertEqual(bot.telegram.sent[0][1], "2:hello there")
+
+    def test_skill_command_reports_invalid_json_args(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n',
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, '/skill echo {"text": }')
+
+            self.assertEqual(bot.llm.calls, 0)
+            sent = bot.telegram.sent[0][1]
+            self.assertIn("Invalid JSON args for skill 'echo'", sent)
+            self.assertIn('Examples: /skill echo {"key":"value"} or /skill echo key:value', sent)
+
+    def test_skill_command_reloads_skills_dynamically(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_root = Path(td) / "skills"
+            skills_root.mkdir(parents=True)
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_root))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            (skills_root / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes text."\ndef run(workspace, args):\n    return "ok"\n',
+                encoding="utf-8",
+            )
+
+            bot._handle_message(1, "/skill list")
+
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertIn("echo: Echoes text.", bot.telegram.sent[0][1])
+
 
     def test_poll_frontends_handles_telegram_409_conflict(self) -> None:
         bot = self.make_bot()

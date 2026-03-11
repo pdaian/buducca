@@ -48,6 +48,17 @@ Global runtime:
 
 - `runtime.max_reply_chunk_chars` → split long responses into smaller message chunks.
 
+## Frontend commands
+
+- `/status` returns bot uptime and collector status without calling the LLM.
+- `/skill` lists currently loaded skills.
+- `/skill <skill_name>` shows the skill description, README-backed `What it does` section when available, and args schema.
+- `/skill <skill_name> {"key":"value"}` runs a skill directly from the frontend with JSON object args.
+- `/skill <skill_name> key:value` runs a skill with lightweight passthrough args when you want to avoid JSON braces and quotes.
+- `/skill run <skill_name> {"key":"value"}` is the explicit passthrough form when you want docs and execution to stay unambiguous.
+
+`/skill` reloads the skills directory on each command so newly added or removed skills are reflected without restarting the bot.
+
 ## Allowlist overrides
 
 - Telegram chat allowlist: `telegram.allowed_chat_ids`

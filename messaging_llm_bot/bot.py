@@ -46,6 +46,7 @@ _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS = 60.0
 _MAX_REMINDER_FILE_CHARS = 4_000
 _MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
 _HOURLY_NO_ACTION_REPLY = "NO_ACTION"
+_SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
 class BotRunner:
@@ -127,16 +128,189 @@ class BotRunner:
         }
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
-        self._skills = SkillManager(self.config.runtime.skills_dir).load()
-        if not self.config.runtime.enable_message_send_skill:
-            self._skills.pop("message_send", None)
+        self._skills = self._load_runtime_skills()
         self._current_evidence = []
 
     @property
     def _debug_enabled(self) -> bool:
         return self.config.runtime.debug or self.config.runtime.log_level.upper() == "DEBUG"
 
+    def _load_runtime_skills(self) -> dict[str, Any]:
+        skills = SkillManager(self.config.runtime.skills_dir).load()
+        if not self.config.runtime.enable_message_send_skill:
+            skills.pop("message_send", None)
+        return skills
+
+    def _refresh_skills(self) -> None:
+        self._skills = self._load_runtime_skills()
+
+    @staticmethod
+    def _read_skill_doc_section(readme_path: Path | None, heading: str) -> str:
+        if readme_path is None or not readme_path.exists():
+            return ""
+        readme_text = readme_path.read_text(encoding="utf-8")
+        match = re.search(
+            rf"^##\s+{re.escape(heading)}\s*\n(.*?)(?=^##\s+|\Z)",
+            readme_text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if match is None:
+            return ""
+        section = match.group(1).strip()
+        lines: list[str] = []
+        in_code_block = False
+        for raw_line in section.splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block or not stripped:
+                continue
+            lines.append(stripped)
+        return "\n".join(lines).strip()
+
+    def _build_skill_command_help(self, skill_name: str, skill: Any) -> str:
+        lines = [
+            f"Skill: {skill_name}",
+            f"- description: {skill.description or 'No description provided.'}",
+        ]
+        what_it_does = self._read_skill_doc_section(skill.readme_path, "What it does")
+        if what_it_does:
+            lines.append("- documentation:")
+            lines.extend(f"  {line}" for line in what_it_does.splitlines())
+        if skill.args_schema:
+            lines.append("- args_schema:")
+            lines.extend(f"  {line}" for line in skill.args_schema.splitlines())
+        lines.extend(
+            [
+                f'- run: /skill {skill_name} {{"key":"value"}}',
+                f"- passthrough: /skill {skill_name} key:value",
+                f"- explicit_run: /skill run {skill_name} {{\"key\":\"value\"}}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _build_skill_command_overview(self) -> str:
+        self._refresh_skills()
+        lines = [
+            "Skill command",
+            "- usage: /skill",
+            "- list: /skill list",
+            "- docs: /skill <skill_name>",
+            "- run: /skill <skill_name> {\"key\":\"value\"}",
+            "- passthrough: /skill <skill_name> key:value",
+            "- explicit_run: /skill run <skill_name> {\"key\":\"value\"}",
+        ]
+        if not self._skills:
+            lines.append("- available_skills: none loaded")
+            return "\n".join(lines)
+        lines.append("- available_skills:")
+        for name in sorted(self._skills):
+            description = self._skills[name].description or "No description provided."
+            lines.append(f"  - {name}: {description}")
+        return "\n".join(lines)
+
+    def _handle_skill_command(self, text: str) -> str:
+        self._refresh_skills()
+        payload = text.strip()[len("/skill"):].strip()
+        if not payload or payload == "list":
+            return self._build_skill_command_overview()
+
+        if payload.startswith("help "):
+            skill_name = payload[5:].strip()
+            if not skill_name:
+                return "Usage: /skill help <skill_name>"
+            skill = self._skills.get(skill_name)
+            if skill is None:
+                available = ", ".join(sorted(self._skills)) or "(none)"
+                return f"Unknown skill '{skill_name}'. Available skills: {available}"
+            return self._build_skill_command_help(skill_name, skill)
+
+        explicit_run = payload.startswith("run ")
+        remainder = payload[4:].strip() if explicit_run else payload
+        if not remainder:
+            return "Usage: /skill run <skill_name> {\"key\":\"value\"}"
+
+        skill_name, separator, raw_args = remainder.partition(" ")
+        if not separator and not explicit_run:
+            skill = self._skills.get(skill_name)
+            if skill is None:
+                available = ", ".join(sorted(self._skills)) or "(none)"
+                return f"Unknown skill '{skill_name}'. Available skills: {available}"
+            return self._build_skill_command_help(skill_name, skill)
+
+        skill = self._skills.get(skill_name)
+        if skill is None:
+            available = ", ".join(sorted(self._skills)) or "(none)"
+            return f"Unknown skill '{skill_name}'. Available skills: {available}"
+
+        args_text = raw_args.strip()
+        if not args_text:
+            args: dict[str, Any] = {}
+        else:
+            try:
+                parsed_args = json.loads(args_text)
+            except json.JSONDecodeError as exc:
+                if not args_text.startswith("{") and not args_text.startswith("["):
+                    parsed_args = self._parse_skill_passthrough_args(args_text)
+                else:
+                    parsed_args = None
+                if parsed_args is not None:
+                    args = parsed_args
+                    return self._run_skill_call(skill_name, args)
+                return (
+                    f"Invalid JSON args for skill '{skill_name}': {exc.msg} at line {exc.lineno} column {exc.colno}. "
+                    f'Examples: /skill {skill_name} {{"key":"value"}} or /skill {skill_name} key:value'
+                )
+            if not isinstance(parsed_args, dict):
+                return f"Invalid args for skill '{skill_name}': expected a JSON object."
+            args = parsed_args
+
+        return self._run_skill_call(skill_name, args)
+
+    @classmethod
+    def _parse_skill_passthrough_args(cls, text: str) -> dict[str, Any] | None:
+        if "\n" in text:
+            parts = [part.strip() for part in text.splitlines() if part.strip()]
+        elif "," in text:
+            parts = [part.strip() for part in text.split(",") if part.strip()]
+        else:
+            parts = [text.strip()]
+        if not parts:
+            return None
+
+        parsed: dict[str, Any] = {}
+        for part in parts:
+            key, separator, raw_value = part.partition(":")
+            key = key.strip()
+            value_text = raw_value.strip()
+            if not separator or not key or not cls._is_valid_passthrough_key(key):
+                return None
+            if not value_text:
+                return None
+            parsed[key] = cls._parse_skill_passthrough_value(value_text)
+        return parsed
+
+    @staticmethod
+    def _is_valid_passthrough_key(key: str) -> bool:
+        return bool(_SKILL_PASSTHROUGH_KEY_RE.fullmatch(key))
+
+    @staticmethod
+    def _parse_skill_passthrough_value(value_text: str) -> Any:
+        if value_text[:1] in {'"', "[", "{"}:
+            try:
+                return json.loads(value_text)
+            except json.JSONDecodeError:
+                return value_text
+        if value_text in {"true", "false", "null"}:
+            return json.loads(value_text)
+        try:
+            return json.loads(value_text)
+        except json.JSONDecodeError:
+            return value_text
+
     def _build_system_prompt(self) -> str:
+        self._refresh_skills()
         base_prompt = self.config.llm.system_prompt.strip()
         configured_timezone = self.config.llm.system_prompt_timezone
         now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
@@ -2052,8 +2226,12 @@ class BotRunner:
         }
         self._current_evidence = []
         self._last_trace_steps = []
-        if text.strip().lower() == "/status":
+        command_text = text.strip()
+        self._refresh_skills()
+        if command_text.lower() == "/status":
             reply = self._build_status_message()
+        elif command_text.lower() == "/skill" or command_text.lower().startswith("/skill "):
+            reply = self._handle_skill_command(command_text)
         else:
             with self._typing_indicator(backend, conversation_id):
                 prompt = self._build_messages(

@@ -19,6 +19,8 @@ class Skill:
     requires_llm_response: bool = False
     args_schema: str = ""
     build_action: Callable[[dict[str, Any]], ActionEnvelope | None] | None = None
+    source_path: Path | None = None
+    readme_path: Path | None = None
 
 
 class SkillManager:
@@ -54,6 +56,8 @@ class SkillManager:
                 requires_llm_response=bool(registered.get("requires_llm_response", False)),
                 args_schema=str(registered.get("args_schema") or args_schema),
                 build_action=registered.get("build_action"),
+                source_path=file_path,
+                readme_path=file_path.parent / "README.md",
             )
 
         run = getattr(module, "run", None)
@@ -70,6 +74,8 @@ class SkillManager:
             requires_llm_response=requires_llm_response,
             args_schema=args_schema,
             build_action=getattr(module, "build_action", None),
+            source_path=file_path,
+            readme_path=file_path.parent / "README.md",
         )
 
     def _resolve_args_schema(self, module: ModuleType, file_path: Path) -> str:
