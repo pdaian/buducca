@@ -102,6 +102,7 @@
     "max_reply_chunk_chars": 4096,
     "debug": false,
     "enable_message_send_skill": false,
+    "contacts_file": "assistant/people/contacts.json",
     "_warning_enable_message_send_skill": "Warning: enabling this can leak data via prompt injection, model insecurity, or other means.",
     "file_skill_actions": [
       "read",

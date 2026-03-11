@@ -263,6 +263,53 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
             self.assertTrue(config.runtime.enable_message_send_skill)
 
+    def test_contacts_load_as_unified_cross_platform_list(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            contacts_path = Path(td) / "workspace" / "assistant" / "people" / "contacts.json"
+            contacts_path.parent.mkdir(parents=True, exist_ok=True)
+            contacts_path.write_text(
+                json.dumps(
+                    [
+                        {"name": "Alice", "platform": "telegram", "recipient": 123},
+                        {"name": "Alice", "platform": "signal", "recipient": "+15550001"},
+                        {"name": "Family", "platform": "whatsapp", "recipient": "group:Family|g1"},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertEqual(len(config.contacts), 3)
+            self.assertEqual(config.contacts[0].recipient, 123)
+            self.assertEqual(config.contacts[2].platform, "whatsapp")
+
+    def test_contacts_reject_invalid_platform(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            contacts_path = Path(td) / "workspace" / "assistant" / "people" / "contacts.json"
+            contacts_path.parent.mkdir(parents=True, exist_ok=True)
+            contacts_path.write_text(
+                json.dumps(
+                    [
+                        {"name": "Alice", "platform": "email", "recipient": "alice@example.com"},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                load_config(path)
+            self.assertIn("contacts[].platform", str(ctx.exception))
+
 
     def test_google_fi_only_config_is_valid(self) -> None:
         data = {

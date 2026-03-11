@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.config import BotConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
+from messaging_llm_bot.config import BotConfig, ContactConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
 from messaging_llm_bot.interfaces import IncomingAttachment
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
@@ -1059,6 +1059,25 @@ class BotTests(unittest.TestCase):
         self.assertIn("[Sender context]", prompt[-1]["content"])
         self.assertIn("telegram_account: Alice (@alice_tg)", prompt[-1]["content"])
         self.assertTrue(prompt[-1]["content"].endswith("\n\nhi"))
+
+    def test_system_prompt_includes_message_send_contacts_when_skill_enabled(self) -> None:
+        runtime = RuntimeConfig(enable_message_send_skill=True)
+        cfg = BotConfig(
+            telegram=TelegramConfig(bot_token="t"),
+            contacts=[
+                ContactConfig(name="Alice", platform="telegram", recipient=123456789),
+                ContactConfig(name="Family", platform="whatsapp", recipient="group:Family|g1"),
+            ],
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=runtime,
+        )
+        bot = BotRunner(cfg)
+
+        prompt = bot._build_system_prompt()
+
+        self.assertIn("When using the message_send skill", prompt)
+        self.assertIn("- Alice [telegram] -> 123456789", prompt)
+        self.assertIn("- Family [whatsapp] -> group:Family|g1", prompt)
 
     def test_signal_incoming_log_includes_sender_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:

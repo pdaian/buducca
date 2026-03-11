@@ -58,6 +58,14 @@ class GoogleFiConfig:
 
 
 @dataclass
+class ContactConfig:
+    name: str
+    platform: str
+    recipient: str | int
+    description: str = ""
+
+
+@dataclass
 class LLMConfig:
     base_url: str
     api_key: str
@@ -87,6 +95,7 @@ class RuntimeConfig:
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
     enable_message_send_skill: bool = False
+    contacts_file: str = "assistant/people/contacts.json"
     file_skill_actions: list[str] = field(default_factory=lambda: ["read", "write", "append", "move", "create_dir", "delete_dir"])
     action_policy_file: str = "assistant/action_policy.json"
     enable_reply_citations: bool = True
@@ -98,11 +107,12 @@ class BotConfig:
     signal: SignalConfig | None = None
     whatsapp: WhatsAppConfig | None = None
     google_fi: GoogleFiConfig | None = None
+    contacts: list[ContactConfig] = field(default_factory=list)
     llm: LLMConfig | None = None
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _read_json(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8") as f:
             return json.load(f)
@@ -128,6 +138,55 @@ def _normalize_telegram_config(raw: dict[str, Any]) -> dict[str, Any]:
     normalized.pop("allowed_sender_ids", None)
     normalized.pop("allowed_group_ids_when_sender_not_allowed", None)
     return normalized
+
+
+def _load_contacts(raw: Any) -> list[ContactConfig]:
+    if not isinstance(raw, list):
+        return []
+
+    contacts: list[ContactConfig] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        payload = _strip_comment_keys(item)
+        name = str(payload.get("name", "")).strip()
+        platform = str(payload.get("platform", "")).strip().lower()
+        recipient = payload.get("recipient")
+        description = str(payload.get("description", "")).strip()
+        if not name or not platform or isinstance(recipient, bool) or recipient is None:
+            continue
+        if isinstance(recipient, (int, float)):
+            recipient_value: str | int = int(recipient)
+        else:
+            recipient_text = str(recipient).strip()
+            if not recipient_text:
+                continue
+            recipient_value = recipient_text
+        contacts.append(
+            ContactConfig(
+                name=name,
+                platform=platform,
+                recipient=recipient_value,
+                description=description,
+            )
+        )
+    return contacts
+
+
+def _load_contacts_from_workspace(runtime: RuntimeConfig, *, config_path: Path) -> list[ContactConfig]:
+    contacts_file = runtime.contacts_file.strip()
+    if not contacts_file:
+        return []
+
+    workspace_root = Path(runtime.workspace_dir)
+    if not workspace_root.is_absolute():
+        workspace_root = (config_path.parent / workspace_root).resolve()
+    contacts_path = Path(contacts_file)
+    if not contacts_path.is_absolute():
+        contacts_path = workspace_root / contacts_path
+    if not contacts_path.exists():
+        return []
+    return _load_contacts(_read_json(contacts_path))
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
@@ -171,6 +230,13 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         if config.google_fi.poll_interval_seconds < 0:
             raise ValueError("google_fi.poll_interval_seconds must be >= 0")
 
+    valid_contact_platforms = {"telegram", "signal", "whatsapp", "google_fi", "fi"}
+    for contact in config.contacts:
+        if contact.platform not in valid_contact_platforms:
+            raise ValueError(
+                "contacts[].platform must be one of: telegram, signal, whatsapp, google_fi, fi"
+            )
+
     if not config.llm:
         raise ValueError("llm must be set")
     if not config.llm.base_url.strip():
@@ -197,6 +263,8 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("runtime.voice_transcribe_command must be set when runtime.enable_voice_notes is true")
     if config.runtime.max_reply_chunk_chars <= 0:
         raise ValueError("runtime.max_reply_chunk_chars must be > 0")
+    if not config.runtime.contacts_file.strip():
+        raise ValueError("runtime.contacts_file must be set")
     if not config.runtime.file_skill_actions:
         raise ValueError("runtime.file_skill_actions must contain at least one action")
 
@@ -221,7 +289,16 @@ def load_config(path: str | Path) -> BotConfig:
         raise ValueError("Missing required top-level section: llm") from exc
     runtime_raw = raw.get("runtime", {})
     runtime = RuntimeConfig(**_strip_comment_keys(runtime_raw if isinstance(runtime_raw, dict) else {}))
+    contacts = _load_contacts_from_workspace(runtime, config_path=config_path)
 
-    config = BotConfig(telegram=telegram, signal=signal, whatsapp=whatsapp, google_fi=google_fi, llm=llm, runtime=runtime)
+    config = BotConfig(
+        telegram=telegram,
+        signal=signal,
+        whatsapp=whatsapp,
+        google_fi=google_fi,
+        contacts=contacts,
+        llm=llm,
+        runtime=runtime,
+    )
     _validate(config, config_path=config_path)
     return config
