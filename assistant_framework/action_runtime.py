@@ -23,17 +23,18 @@ class ActionEnvelope:
 def load_action_policy(workspace: Workspace, path: str = ACTION_POLICY_FILE) -> dict[str, Any]:
     raw = workspace.read_text(path, default="").strip()
     if not raw:
-        return {"default": "allow", "actions": {}}
+        return {"default": "allow", "actions": {}, "allow_all": True}
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return {"default": "allow", "actions": {}}
+        return {"default": "allow", "actions": {}, "allow_all": True}
     if not isinstance(payload, dict):
-        return {"default": "allow", "actions": {}}
+        return {"default": "allow", "actions": {}, "allow_all": True}
     actions = payload.get("actions")
     return {
         "default": str(payload.get("default", "allow")).strip().lower() or "allow",
         "actions": actions if isinstance(actions, dict) else {},
+        "allow_all": False,
     }
 
 
@@ -41,7 +42,7 @@ def decide_action(policy: dict[str, Any], action: ActionEnvelope) -> str:
     decision = str(policy.get("actions", {}).get(action.name, policy.get("default", "allow"))).strip().lower()
     if decision not in {"allow", "deny", "ask"}:
         decision = "allow"
-    if action.writes and decision == "allow" and action.requires_approval:
+    if action.writes and decision == "allow" and action.requires_approval and not policy.get("allow_all", False):
         return "ask"
     return decision
 

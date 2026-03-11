@@ -294,8 +294,35 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [])
             self.assertEqual(bot.llm.calls, 1)
 
+    def test_missing_action_policy_allows_mutating_skill_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = SequentialLLM(
+                [
+                    '{"skill_call": {"name": "file", "args": {"action": "write", "paths": ["notes/x.txt"], "content": "hello"}, "done": true}}'
+                ]
+            )
+
+            bot._handle_message(1, "write a note")
+
+            self.assertEqual(bot.telegram.sent, [(1, "Wrote 5 character(s) to notes/x.txt.")])
+            self.assertEqual(Path(td, "notes", "x.txt").read_text(encoding="utf-8"), "hello")
+            audit = Path(td, "audit", "actions.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"status": "executed"', audit)
+
     def test_action_policy_blocks_mutating_skill_until_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
+            Path(td, "assistant").mkdir(parents=True, exist_ok=True)
+            Path(td, "assistant", "action_policy.json").write_text(
+                json.dumps({"default": "ask", "actions": {}}),
+                encoding="utf-8",
+            )
             cfg = BotConfig(
                 telegram=TelegramConfig(bot_token="t"),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
