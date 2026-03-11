@@ -1356,6 +1356,7 @@ class BotRunner:
         *,
         backend: str,
         conversation_id: str,
+        conversation_name: str | None = None,
         sender_id: str,
         text: str,
         event_id: str | None = None,
@@ -1373,6 +1374,7 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 event_id=event_id,
@@ -1381,6 +1383,7 @@ class BotRunner:
                 account="default",
                 source="frontend_log",
                 logged_at=logged_at,
+                sent_at=logged_at,
             )
             self._append_sorted_recent_message("telegram.recent", payload)
             return
@@ -1394,6 +1397,7 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 event_id=event_id,
@@ -1402,6 +1406,7 @@ class BotRunner:
                 account="default",
                 source="frontend_log",
                 logged_at=logged_at,
+                sent_at=logged_at,
             )
             self._append_sorted_recent_message("signal.messages.recent", payload)
             return
@@ -1415,6 +1420,7 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 event_id=event_id,
@@ -1423,6 +1429,7 @@ class BotRunner:
                 account=self.config.whatsapp.account if self.config.whatsapp else "default",
                 source="frontend_log",
                 logged_at=logged_at,
+                sent_at=logged_at,
             )
             self._append_sorted_recent_message("whatsapp.messages.recent", payload)
             return
@@ -1436,6 +1443,7 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 event_id=event_id,
@@ -1444,6 +1452,7 @@ class BotRunner:
                 account=self.config.google_fi.account if self.config.google_fi else "default",
                 source="frontend_log",
                 logged_at=logged_at,
+                sent_at=logged_at,
             )
             self._append_sorted_recent_message("google_fi.messages.recent", payload)
 
@@ -1470,7 +1479,7 @@ class BotRunner:
             return None
         if not isinstance(payload, dict):
             return None
-        timestamp = payload.get("logged_at") or payload.get("collected_at")
+        timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
         if not isinstance(timestamp, str):
             return None
         try:
@@ -1623,23 +1632,27 @@ class BotRunner:
         backend: str,
         direction: str,
         conversation_id: str,
+        conversation_name: str | None = None,
         sender_id: str,
         text: str,
         sender_name: str | None = None,
         sender_contact: str | None = None,
         logged_at: str | None = None,
+        sent_at: str | None = None,
     ) -> None:
         history_file = f"logs/{backend}.history"
         payload = self._build_frontend_record(
             backend=backend,
             direction=direction,
             conversation_id=conversation_id,
+            conversation_name=conversation_name,
             sender_id=sender_id,
             text=text,
             sender_name=sender_name,
             sender_contact=sender_contact,
             source="frontend_log",
             logged_at=logged_at or datetime.now(timezone.utc).isoformat(),
+            sent_at=sent_at,
         )
         self._workspace.append_text(history_file, json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -1649,6 +1662,7 @@ class BotRunner:
         backend: str,
         direction: str,
         conversation_id: str,
+        conversation_name: str | None = None,
         sender_id: str,
         text: str,
         event_id: str | None = None,
@@ -1658,10 +1672,12 @@ class BotRunner:
         source: str = "frontend_log",
         logged_at: str | None = None,
         collected_at: str | None = None,
+        sent_at: str | None = None,
     ) -> dict[str, str | None]:
         logged_timestamp = logged_at or datetime.now(timezone.utc).isoformat()
         collected_timestamp = collected_at or datetime.now(timezone.utc).isoformat()
         payload = {
+            "sent_at": sent_at,
             "logged_at": logged_timestamp,
             "collected_at": collected_timestamp,
             "source": source,
@@ -1669,6 +1685,7 @@ class BotRunner:
             "account": account or "default",
             "direction": direction,
             "conversation_id": conversation_id,
+            "conversation_name": conversation_name,
             "sender_id": sender_id,
             "event_id": event_id,
             "sender_name": sender_name,
@@ -1778,6 +1795,7 @@ class BotRunner:
         update_id = getattr(update, "update_id", None)
         event_id = str(update_id) if update_id is not None else None
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
+        conversation_name = getattr(update, "conversation_name", None)
         sender_id = getattr(update, "sender_id", conversation_id)
         sender_name = getattr(update, "sender_name", None)
         sender_contact = getattr(update, "sender_contact", None)
@@ -1796,11 +1814,13 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=message_text,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
                 logged_at=sent_at,
+                sent_at=sent_at,
             )
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
                 if not self._should_append_unanswered_message(
@@ -1811,6 +1831,7 @@ class BotRunner:
                     backend=backend,
                     direction="incoming",
                     conversation_id=conversation_id,
+                    conversation_name=conversation_name,
                     sender_id=sender_id,
                     text=message_text,
                     event_id=event_id,
@@ -1819,6 +1840,7 @@ class BotRunner:
                     account=self.config.google_fi.account if self.config.google_fi else "default",
                     source="frontend_log",
                     logged_at=sent_at,
+                    sent_at=sent_at,
                 )
                 self._workspace.append_text("google_fi.calls.recent", json.dumps(payload, ensure_ascii=False) + "\n")
                 return
@@ -1826,6 +1848,7 @@ class BotRunner:
                 self._append_unanswered_collector_log(
                     backend=backend,
                     conversation_id=conversation_id,
+                    conversation_name=conversation_name,
                     sender_id=sender_id,
                     text=message_text,
                     sender_name=sender_name,
@@ -1833,11 +1856,21 @@ class BotRunner:
                     logged_at=sent_at,
                 )
                 return
-            was_handled = self._handle_message(backend, conversation_id, sender_id, message_text, sender_name, sender_contact)
+            was_handled = self._handle_message(
+                backend,
+                conversation_id,
+                sender_id,
+                message_text,
+                sender_name,
+                sender_contact,
+                conversation_name=conversation_name,
+                sent_at=sent_at,
+            )
             if backend == "google_fi" and not was_handled:
                 self._append_unanswered_collector_log(
                     backend=backend,
                     conversation_id=conversation_id,
+                    conversation_name=conversation_name,
                     sender_id=sender_id,
                     text=message_text,
                     sender_name=sender_name,
@@ -1853,13 +1886,24 @@ class BotRunner:
                 backend=backend,
                 direction="incoming",
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=attachment_context,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
                 logged_at=sent_at,
+                sent_at=sent_at,
             )
-            self._handle_message(backend, conversation_id, sender_id, attachment_context, sender_name, sender_contact)
+            self._handle_message(
+                backend,
+                conversation_id,
+                sender_id,
+                attachment_context,
+                sender_name,
+                sender_contact,
+                conversation_name=conversation_name,
+                sent_at=sent_at,
+            )
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
@@ -1924,7 +1968,7 @@ class BotRunner:
             return group_part.rsplit(WhatsAppClient.GROUP_ID_DELIMITER, 1)[-1]
         return group_part
 
-    def _handle_message(self, *args: Any) -> bool:
+    def _handle_message(self, *args: Any, conversation_name: str | None = None, sent_at: str | None = None) -> bool:
         sender_name: str | None = None
         sender_contact: str | None = None
         if len(args) == 2:
@@ -1953,10 +1997,12 @@ class BotRunner:
             self._append_unanswered_collector_log(
                 backend=backend,
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
+                logged_at=sent_at,
             )
             return False
 
@@ -1964,10 +2010,12 @@ class BotRunner:
             self._append_unanswered_collector_log(
                 backend=backend,
                 conversation_id=conversation_id,
+                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
+                logged_at=sent_at,
             )
             return False
 

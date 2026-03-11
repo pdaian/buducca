@@ -17,7 +17,7 @@ class FakeHttp:
                     {
                         "update_id": 2,
                         "message": {
-                            "chat": {"id": -1001},
+                            "chat": {"id": -1001, "title": "Release Channel"},
                             "sender_chat": {"id": -1001, "title": "Announcements", "username": "announcements"},
                             "text": "posted as channel",
                         },
@@ -68,6 +68,7 @@ class TelegramClientTests(unittest.TestCase):
         self.assertEqual(updates[1].sender_id, "-1001")
         self.assertEqual(updates[1].sender_name, "Announcements")
         self.assertEqual(updates[1].sender_contact, "Announcements (@announcements)")
+        self.assertEqual(updates[1].conversation_name, "Release Channel")
 
     def test_send_file_uses_multipart_upload(self) -> None:
         class MultipartHttp(FakeHttp):

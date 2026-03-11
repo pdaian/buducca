@@ -107,6 +107,7 @@ class TelegramUserClient:
             chat_id = int(getattr(entity, "id", 0) or 0)
             if not chat_id:
                 continue
+            conversation_name = self._extract_sender_name(entity)
             min_id = self._last_message_ids.get(chat_id, 0)
             max_id = min_id
             async for message in client.iter_messages(entity, limit=self.message_limit, min_id=min_id, reverse=True):
@@ -128,6 +129,7 @@ class TelegramUserClient:
                         update_id=(chat_id * 1_000_000_000) + int(message.id),
                         backend="telegram",
                         conversation_id=str(chat_id),
+                        conversation_name=conversation_name,
                         sender_id=str(sender_id),
                         chat_id=chat_id,
                         text=text,

@@ -39,11 +39,13 @@ class TelegramClient:
             sender_name = self._extract_sender_name(effective_sender)
             sender_contact = self._extract_sender_contact(effective_sender, sender_name)
             sender_id = effective_sender.get("id") if isinstance(effective_sender, dict) else None
+            conversation_name = self._extract_chat_name(chat)
             messages.append(
                 IncomingMessage(
                     update_id=update["update_id"],
                     backend="telegram",
                     conversation_id=str(chat["id"]),
+                    conversation_name=conversation_name,
                     sender_id=str(sender_id if sender_id is not None else chat["id"]),
                     chat_id=int(chat["id"]),
                     text=text,
@@ -141,6 +143,21 @@ class TelegramClient:
                 return f"{sender_name} <id:{sender_id}>"
             return f"id:{sender_id}"
         return sender_name
+
+    @staticmethod
+    def _extract_chat_name(chat: Any) -> str | None:
+        if not isinstance(chat, dict):
+            return None
+        title = str(chat.get("title") or "").strip()
+        if title:
+            return title
+        first_name = str(chat.get("first_name") or "").strip()
+        last_name = str(chat.get("last_name") or "").strip()
+        full_name = " ".join(part for part in (first_name, last_name) if part)
+        if full_name:
+            return full_name
+        username = str(chat.get("username") or "").strip()
+        return username or None
 
     def get_file_path(self, file_id: str) -> str:
         data = self.http_client.post_json(f"{self.base_url}/getFile", {"file_id": file_id})

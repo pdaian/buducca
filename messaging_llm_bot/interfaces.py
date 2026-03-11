@@ -17,6 +17,7 @@ class IncomingMessage:
     update_id: int
     backend: str = "telegram"
     conversation_id: str = ""
+    conversation_name: str | None = None
     sender_id: str = ""
     chat_id: int | None = None
     text: str | None = None
