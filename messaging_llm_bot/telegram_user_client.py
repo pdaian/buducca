@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 from datetime import timezone
 from pathlib import Path
@@ -10,6 +11,8 @@ from .interfaces import IncomingAttachment, IncomingMessage
 
 
 class TelegramUserClient:
+    _MAX_FLOOD_WAIT_RETRIES = 3
+
     def __init__(self, api_id: int, api_hash: str, session_path: str, dialog_limit: int = 50, message_limit: int = 20) -> None:
         if not api_id or not api_hash:
             raise ValueError("telegram user mode requires api_id and api_hash")
@@ -185,16 +188,48 @@ class TelegramUserClient:
         _ = timeout_seconds
         return self._run(self._get_updates_async())
 
+    async def _run_with_flood_wait_retry(self, operation_name: str, chat_id: int, callback) -> None:
+        try:
+            from telethon.errors.rpcerrorlist import FloodWaitError
+        except ImportError:
+            await callback()
+            return
+
+        for attempt in range(1, self._MAX_FLOOD_WAIT_RETRIES + 1):
+            try:
+                await callback()
+                return
+            except FloodWaitError as exc:
+                wait_seconds = max(int(getattr(exc, "seconds", 0) or 0), 1)
+                logging.warning(
+                    "Telegram %s hit flood wait for chat_id=%s; sleeping %ss before retry %s/%s",
+                    operation_name,
+                    chat_id,
+                    wait_seconds,
+                    attempt,
+                    self._MAX_FLOOD_WAIT_RETRIES,
+                )
+                await asyncio.sleep(wait_seconds)
+        await callback()
+
     async def _send_message_async(self, chat_id: int, text: str) -> None:
         client = await self._get_connected_client()
-        await client.send_message(chat_id, text)
+        await self._run_with_flood_wait_retry(
+            "send_message",
+            chat_id,
+            lambda: client.send_message(chat_id, text),
+        )
 
     def send_message(self, chat_id: int, text: str) -> None:
         self._run(self._send_message_async(chat_id, text))
 
     async def _send_file_async(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
         client = await self._get_connected_client()
-        await client.send_file(chat_id, file_path, caption=caption or None)
+        await self._run_with_flood_wait_retry(
+            "send_file",
+            chat_id,
+            lambda: client.send_file(chat_id, file_path, caption=caption or None),
+        )
 
     def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
         self._run(self._send_file_async(chat_id, file_path, caption))
