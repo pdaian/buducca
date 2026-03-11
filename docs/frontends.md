@@ -9,6 +9,12 @@ Set `telegram.mode` in `config.json`:
 - `"bot"` for bot-token mode.
 - `"user"` for full-account mode via Telethon session.
 
+User-mode note:
+
+- If Telegram user mode feels slow, the main cost is usually chat/message scanning and reconnect churn, not MTProto itself.
+- This repo keeps a persistent Telethon session now to reduce that overhead.
+- If you need even lower latency or heavier full-account workloads, TDLib is the usual next step. Pyrogram is also viable, but it is still an MTProto wrapper in the same general class as Telethon.
+
 ## Signal
 
 Configure `signal` in `config.json` and point BUDUCCA to your `signal-cli` setup.

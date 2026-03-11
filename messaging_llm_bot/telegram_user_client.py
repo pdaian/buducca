@@ -19,6 +19,9 @@ class TelegramUserClient:
         self.dialog_limit = dialog_limit
         self.message_limit = message_limit
         self._last_message_ids = self._load_state()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._client: object | None = None
+        self._entity_cache: dict[int, object] = {}
 
     def _state_path(self) -> Path:
         session = Path(self.session_path)
@@ -61,67 +64,96 @@ class TelegramUserClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         return TelegramClient(str(path), self.api_id, self.api_hash)
 
-    async def _get_updates_async(self) -> list[IncomingMessage]:
-        client = self._ensure_client()
-        async with client:
-            if not await client.is_user_authorized():
-                raise RuntimeError(
-                    "Telegram user session is not authorized. Run an initial Telethon login for this session file first."
-                )
+    def _run(self, awaitable):
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop.run_until_complete(awaitable)
 
-            updates: list[IncomingMessage] = []
-            state_changed = False
-            async for dialog in client.iter_dialogs(limit=self.dialog_limit):
-                entity = dialog.entity
-                chat_id = int(getattr(entity, "id", 0) or 0)
-                if not chat_id:
-                    continue
-                min_id = self._last_message_ids.get(chat_id, 0)
-                max_id = min_id
-                async for message in client.iter_messages(entity, limit=self.message_limit, min_id=min_id, reverse=True):
-                    max_id = max(max_id, int(getattr(message, "id", 0) or 0))
-                    text = str(getattr(message, "message", "") or "").strip()
-                    attachments = await self._extract_attachments(message)
-                    if not text and not attachments:
-                        continue
-                    sender = await message.get_sender()
-                    sender_entity = await self._resolve_sender_entity(client, message, sender, entity)
-                    sender_id = int(getattr(sender_entity, "id", getattr(message, "sender_id", chat_id)) or chat_id)
-                    sender_name = self._extract_sender_name(sender_entity)
-                    sender_contact = self._extract_sender_contact(sender_entity, sender_name)
-                    sent_at = getattr(message, "date", None)
-                    updates.append(
-                        IncomingMessage(
-                            update_id=(chat_id * 1_000_000_000) + int(message.id),
-                            backend="telegram",
-                            conversation_id=str(chat_id),
-                            sender_id=str(sender_id),
-                            chat_id=chat_id,
-                            text=text,
-                            sender_name=sender_name,
-                            sender_contact=sender_contact,
-                            sent_at=sent_at.astimezone(timezone.utc).isoformat() if sent_at else None,
-                            attachments=attachments,
-                        )
-                    )
-                if max_id > min_id:
-                    self._last_message_ids[chat_id] = max_id
-                    state_changed = True
-
-            if state_changed:
-                self._save_state()
-
-            updates.sort(key=lambda item: item.update_id)
-            return updates
+    async def _get_connected_client(self):
+        if self._client is None:
+            self._client = self._ensure_client()
+        client = self._client
+        is_connected = getattr(client, "is_connected", None)
+        connected = bool(is_connected()) if callable(is_connected) else False
+        if not connected:
+            await client.connect()
+        if not await client.is_user_authorized():
+            raise RuntimeError(
+                "Telegram user session is not authorized. Run an initial Telethon login for this session file first."
+            )
+        return client
 
     @staticmethod
-    async def _resolve_sender_entity(client: object, message: object, sender: object, dialog_entity: object) -> object:
+    def _entity_cache_key(entity: object) -> int | None:
+        candidate = getattr(entity, "id", entity)
+        try:
+            return int(candidate)
+        except (TypeError, ValueError):
+            return None
+
+    def _cache_entity(self, entity: object) -> object:
+        cache_key = self._entity_cache_key(entity)
+        if cache_key is not None:
+            self._entity_cache[cache_key] = entity
+        return entity
+
+    async def _get_updates_async(self) -> list[IncomingMessage]:
+        client = await self._get_connected_client()
+        updates: list[IncomingMessage] = []
+        state_changed = False
+        async for dialog in client.iter_dialogs(limit=self.dialog_limit):
+            entity = self._cache_entity(dialog.entity)
+            chat_id = int(getattr(entity, "id", 0) or 0)
+            if not chat_id:
+                continue
+            min_id = self._last_message_ids.get(chat_id, 0)
+            max_id = min_id
+            async for message in client.iter_messages(entity, limit=self.message_limit, min_id=min_id, reverse=True):
+                max_id = max(max_id, int(getattr(message, "id", 0) or 0))
+                text = str(getattr(message, "message", "") or "").strip()
+                attachments = await self._extract_attachments(message)
+                if not text and not attachments:
+                    continue
+                sender = getattr(message, "sender", None)
+                if sender is None:
+                    sender = await message.get_sender()
+                sender_entity = await self._resolve_sender_entity(client, message, sender, entity)
+                sender_id = int(getattr(sender_entity, "id", getattr(message, "sender_id", chat_id)) or chat_id)
+                sender_name = self._extract_sender_name(sender_entity)
+                sender_contact = self._extract_sender_contact(sender_entity, sender_name)
+                sent_at = getattr(message, "date", None)
+                updates.append(
+                    IncomingMessage(
+                        update_id=(chat_id * 1_000_000_000) + int(message.id),
+                        backend="telegram",
+                        conversation_id=str(chat_id),
+                        sender_id=str(sender_id),
+                        chat_id=chat_id,
+                        text=text,
+                        sender_name=sender_name,
+                        sender_contact=sender_contact,
+                        sent_at=sent_at.astimezone(timezone.utc).isoformat() if sent_at else None,
+                        attachments=attachments,
+                    )
+                )
+            if max_id > min_id:
+                self._last_message_ids[chat_id] = max_id
+                state_changed = True
+
+        if state_changed:
+            self._save_state()
+
+        updates.sort(key=lambda item: item.update_id)
+        return updates
+
+    async def _resolve_sender_entity(self, client: object, message: object, sender: object, dialog_entity: object) -> object:
         if sender is not None:
-            return sender
+            return self._cache_entity(sender)
         for attr_name in ("sender", "chat"):
             candidate = getattr(message, attr_name, None)
             if candidate is not None:
-                return candidate
+                return self._cache_entity(candidate)
         for candidate in (
             getattr(message, "sender_id", None),
             getattr(message, "from_id", None),
@@ -130,6 +162,9 @@ class TelegramUserClient:
         ):
             if candidate is None:
                 continue
+            cache_key = self._entity_cache_key(candidate)
+            if cache_key is not None and cache_key in self._entity_cache:
+                return self._entity_cache[cache_key]
             get_entity = getattr(client, "get_entity", None)
             if callable(get_entity):
                 try:
@@ -137,31 +172,46 @@ class TelegramUserClient:
                 except Exception:
                     resolved = None
                 if resolved is not None:
-                    return resolved
+                    return self._cache_entity(resolved)
             if candidate is not dialog_entity:
-                return candidate
-        return dialog_entity
+                return self._cache_entity(candidate)
+        return self._cache_entity(dialog_entity)
 
     def get_updates(self, offset: int | None = None, timeout_seconds: int = 30) -> list[IncomingMessage]:
         _ = offset
         _ = timeout_seconds
-        return asyncio.run(self._get_updates_async())
+        return self._run(self._get_updates_async())
 
     async def _send_message_async(self, chat_id: int, text: str) -> None:
-        client = self._ensure_client()
-        async with client:
-            await client.send_message(chat_id, text)
+        client = await self._get_connected_client()
+        await client.send_message(chat_id, text)
 
     def send_message(self, chat_id: int, text: str) -> None:
-        asyncio.run(self._send_message_async(chat_id, text))
+        self._run(self._send_message_async(chat_id, text))
 
     async def _send_file_async(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
-        client = self._ensure_client()
-        async with client:
-            await client.send_file(chat_id, file_path, caption=caption or None)
+        client = await self._get_connected_client()
+        await client.send_file(chat_id, file_path, caption=caption or None)
 
     def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
-        asyncio.run(self._send_file_async(chat_id, file_path, caption))
+        self._run(self._send_file_async(chat_id, file_path, caption))
+
+    def close(self) -> None:
+        client = self._client
+        if client is not None and self._loop is not None and not self._loop.is_closed():
+            disconnect = getattr(client, "disconnect", None)
+            if callable(disconnect):
+                try:
+                    self._loop.run_until_complete(disconnect())
+                except Exception:
+                    pass
+        self._client = None
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.close()
+        self._loop = None
+
+    def __del__(self) -> None:
+        self.close()
 
     def send_typing_action(self, chat_id: int) -> None:
         _ = chat_id

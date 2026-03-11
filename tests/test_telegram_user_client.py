@@ -12,6 +12,8 @@ class _FakeClient:
     def __init__(self, authorized: bool) -> None:
         self.authorized = authorized
         self.connected = False
+        self.connect_calls = 0
+        self.disconnect_calls = 0
         self.dialog_calls = 0
 
     async def __aenter__(self):
@@ -22,9 +24,17 @@ class _FakeClient:
 
     async def connect(self):
         self.connected = True
+        self.connect_calls += 1
+
+    async def disconnect(self):
+        self.connected = False
+        self.disconnect_calls += 1
 
     async def is_user_authorized(self):
         return self.authorized
+
+    def is_connected(self):
+        return self.connected
 
     async def iter_dialogs(self, limit=50):
         self.dialog_calls += 1
@@ -297,6 +307,27 @@ class TelegramUserClientTests(unittest.TestCase):
             self.assertEqual(updates[0].sender_id, "7")
             self.assertEqual(updates[0].sender_name, "Alice")
             self.assertEqual(updates[0].sender_contact, "Alice (@alice)")
+
+    def test_bot_client_reuses_connected_client_between_polls(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42})()})()
+            fake_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={
+                    42: [_FakeMessage(5, "hello", sender), _FakeMessage(6, "again", sender)],
+                },
+            )
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            first_updates = client.get_updates()
+            second_updates = client.get_updates()
+
+            self.assertEqual([update.text for update in first_updates], ["hello", "again"])
+            self.assertEqual(second_updates, [])
+            self.assertEqual(fake_client.connect_calls, 1)
 
 
 if __name__ == "__main__":
