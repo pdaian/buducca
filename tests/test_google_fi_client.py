@@ -441,6 +441,46 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(parsed, "2026-03-11T10:07:00+00:00")
 
+    def test_parse_google_messages_timestamp_accepts_labeled_explicit_timestamp(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("Sent: Mar 10, 2026, 1:23 PM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-10T13:23:00+00:00")
+
+    def test_parse_google_messages_timestamp_accepts_labeled_relative_timestamp(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("Received at Today 10:07 AM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-11T10:07:00+00:00")
+
+    def test_parse_google_messages_timestamp_logs_filterable_timestamp_debug(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+        with self.assertLogs("messaging_llm_bot.google_fi_client", level="DEBUG") as logs:
+            parsed = _parse_google_messages_timestamp("Received at Today 10:07 AM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-11T10:07:00+00:00")
+        self.assertTrue(any("timestamp_debug" in line for line in logs.output))
+        self.assertTrue(any("stage='parse_google_messages_timestamp'" in line for line in logs.output))
+        self.assertTrue(any("parsed='2026-03-11T10:07:00+00:00'" in line for line in logs.output))
+
+    def test_extract_sent_at_logs_filterable_timestamp_debug_for_unparseable_candidate(self) -> None:
+        with self.assertLogs("messaging_llm_bot.google_fi_client", level="DEBUG") as logs:
+            parsed = GoogleFiClient._extract_sent_at({"timestamp": "not-a-timestamp"})
+
+        self.assertIsNone(parsed)
+        self.assertTrue(any("timestamp_debug" in line for line in logs.output))
+        self.assertTrue(any("stage='extract_sent_at'" in line for line in logs.output))
+        self.assertTrue(any("cleaned='not-a-timestamp'" in line for line in logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()
