@@ -1382,7 +1382,7 @@ class BotRunner:
                 source="frontend_log",
                 logged_at=logged_at,
             )
-            self._workspace.append_text("telegram.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            self._append_sorted_recent_message("telegram.recent", payload)
             return
 
         if backend == "signal":
@@ -1403,7 +1403,7 @@ class BotRunner:
                 source="frontend_log",
                 logged_at=logged_at,
             )
-            self._workspace.append_text("signal.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            self._append_sorted_recent_message("signal.messages.recent", payload)
             return
 
         if backend == "whatsapp":
@@ -1424,7 +1424,7 @@ class BotRunner:
                 source="frontend_log",
                 logged_at=logged_at,
             )
-            self._workspace.append_text("whatsapp.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            self._append_sorted_recent_message("whatsapp.messages.recent", payload)
             return
 
         if backend == "google_fi":
@@ -1445,7 +1445,41 @@ class BotRunner:
                 source="frontend_log",
                 logged_at=logged_at,
             )
-            self._workspace.append_text("google_fi.messages.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+            self._append_sorted_recent_message("google_fi.messages.recent", payload)
+
+    def _append_sorted_recent_message(self, file_path: str, payload: dict[str, Any]) -> None:
+        entries: list[tuple[datetime | None, int, str]] = []
+        existing = self._workspace.read_text(file_path, default="")
+        for index, line in enumerate(existing.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            sort_key = self._recent_message_sort_key(line)
+            entries.append((sort_key, index, line))
+
+        payload_line = json.dumps(payload, ensure_ascii=False)
+        entries.append((self._recent_message_sort_key(payload_line), len(entries), payload_line))
+        entries.sort(key=lambda item: (item[0] is None, item[0] or datetime.max.replace(tzinfo=timezone.utc), item[1]))
+        self._workspace.write_text(file_path, "\n".join(line for _, _, line in entries) + "\n")
+
+    @staticmethod
+    def _recent_message_sort_key(line: str) -> datetime | None:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        timestamp = payload.get("logged_at") or payload.get("collected_at")
+        if not isinstance(timestamp, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _load_unanswered_recent_keys(self) -> None:
         for file_path in self._recent_unanswered_keys:

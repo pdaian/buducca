@@ -2071,6 +2071,49 @@ class BotTests(unittest.TestCase):
             self.assertEqual(json.loads(history_line)["logged_at"], "2026-03-10T13:23:00+00:00")
             self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
 
+    def test_google_fi_unanswered_messages_are_sorted_by_logged_at(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                    allowed_sender_ids=["+15550000000"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=2,
+                    backend="google_fi",
+                    conversation_id="thread-1",
+                    sender_id="+15553334444",
+                    text="newer message",
+                    sent_at="2026-03-10T13:24:00+00:00",
+                )
+            )
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="google_fi",
+                    conversation_id="thread-1",
+                    sender_id="+15553334444",
+                    text="older message",
+                    sent_at="2026-03-10T13:23:00+00:00",
+                )
+            )
+
+            recent_lines = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines()
+            recent = [json.loads(line) for line in recent_lines if line.strip()]
+
+            self.assertEqual([item["text"] for item in recent], ["older message", "newer message"])
+            self.assertEqual(
+                [item["logged_at"] for item in recent],
+                ["2026-03-10T13:23:00+00:00", "2026-03-10T13:24:00+00:00"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
