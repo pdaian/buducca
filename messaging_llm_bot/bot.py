@@ -2057,7 +2057,7 @@ class BotRunner:
                 conversation_name=conversation_name,
                 sent_at=sent_at,
             )
-            if backend == "google_fi" and not was_handled:
+            if not was_handled:
                 self._append_unanswered_collector_log(
                     backend=backend,
                     conversation_id=conversation_id,

@@ -2266,6 +2266,35 @@ class BotTests(unittest.TestCase):
             recent = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8")
             self.assertIn("request that times out", recent)
 
+    def test_signal_timeout_is_stored_as_unprocessed_message(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                signal=SignalConfig(
+                    account="+15550000000",
+                    allowed_sender_ids=["+15551112222"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.signal = object()
+            bot._send_message = lambda backend, conversation_id, text: None
+            bot.llm = TimeoutLLM()
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="signal",
+                    conversation_id="+15551112222",
+                    sender_id="+15551112222",
+                    text="request that times out",
+                )
+            )
+
+            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
+            self.assertIn("request that times out", recent)
+
     def test_google_fi_uses_sent_at_for_logged_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
