@@ -1463,15 +1463,15 @@ class BotRunner:
                 text = payload.get("text")
                 conversation_id = payload.get("conversation_id")
                 sender_id = payload.get("sender_id")
-                event_id = payload.get("event_id")
+                event_id = self._coerce_event_id(payload.get("event_id"))
                 if not isinstance(sender_id, str):
                     sender_id = payload.get("sender")
-                if not isinstance(event_id, str):
-                    event_id = payload.get("update_id")
+                if event_id is None:
+                    event_id = self._coerce_event_id(payload.get("update_id"))
                 if not isinstance(text, str) or not isinstance(conversation_id, str) or not isinstance(sender_id, str):
                     continue
                 self._recent_unanswered_keys[file_path].add(
-                    self._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id if isinstance(event_id, str) else None)
+                    self._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id)
                 )
 
     @staticmethod
@@ -1479,6 +1479,16 @@ class BotRunner:
         if event_id:
             return f"event:{event_id}"
         return f"{conversation_id}\n{sender_id}\n{text}"
+
+    @staticmethod
+    def _coerce_event_id(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int):
+            return str(value)
+        return None
 
     def _should_append_unanswered_message(
         self, file_path: str, conversation_id: str, sender_id: str, text: str, *, event_id: str | None = None

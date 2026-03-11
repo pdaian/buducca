@@ -1939,6 +1939,53 @@ class BotTests(unittest.TestCase):
             ]
             self.assertEqual(len(recent_lines), 1)
 
+    def test_google_fi_call_events_are_deduplicated_after_restart_with_numeric_event_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            call_log = Path(td) / "google_fi.calls.recent"
+            call_log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": "2026-03-10T13:23:00+00:00",
+                        "collected_at": "2026-03-10T13:23:00+00:00",
+                        "source": "frontend_log",
+                        "backend": "google_fi",
+                        "account": "default",
+                        "direction": "incoming",
+                        "conversation_id": "thread-1",
+                        "sender_id": "+15553334444",
+                        "event_id": 1,
+                        "sender_name": None,
+                        "sender_contact": "+15553334444",
+                        "text": "[Call event] ringing",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            update = IncomingMessage(
+                update_id=1,
+                backend="google_fi",
+                conversation_id="thread-1",
+                sender_id="+15553334444",
+                text="[Call event] ringing",
+            )
+            setattr(update, "event_type", "call")
+            bot._handle_update(update)
+
+            recent_lines = [line for line in call_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(recent_lines), 1)
+
     def test_google_fi_timeout_is_stored_as_unprocessed_message(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
