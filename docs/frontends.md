@@ -23,6 +23,14 @@ python3 -m messaging_llm_bot.signal_signup --config config.json
 
 Configure `whatsapp` in `config.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
 
+One-time signup/help command:
+
+```bash
+python3 -m messaging_llm_bot.whatsapp_signup --config config.json
+```
+
+WhatsApp linking is handled by the external bridge behind those commands, not by BUDUCCA itself. Start that bridge in QR/pairing mode, then scan the QR from your phone in WhatsApp under `Settings -> Linked Devices -> Link a Device`.
+
 ## Common behavior flags
 
 Per frontend (`telegram`, `signal`, `whatsapp`):
