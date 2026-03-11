@@ -27,7 +27,7 @@ python3 -m messaging_llm_bot.signal_signup --config config
 
 ## WhatsApp
 
-Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. By default, call `python3 -m messaging_llm_bot.whatsapp_client receive` and `python3 -m messaging_llm_bot.whatsapp_client send` so no extra PATH executables are required.
+Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. The example config now points at the in-repo bridge: `node messaging_llm_bot/whatsapp_bridge.js`.
 
 Backend flow:
 
@@ -35,7 +35,7 @@ Backend flow:
 - On each poll, `WhatsAppClient.get_updates()` runs `receive_command` as a subprocess and expects JSON on stdout.
 - The JSON is normalized into internal `IncomingMessage` objects, then processed by the same bot pipeline used by the other frontends.
 - When the bot replies, `WhatsAppClient.send_message()` runs `send_command` with `{recipient}` and `{message}` replaced.
-- BUDUCCA does not talk to Meta/WhatsApp directly. The actual network session, QR login, and linked-device state live in the external bridge behind those commands.
+- The concrete bridge in this repo uses `whatsapp-web.js`, persists linked-device state under your configured `--session` path, and prints the signup QR in the terminal during pairing.
 
 One-time signup/help command:
 
@@ -43,14 +43,15 @@ One-time signup/help command:
 python3 -m messaging_llm_bot.whatsapp_signup --config config
 ```
 
-There is no separate BUDUCCA-side WhatsApp signup API. The real setup is:
+Repo setup:
 
 ```bash
 cp -R config.example config
+npm install
 python3 -m messaging_llm_bot.whatsapp_signup --config config
 ```
 
-Then replace the default stub commands in `config/whatsapp.json` with your actual bridge commands. Example shape:
+Default config shape:
 
 ```json
 {
@@ -59,48 +60,53 @@ Then replace the default stub commands in `config/whatsapp.json` with your actua
   "allowed_sender_ids": [],
   "allowed_group_ids_when_sender_not_allowed": [],
   "receive_command": [
-    "python3",
-    "/opt/whatsapp-bridge/bridge.py",
+    "node",
+    "messaging_llm_bot/whatsapp_bridge.js",
     "receive",
     "--session",
     "data/whatsapp-personal"
   ],
   "send_command": [
-    "python3",
-    "/opt/whatsapp-bridge/bridge.py",
+    "node",
+    "messaging_llm_bot/whatsapp_bridge.js",
     "send",
     "--session",
     "data/whatsapp-personal",
     "--recipient",
     "{recipient}",
     "--message",
-    "{message}"
+    "{message}",
+    "--attachment",
+    "{attachment}"
   ]
 }
 ```
 
-Typical bridge signup sequence:
+Signup sequence:
 
 ```bash
-python3 /opt/whatsapp-bridge/bridge.py pair --session data/whatsapp-personal
-python3 /opt/whatsapp-bridge/bridge.py receive --session data/whatsapp-personal
+node messaging_llm_bot/whatsapp_bridge.js pair --session data/whatsapp-personal
 ```
 
-During `pair`, scan the QR from WhatsApp on your phone:
+During `pair`, the terminal prints a QR. Scan it from WhatsApp on your phone:
 
 ```text
 WhatsApp -> Settings -> Linked Devices -> Link a Device
 ```
 
-After pairing, test the bridge commands directly before starting the bot:
+After pairing, test the same commands BUDUCCA will use:
 
 ```bash
-python3 /opt/whatsapp-bridge/bridge.py receive --session data/whatsapp-personal
-python3 /opt/whatsapp-bridge/bridge.py send --session data/whatsapp-personal --recipient "group:Family|g1" --message "test"
+node messaging_llm_bot/whatsapp_bridge.js receive --session data/whatsapp-personal
+node messaging_llm_bot/whatsapp_bridge.js send --session data/whatsapp-personal --recipient "+15550001111" --message "test"
 python3 run_bot.py --config config
 ```
 
-If you keep the built-in default commands, WhatsApp will stay in stub mode and will not connect to a real account.
+Recipient notes:
+
+- Direct chats: pass either a phone number like `+15550001111` or a raw WhatsApp chat id like `15550001111@c.us`.
+- Groups: use the exact `conversation_id` BUDUCCA sees, which is emitted as `group:<name>|<chat-id>`.
+- The example config already includes `{attachment}`, so the attach-file skill works without extra command edits.
 
 ## Common behavior flags
 

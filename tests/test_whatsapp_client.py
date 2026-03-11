@@ -45,6 +45,22 @@ class WhatsAppClientTests(unittest.TestCase):
             check=False,
         )
 
+    def test_send_message_strips_attachment_placeholder_args(self) -> None:
+        with patch("messaging_llm_bot.whatsapp_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("messaging_llm_bot.whatsapp_client.which", return_value="/usr/bin/python3"):
+                client = WhatsAppClient(
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "--recipient", "{recipient}", "--message", "{message}", "--attachment", "{attachment}"],
+                )
+                client.send_message("group:Family|g1", "hi")
+        run.assert_called_once_with(
+            ["python3", "send.py", "--recipient", "group:Family|g1", "--message", "hi"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_missing_executable_raises_frontend_unavailable(self) -> None:
         client = WhatsAppClient(receive_command=["missingcmd", "recv.py"], send_command=["python3", "send.py"])
         with patch("messaging_llm_bot.whatsapp_client.which", return_value=None):

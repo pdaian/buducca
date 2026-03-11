@@ -4,24 +4,24 @@
   "allowed_sender_ids": [],
   "allowed_group_ids_when_sender_not_allowed": [],
   "receive_command": [
-    "python3",
-    "-m",
-    "messaging_llm_bot.whatsapp_client",
+    "node",
+    "messaging_llm_bot/whatsapp_bridge.js",
     "receive",
-    "--account",
-    "personal"
+    "--session",
+    "data/whatsapp-personal"
   ],
   "send_command": [
-    "python3",
-    "-m",
-    "messaging_llm_bot.whatsapp_client",
+    "node",
+    "messaging_llm_bot/whatsapp_bridge.js",
     "send",
-    "--account",
-    "personal",
+    "--session",
+    "data/whatsapp-personal",
     "--recipient",
     "{recipient}",
     "--message",
-    "{message}"
+    "{message}",
+    "--attachment",
+    "{attachment}"
   ],
   "read_only": false,
   "store_unanswered_messages": false

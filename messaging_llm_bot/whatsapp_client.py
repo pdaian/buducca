@@ -171,7 +171,7 @@ class WhatsAppClient:
 
     def send_message(self, recipient: str, text: str) -> None:
         self._validate_send_command()
-        command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
+        command = self._render_send_command(recipient=recipient, text=text)
         command = self._normalize_command_paths(command)
         missing_script = self._missing_python_script(command)
         if missing_script:
@@ -195,10 +195,7 @@ class WhatsAppClient:
             raise RuntimeError(f"WhatsApp attachment file not found: {file_path}")
         if all("{attachment}" not in part for part in self.send_command):
             raise RuntimeError("WhatsApp send_command must include a {attachment} placeholder for file sends.")
-        command = [
-            part.replace("{recipient}", recipient).replace("{message}", caption or "").replace("{attachment}", str(path))
-            for part in self.send_command
-        ]
+        command = self._render_send_command(recipient=recipient, text=caption or "", attachment=str(path))
         command = self._normalize_command_paths(command)
         missing_script = self._missing_python_script(command)
         if missing_script:
@@ -234,6 +231,20 @@ class WhatsAppClient:
                 )
             )
         return attachments
+
+    def _render_send_command(self, *, recipient: str, text: str, attachment: str | None = None) -> list[str]:
+        command: list[str] = []
+        for index, part in enumerate(self.send_command):
+            if "{attachment}" in part and attachment is None:
+                if index > 0 and self.send_command[index - 1].startswith("--"):
+                    if command and command[-1] == self.send_command[index - 1]:
+                        command.pop()
+                continue
+            rendered = part.replace("{recipient}", recipient).replace("{message}", text)
+            if attachment is not None:
+                rendered = rendered.replace("{attachment}", attachment)
+            command.append(rendered)
+        return command
 
 
 def _build_parser() -> argparse.ArgumentParser:
