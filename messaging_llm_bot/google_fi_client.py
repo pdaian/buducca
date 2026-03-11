@@ -531,6 +531,7 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                 "data-message-timestamp",
                 "data-timestamp",
                 "data-e2e-message-timestamp",
+                "datetime",
                 "aria-label",
                 "title",
               ];
@@ -622,8 +623,11 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                       inline_timestamp_text: findNearbyTimestampText(node),
                     });
                   }
-                } else if (hasTimestamps && node.matches && node.matches(timestampSelector) && text) {
-                  currentTimestamp = text;
+                } else if (hasTimestamps && node.matches && node.matches(timestampSelector)) {
+                  const timestampValue = readTimestampNode(node);
+                  if (timestampValue) {
+                    currentTimestamp = timestampValue;
+                  }
                 }
                 node = walker.nextNode();
               }
