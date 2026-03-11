@@ -4,6 +4,7 @@ from .workspace import Workspace
 from .skills import SkillManager
 from .collectors import CollectorManager, CollectorRunner, CollectorManifest
 from .compressors import CompressorManager, CompressorRunner
+from .memory import ensure_memory_layout
 
 __all__ = [
     "Workspace",
@@ -13,4 +14,5 @@ __all__ = [
     "CollectorManifest",
     "CompressorManager",
     "CompressorRunner",
+    "ensure_memory_layout",
 ]

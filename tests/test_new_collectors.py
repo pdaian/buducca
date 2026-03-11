@@ -41,6 +41,7 @@ class NewCollectorsTests(unittest.TestCase):
 
             self.assertIn('"post"', workspace.read_text("twitter.following.recent"))
             self.assertIn('"dm"', workspace.read_text("twitter.dms.recent"))
+            self.assertIn('"source": "twitter_following"', workspace.read_text("collected/normalized/twitter_recent.jsonl"))
 
     def test_google_calendar_creates_account_month_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -62,6 +63,7 @@ class NewCollectorsTests(unittest.TestCase):
             files = list(workspace.resolve("google_calendar").glob("*.events.jsonl"))
             self.assertEqual(len(files), 1)
             self.assertIn("Standup", files[0].read_text(encoding="utf-8"))
+            self.assertIn("Standup", workspace.read_text("collected/normalized/google_calendar.jsonl"))
 
     def test_gmail_supports_multiple_accounts(self) -> None:
         with tempfile.TemporaryDirectory() as td:

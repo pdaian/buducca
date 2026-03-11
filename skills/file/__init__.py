@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from assistant_framework.action_runtime import ActionEnvelope
 from assistant_framework.workspace import Workspace
 
 NAME = "file"
@@ -166,3 +167,22 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return str(exc)
 
     return "Unsupported action. Use one of: read, write, append, create_dir, delete_dir, move."
+
+
+def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
+    action_raw = args.get("action")
+    if action_raw is None:
+        action_raw = args.get("command", "read")
+    action = str(action_raw).strip().lower()
+    writes: list[str] = []
+    if action in {"write", "append", "move"}:
+        writes = _resolve_paths(args) or []
+    elif action in {"create_dir", "delete_dir"}:
+        writes = _normalize_list(args.get("directories")) or []
+    return ActionEnvelope(
+        name=f"file.{action}",
+        args=args,
+        reason=f"Run file skill action `{action}`.",
+        writes=writes,
+        requires_approval=action != "read",
+    )

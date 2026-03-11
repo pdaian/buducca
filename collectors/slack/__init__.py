@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from assistant_framework.collector_shell import run_command
+from assistant_framework.ingestion import append_normalized_records, normalize_collected_item, write_raw_snapshot
 from assistant_framework.workspace import Workspace
 
 NAME = "slack"
@@ -27,6 +28,7 @@ def register_collector(config: dict):
         account_state = state.setdefault("accounts", {})
         now = datetime.now(timezone.utc).isoformat()
         out = []
+        normalized_records = []
 
         for account in accounts:
             account_name = str(account.get("name") or "default")
@@ -40,6 +42,7 @@ def register_collector(config: dict):
                 continue
 
             payload = json.loads(stdout)
+            write_raw_snapshot(workspace, NAME, payload)
             messages = payload if isinstance(payload, list) else payload.get("messages", [])
             max_ts = last_ts
             for message in messages:
@@ -60,10 +63,20 @@ def register_collector(config: dict):
                         "text": message.get("text"),
                     }
                 )
+                normalized_records.append(
+                    normalize_collected_item(
+                        source="slack",
+                        timestamp=now,
+                        title=str(message.get("channel") or ts),
+                        text=str(message.get("text") or ""),
+                        metadata={"account": account_name, "channel": message.get("channel"), "user": message.get("user"), "ts": ts},
+                    )
+                )
             account_state[account_name] = {"last_ts": max_ts}
 
         if out:
             workspace.write_text(OUTPUT_FILE, "\n".join(json.dumps(i, ensure_ascii=False) for i in out) + "\n")
+        append_normalized_records(workspace, NAME, normalized_records)
         workspace.write_text(STATE_FILE, json.dumps(state))
 
     return {

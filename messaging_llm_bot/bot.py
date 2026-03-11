@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any, Deque
 
 from assistant_framework import CollectorManager, SkillManager, Workspace
+from assistant_framework.action_runtime import ActionEnvelope, append_action_audit, decide_action, load_action_policy
+from assistant_framework.memory import ensure_memory_layout, list_records, mark_routine_run, mark_task_notified
+from assistant_framework.retrieval import append_sources, format_evidence_context, search_workspace
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
+from assistant_framework.traces import write_trace
 
 from .config import BotConfig
 from .http import HttpClient, RequestTimeoutError
@@ -113,6 +117,7 @@ class BotRunner:
             lambda: deque(maxlen=self.config.llm.history_messages * 2)
         )
         self._workspace = Workspace(self.config.runtime.workspace_dir)
+        ensure_memory_layout(self._workspace)
         self._workspace.create_dir("logs")
         self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
         self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
@@ -134,6 +139,7 @@ class BotRunner:
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = SkillManager(self.config.runtime.skills_dir).load()
+        self._current_evidence = []
 
     @property
     def _debug_enabled(self) -> bool:
@@ -208,6 +214,7 @@ class BotRunner:
                 "Some skills may require an additional LLM response before replying to the user.",
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
                 "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
+                "When workspace evidence is provided, prefer it over memory guesses and cite the source paths you used.",
             ]
 
             if "file" in self._skills:
@@ -263,6 +270,7 @@ class BotRunner:
             time.sleep(poll_interval)
 
     def _poll_frontends_once(self) -> None:
+        self._poll_due_structured_schedule_once()
         self._poll_due_reminders_once()
         self._poll_due_hourly_once()
 
@@ -351,6 +359,7 @@ class BotRunner:
         sender_name: str | None = None,
         sender_contact: str | None = None,
     ) -> list[dict[str, str]]:
+        self._current_evidence = search_workspace(self._workspace, text)
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[conversation_key])
 
@@ -377,8 +386,76 @@ class BotRunner:
                 f"- sender: {sender_identity}"
             )
 
-        messages.append({"role": "user", "content": f"{sender_context}\n\n{text}"})
+        user_content = f"{sender_context}\n\n{text}"
+        evidence_context = format_evidence_context(self._current_evidence)
+        if evidence_context:
+            user_content = f"{user_content}\n\n{evidence_context}"
+        messages.append({"role": "user", "content": user_content})
         return messages
+
+    def _poll_due_structured_schedule_once(self) -> None:
+        now = datetime.now(timezone.utc)
+        for record in list_records(self._workspace, "tasks"):
+            if str(record.get("status", "open")).strip().lower() != "open":
+                continue
+            due_at = str(record.get("remind_at") or record.get("due_at") or "").strip()
+            if not due_at or record.get("last_notified_at"):
+                continue
+            try:
+                due_time = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if due_time > now:
+                continue
+            target = self._task_notify_target(record)
+            if not target:
+                continue
+            backend, conversation_id = target
+            lines = [
+                "[Scheduled task]",
+                f"- task_id: {record.get('id', '')}",
+                f"- kind: {record.get('kind', 'task')}",
+                f"- title: {record.get('title', '')}",
+            ]
+            if record.get("details"):
+                lines.extend(["", str(record["details"])])
+            self._send_message(backend, conversation_id, "\n".join(lines))
+            mark_task_notified(self._workspace, record, fired_at=now)
+
+        for record in list_records(self._workspace, "routines"):
+            if not bool(record.get("enabled", True)):
+                continue
+            next_run_at = str(record.get("next_run_at", "")).strip()
+            if not next_run_at:
+                continue
+            try:
+                next_run = datetime.fromisoformat(next_run_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if next_run > now:
+                continue
+            target = self._task_notify_target(record)
+            if target:
+                backend, conversation_id = target
+                text = "\n".join(
+                    [
+                        "[Recurring routine]",
+                        f"- routine_id: {record.get('id', '')}",
+                        f"- title: {record.get('title', '')}",
+                        str(record.get("instructions", "")).strip(),
+                    ]
+                ).strip()
+                self._send_message(backend, conversation_id, text)
+            mark_routine_run(self._workspace, record, ran_at=now)
+
+    def _task_notify_target(self, record: dict[str, Any]) -> tuple[str, str] | None:
+        target = record.get("notify_target")
+        if isinstance(target, dict):
+            backend = str(target.get("backend", "")).strip()
+            conversation_id = str(target.get("conversation_id", "")).strip()
+            if backend and conversation_id:
+                return backend, conversation_id
+        return self._resolve_hourly_target()
 
     def _history_key(self, backend: str, conversation_id: str) -> Any:
         if backend == "telegram" and conversation_id.lstrip("-").isdigit():
@@ -891,6 +968,7 @@ class BotRunner:
 
     def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
         model_reply = initial_model_reply
+        self._last_trace_steps: list[dict[str, Any]] = []
         for step_index in range(_MAX_SKILL_CHAIN_STEPS):
             skill_call = self._try_parse_skill_call(model_reply)
             if not skill_call:
@@ -900,6 +978,14 @@ class BotRunner:
 
             raw_skill_result = self._strip_think_blocks(
                 self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+            )
+            self._last_trace_steps.append(
+                {
+                    "step": step_index + 1,
+                    "model_reply": model_reply,
+                    "skill_call": skill_call,
+                    "skill_result": raw_skill_result,
+                }
             )
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
             requires_llm_response = self._skill_requires_llm_response(skill_call["name"])
@@ -949,14 +1035,33 @@ class BotRunner:
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
 
     def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:
-        if name not in self._skills:
+        skill = self._skills.get(name)
+        if skill is None:
             available = ", ".join(sorted(self._skills)) or "(none)"
             return f"Unknown skill '{name}'. Available skills: {available}"
 
+        action = skill.build_action(args) if skill.build_action else None
+        if action is not None:
+            policy = load_action_policy(self._workspace, self.config.runtime.action_policy_file)
+            decision = decide_action(policy, action)
+            if decision == "deny":
+                append_action_audit(self._workspace, action=action, decision=decision, status="denied")
+                return f"Action denied by policy: {action.name}"
+            if decision == "ask":
+                append_action_audit(self._workspace, action=action, decision=decision, status="pending_approval")
+                return (
+                    f"Action requires approval: {action.name}. "
+                    f"Set `{self.config.runtime.action_policy_file}` to allow it, then retry."
+                )
         try:
-            return self._skills[name].run(self._workspace, args)
+            result = skill.run(self._workspace, args)
+            if action is not None:
+                append_action_audit(self._workspace, action=action, decision="allow", status="executed", result=result)
+            return result
         except Exception as exc:
             logging.exception("Skill execution failed for %s", name)
+            if action is not None:
+                append_action_audit(self._workspace, action=action, decision="allow", status="failed", error=str(exc))
             return f"Skill '{name}' failed: {exc}"
 
     def _split_for_telegram(self, text: str) -> list[str]:
@@ -1758,6 +1863,17 @@ class BotRunner:
         self._handled_messages_count += 1
         logging.info("Incoming message from %s conversation=%s sender=%s", backend, conversation_id, sender_contact or sender_name or sender_id)
 
+        trace_payload: dict[str, Any] = {
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+            "backend": backend,
+            "conversation_id": conversation_id,
+            "sender_id": sender_id,
+            "last_message": text,
+            "evidence": [],
+            "steps": [],
+        }
+        self._current_evidence = []
+        self._last_trace_steps = []
         if text.strip().lower() == "/status":
             reply = self._build_status_message()
         else:
@@ -1771,11 +1887,23 @@ class BotRunner:
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                 )
+                trace_payload["last_prompt"] = prompt
+                trace_payload["evidence"] = [
+                    {"path": item.path, "snippet": item.snippet, "score": item.score}
+                    for item in self._current_evidence
+                ]
                 try:
                     model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                    trace_payload["initial_model_reply"] = model_reply
                     reply = self._resolve_llm_reply(prompt, model_reply)
+                    trace_payload["steps"] = getattr(self, "_last_trace_steps", [])
+                    if trace_payload["steps"]:
+                        trace_payload["last_action"] = trace_payload["steps"][-1].get("skill_call")
+                        trace_payload["last_skill_result"] = trace_payload["steps"][-1].get("skill_result")
                 except RequestTimeoutError:
                     logging.warning("LLM request timed out for %s conversation=%s", backend, conversation_id)
+                    trace_payload["error"] = "timeout"
+                    write_trace(self._workspace, trace_payload)
                     self._send_message(
                         backend,
                         conversation_id,
@@ -1786,6 +1914,8 @@ class BotRunner:
                     return False
                 except Exception:
                     logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
+                    trace_payload["error"] = "internal_error"
+                    write_trace(self._workspace, trace_payload)
                     self._send_message(
                         backend,
                         conversation_id,
@@ -1801,6 +1931,10 @@ class BotRunner:
                 }
             )
 
+        if self.config.runtime.enable_reply_citations:
+            reply = append_sources(reply, self._current_evidence)
+        trace_payload["final_reply"] = reply
+        write_trace(self._workspace, trace_payload)
         for chunk in self._split_reply(reply):
             self._send_message(backend, conversation_id, chunk)
         self._append_agenta_query_log(

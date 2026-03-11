@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from assistant_framework.collector_shell import run_command
+from assistant_framework.ingestion import append_normalized_records, normalize_collected_item, write_raw_snapshot
 from assistant_framework.workspace import Workspace
 
 NAME = "gmail"
@@ -27,6 +28,7 @@ def register_collector(config: dict):
         account_state = state.setdefault("accounts", {})
         now = datetime.now(timezone.utc).isoformat()
         out = []
+        normalized_records = []
 
         for account in accounts:
             account_name = str(account.get("name") or "default")
@@ -40,6 +42,7 @@ def register_collector(config: dict):
                 continue
 
             parsed = json.loads(stdout)
+            write_raw_snapshot(workspace, NAME, parsed)
             messages = parsed if isinstance(parsed, list) else parsed.get("messages", [])
 
             for item in messages:
@@ -61,10 +64,22 @@ def register_collector(config: dict):
                         "date": item.get("date"),
                     }
                 )
+                normalized_records.append(
+                    normalize_collected_item(
+                        source="gmail",
+                        timestamp=now,
+                        title=str(item.get("subject") or item.get("snippet") or msg_id),
+                        text="\n".join(
+                            part for part in (str(item.get("from") or "").strip(), str(item.get("snippet") or "").strip()) if part
+                        ),
+                        metadata={"account": account_name, "id": msg_id, "thread_id": item.get("threadId"), "date": item.get("date")},
+                    )
+                )
             account_state[account_name] = {"seen_ids": sorted(seen_ids)[-2000:]}
 
         if out:
             workspace.write_text(OUTPUT_FILE, "\n".join(json.dumps(i, ensure_ascii=False) for i in out) + "\n")
+        append_normalized_records(workspace, NAME, normalized_records)
         workspace.write_text(STATE_FILE, json.dumps(state))
 
     return {

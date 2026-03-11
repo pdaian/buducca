@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from assistant_framework.collector_shell import run_command
+from assistant_framework.ingestion import append_normalized_records, normalize_collected_item, write_raw_snapshot
 from assistant_framework.workspace import Workspace
 
 NAME = "google_calendar"
@@ -63,10 +64,12 @@ def register_collector(config: dict):
                 continue
 
             parsed = json.loads(stdout)
+            write_raw_snapshot(workspace, NAME, parsed)
             events = parsed if isinstance(parsed, list) else parsed.get("events", [])
             month = _month_key(month_start)
             output_path = f"google_calendar/{account}.{month}.events.jsonl"
             lines = []
+            normalized_records = []
             for event in events:
                 lines.append(
                     json.dumps(
@@ -81,7 +84,17 @@ def register_collector(config: dict):
                         ensure_ascii=False,
                     )
                 )
+                normalized_records.append(
+                    normalize_collected_item(
+                        source="google_calendar",
+                        timestamp=now.isoformat(),
+                        title=str(event.get("summary") or event.get("id") or "calendar event"),
+                        text=str(event.get("description") or event.get("summary") or ""),
+                        metadata={"account": account, "month": month, **event},
+                    )
+                )
             workspace.write_text(output_path, "\n".join(lines) + ("\n" if lines else ""))
+            append_normalized_records(workspace, NAME, normalized_records)
 
     return {
         "name": NAME,

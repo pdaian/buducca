@@ -118,6 +118,31 @@ class LoadingTests(unittest.TestCase):
             skills = SkillManager(skills_dir).load()
             self.assertEqual(skills["demo_skill"].args_schema, "{ value?: string }")
 
+    def test_skill_manager_loads_build_action(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir()
+            (skills_dir / "demo.py").write_text(
+                textwrap.dedent(
+                    """
+                    from assistant_framework.action_runtime import ActionEnvelope
+
+                    NAME = "demo"
+
+                    def build_action(args):
+                        return ActionEnvelope(name="demo.write", args=args, reason="x", writes=["x.txt"], requires_approval=True)
+
+                    def run(workspace, args):
+                        return "ok"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            skills = SkillManager(skills_dir).load()
+            action = skills["demo"].build_action({"a": 1})
+            self.assertEqual(action.name, "demo.write")
+
 
     def test_skill_manager_loads_requires_llm_response_flag(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from .action_runtime import ActionEnvelope
 from .module_loader import iter_plugin_modules, load_module_from_file
 from .workspace import Workspace
 
@@ -17,6 +18,7 @@ class Skill:
     run: Callable[[Workspace, dict[str, Any]], str]
     requires_llm_response: bool = False
     args_schema: str = ""
+    build_action: Callable[[dict[str, Any]], ActionEnvelope | None] | None = None
 
 
 class SkillManager:
@@ -51,6 +53,7 @@ class SkillManager:
                 run=registered["run"],
                 requires_llm_response=bool(registered.get("requires_llm_response", False)),
                 args_schema=str(registered.get("args_schema") or args_schema),
+                build_action=registered.get("build_action"),
             )
 
         run = getattr(module, "run", None)
@@ -66,6 +69,7 @@ class SkillManager:
             run=run,
             requires_llm_response=requires_llm_response,
             args_schema=args_schema,
+            build_action=getattr(module, "build_action", None),
         )
 
     def _resolve_args_schema(self, module: ModuleType, file_path: Path) -> str:

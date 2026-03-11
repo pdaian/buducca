@@ -89,6 +89,8 @@ class RuntimeConfig:
     voice_transcribe_command: list[str] = field(default_factory=list)
     max_reply_chunk_chars: int = 4096
     file_skill_actions: list[str] = field(default_factory=lambda: ["read", "write", "append", "move", "create_dir", "delete_dir"])
+    action_policy_file: str = "assistant/action_policy.json"
+    enable_reply_citations: bool = True
 
 
 @dataclass

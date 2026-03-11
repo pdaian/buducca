@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from assistant_framework.collector_shell import run_command
+from assistant_framework.ingestion import append_normalized_records, normalize_collected_item, write_raw_snapshot
 from assistant_framework.workspace import Workspace
 
 NAME = "twitter_recent"
@@ -36,6 +37,7 @@ def register_collector(config: dict):
         now = datetime.now(timezone.utc).isoformat()
         following_out = []
         dm_out = []
+        normalized_records = []
 
         for account in accounts:
             account_name = str(account.get("name") or "default")
@@ -48,6 +50,7 @@ def register_collector(config: dict):
                 code, stdout, _ = run_command(following_command, timeout_seconds=timeout)
                 if code == 0 and stdout.strip():
                     posts = json.loads(stdout)
+                    write_raw_snapshot(workspace, f"{NAME}_following", posts)
                     posts = posts if isinstance(posts, list) else posts.get("posts", [])
                     max_id = following_last
                     for post in posts:
@@ -58,6 +61,15 @@ def register_collector(config: dict):
                         following_out.append(
                             {"source": "twitter_following", "collector": NAME, "account": account_name, "collected_at": now, **post}
                         )
+                        normalized_records.append(
+                            normalize_collected_item(
+                                source="twitter_following",
+                                timestamp=now,
+                                title=str(post.get("author") or post_id),
+                                text=str(post.get("text") or ""),
+                                metadata={"account": account_name, **post},
+                            )
+                        )
                     acc_state["following_last_id"] = max_id
 
             dms_command = account.get("dms_command") or default_dms
@@ -65,6 +77,7 @@ def register_collector(config: dict):
                 code, stdout, _ = run_command(dms_command, timeout_seconds=timeout)
                 if code == 0 and stdout.strip():
                     dms = json.loads(stdout)
+                    write_raw_snapshot(workspace, f"{NAME}_dms", dms)
                     dms = dms if isinstance(dms, list) else dms.get("messages", [])
                     max_id = dm_last
                     for dm in dms:
@@ -75,6 +88,15 @@ def register_collector(config: dict):
                         dm_out.append(
                             {"source": "twitter_dm", "collector": NAME, "account": account_name, "collected_at": now, **dm}
                         )
+                        normalized_records.append(
+                            normalize_collected_item(
+                                source="twitter_dm",
+                                timestamp=now,
+                                title=str(dm.get("sender") or dm_id),
+                                text=str(dm.get("text") or ""),
+                                metadata={"account": account_name, **dm},
+                            )
+                        )
                     acc_state["dm_last_id"] = max_id
 
         if following_out:
@@ -84,6 +106,7 @@ def register_collector(config: dict):
             )
         if dm_out:
             workspace.write_text(DMS_OUTPUT_FILE, "\n".join(json.dumps(item, ensure_ascii=False) for item in dm_out) + "\n")
+        append_normalized_records(workspace, NAME, normalized_records)
         workspace.write_text(STATE_FILE, json.dumps(state))
 
     return {

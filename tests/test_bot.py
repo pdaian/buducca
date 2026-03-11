@@ -247,6 +247,83 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [])
             self.assertEqual(bot.llm.calls, 1)
 
+    def test_action_policy_blocks_mutating_skill_until_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = SequentialLLM(
+                [
+                    '{"skill_call": {"name": "file", "args": {"action": "write", "paths": ["notes/x.txt"], "content": "hello"}, "done": true}}'
+                ]
+            )
+
+            bot._handle_message(1, "write a note")
+
+            self.assertEqual(bot.telegram.sent, [(1, "Action requires approval: file.write. Set `assistant/action_policy.json` to allow it, then retry.")])
+            audit = Path(td, "audit", "actions.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"status": "pending_approval"', audit)
+
+    def test_structured_task_scheduler_sends_once(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            Path(td, "assistant", "tasks").mkdir(parents=True, exist_ok=True)
+            Path(td, "assistant", "tasks", "rent.json").write_text(
+                json.dumps(
+                    {
+                        "id": "rent",
+                        "title": "Pay rent",
+                        "status": "open",
+                        "kind": "task",
+                        "due_at": "2026-03-09T12:00:00+00:00",
+                        "notify_target": {"backend": "telegram", "conversation_id": "123"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bot._poll_due_structured_schedule_once()
+            bot._poll_due_structured_schedule_once()
+
+            self.assertEqual(bot.telegram.sent, [(123, "[Scheduled task]\n- task_id: rent\n- kind: task\n- title: Pay rent")])
+            payload = json.loads(Path(td, "assistant", "tasks", "rent.json").read_text(encoding="utf-8"))
+            self.assertIn("last_notified_at", payload)
+
+    def test_workspace_evidence_is_cited_and_traced(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("Your timezone is America/New_York.")
+            Path(td, "assistant", "facts").mkdir(parents=True, exist_ok=True)
+            Path(td, "assistant", "facts", "timezone.json").write_text(
+                json.dumps({"id": "timezone", "statement": "timezone is America/New_York"}),
+                encoding="utf-8",
+            )
+
+            bot._handle_message(1, "what is my timezone")
+
+            self.assertIn("Sources:\n- assistant/facts/timezone.json", bot.telegram.sent[0][1])
+            trace_dir = Path(td, "logs", "traces")
+            traces = list(trace_dir.glob("*.json"))
+            self.assertEqual(len(traces), 1)
+            trace = json.loads(traces[0].read_text(encoding="utf-8"))
+            self.assertEqual(trace["final_reply"], bot.telegram.sent[0][1])
+
 
     def test_telegram_sender_not_allowed_outside_configured_group(self) -> None:
         cfg = BotConfig(

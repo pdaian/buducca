@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant_framework import CollectorManager, CollectorRunner, CompressorManager, CompressorRunner, SkillManager, Workspace
+from assistant_framework.traces import load_trace, replay_trace
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:
@@ -60,6 +61,32 @@ def _run_skill(args: argparse.Namespace) -> None:
     print(output)
 
 
+def _load_trace_section(args: argparse.Namespace) -> str:
+    workspace = Workspace(args.workspace)
+    trace = load_trace(workspace, args.trace)
+    if not trace:
+        return "No trace found."
+    section = args.section
+    if section == "last-turn":
+        return json.dumps(trace, ensure_ascii=False, indent=2)
+    value = trace.get(section.replace("-", "_"))
+    if value is None:
+        return f"Trace field not found: {section}"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _show_trace(args: argparse.Namespace) -> None:
+    print(_load_trace_section(args))
+
+
+def _replay_trace(args: argparse.Namespace) -> None:
+    workspace = Workspace(args.workspace)
+    trace = load_trace(workspace, args.trace)
+    print(replay_trace(trace))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Assistant framework CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -82,6 +109,26 @@ def build_parser() -> argparse.ArgumentParser:
     skill_parser.add_argument("--skills", default="skills", help="Skills directory")
     skill_parser.add_argument("--args", default="{}", help="JSON dict passed to the skill")
     skill_parser.set_defaults(handler=_run_skill)
+
+    trace_parser = subparsers.add_parser("trace", help="Inspect or replay the last saved bot trace")
+    trace_subparsers = trace_parser.add_subparsers(dest="trace_command", required=True)
+
+    for name, section in (
+        ("last-message", "last_message"),
+        ("last-prompt", "last_prompt"),
+        ("last-action", "last_action"),
+        ("last-skill", "last_skill_result"),
+        ("last-turn", "last-turn"),
+    ):
+        show_parser = trace_subparsers.add_parser(name, help=f"Show {name} from the latest trace")
+        show_parser.add_argument("--workspace", default="workspace", help="Workspace directory")
+        show_parser.add_argument("--trace", default="", help="Optional explicit trace file path")
+        show_parser.set_defaults(handler=_show_trace, section=section)
+
+    replay_parser = trace_subparsers.add_parser("replay", help="Replay the latest saved bot trace")
+    replay_parser.add_argument("--workspace", default="workspace", help="Workspace directory")
+    replay_parser.add_argument("--trace", default="", help="Optional explicit trace file path")
+    replay_parser.set_defaults(handler=_replay_trace)
 
     return parser
 

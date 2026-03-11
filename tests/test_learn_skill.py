@@ -35,6 +35,8 @@ class LearnSkillTests(unittest.TestCase):
                 workspace.read_text("learnings"),
                 "Use bullet points for summaries.\n",
             )
+            fact = workspace.read_text("assistant/facts/learn-use-bullet-points-for-summaries.json")
+            self.assertIn("Use bullet points for summaries.", fact)
 
     def test_fallback_keys_and_single_line_normalization(self) -> None:
         with tempfile.TemporaryDirectory() as td:
