@@ -187,7 +187,7 @@ class GoogleFiClient:
         sender_name = self._first_text(item.get("sender_name"), item.get("name"), item.get("display_name"))
         sender_contact = self._first_text(item.get("sender_contact"), sender_name, sender_id)
         call_state = self._first_text(item.get("status"), item.get("state"), item.get("call_state")) or "received"
-        sent_at = self._extract_sent_at(item)
+        sent_at = self._extract_sent_at(item, include_received_at=True)
         return IncomingMessage(
             update_id=self._next_update_id(),
             backend="google_fi",
@@ -240,8 +240,11 @@ class GoogleFiClient:
         return cls._phone_like_or_original(first_text)
 
     @staticmethod
-    def _extract_sent_at(item: dict[str, Any]) -> str | None:
-        for key in ("sent_at", "timestamp", "received_at", "date", "time"):
+    def _extract_sent_at(item: dict[str, Any], *, include_received_at: bool = False) -> str | None:
+        timestamp_keys = ["sent_at", "timestamp", "date", "time"]
+        if include_received_at:
+            timestamp_keys.append("received_at")
+        for key in timestamp_keys:
             value = item.get(key)
             if value in (None, ""):
                 continue
@@ -488,9 +491,12 @@ def _message_bubble_selectors() -> list[str]:
 def _message_timestamp_selectors() -> list[str]:
     return [
         "mws-message-timestamp",
+        "time",
         "[data-e2e-message-timestamp]",
         "[data-e2e-timestamp]",
         "[data-message-timestamp]",
+        "[class*='timestamp']",
+        "[class*='time']",
     ]
 
 
@@ -510,10 +516,17 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
     timestamp_selector = ", ".join(_message_timestamp_selectors())
     try:
         raw_entries = page.evaluate(
-            """
+            r"""
             ({ bubbleSelector, timestampSelector }) => {
               const bubbleElements = new Set(Array.from(document.querySelectorAll(bubbleSelector)));
               const hasTimestamps = Boolean(timestampSelector && timestampSelector.trim());
+              const timestampRegexes = [
+                /^(today|yesterday)\s+\d{1,2}:\d{2}\s*(am|pm)$/i,
+                /^(sun|mon|tue|wed|thu|fri|sat),?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i,
+                /^(january|february|march|april|may|june|july|august|september|october|november|december)/i,
+                /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}(,\s+\d{4})?,?\s+\d{1,2}:\d{2}\s*(am|pm)$/i,
+                /^\d{1,2}:\d{2}\s*(am|pm)$/i,
+              ];
               const timestampAttributes = [
                 "data-message-timestamp",
                 "data-timestamp",
@@ -521,6 +534,13 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                 "aria-label",
                 "title",
               ];
+              const readNodeText = (node) => ((node && (node.innerText || node.textContent)) || "").trim();
+              const looksLikeTimestamp = (text) => {
+                if (!text) {
+                  return false;
+                }
+                return timestampRegexes.some((pattern) => pattern.test(text));
+              };
               const readTimestampCandidate = (node) => {
                 let current = node;
                 for (let depth = 0; current && depth < 4; depth += 1, current = current.parentElement) {
@@ -536,18 +556,70 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                 }
                 return "";
               };
+              const readTimestampNode = (node) => {
+                if (!node) {
+                  return "";
+                }
+                const attrValue = readTimestampCandidate(node);
+                if (attrValue) {
+                  return attrValue;
+                }
+                const textValue = readNodeText(node);
+                if (looksLikeTimestamp(textValue)) {
+                  return textValue;
+                }
+                return "";
+              };
+              const queryTimestampWithin = (node) => {
+                if (!hasTimestamps || !node || !node.querySelectorAll) {
+                  return "";
+                }
+                const matches = node.querySelectorAll(timestampSelector);
+                for (const match of matches) {
+                  const value = readTimestampNode(match);
+                  if (value) {
+                    return value;
+                  }
+                }
+                return "";
+              };
+              const findNearbyTimestampText = (node) => {
+                let current = node;
+                for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+                  const ownValue = readTimestampNode(current);
+                  if (ownValue) {
+                    return ownValue;
+                  }
+                  const withinValue = queryTimestampWithin(current);
+                  if (withinValue) {
+                    return withinValue;
+                  }
+                  for (const sibling of [current.previousElementSibling, current.nextElementSibling]) {
+                    const siblingValue = readTimestampNode(sibling);
+                    if (siblingValue) {
+                      return siblingValue;
+                    }
+                    const nestedSiblingValue = queryTimestampWithin(sibling);
+                    if (nestedSiblingValue) {
+                      return nestedSiblingValue;
+                    }
+                  }
+                }
+                return "";
+              };
               const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
               const entries = [];
               let currentTimestamp = "";
               let node = walker.currentNode;
               while (node) {
-                const text = (node.innerText || node.textContent || "").trim();
+                const text = readNodeText(node);
                 if (bubbleElements.has(node)) {
                   if (text) {
                     entries.push({
                       text,
                       timestamp_text: currentTimestamp,
                       timestamp_hint: readTimestampCandidate(node),
+                      inline_timestamp_text: findNearbyTimestampText(node),
                     });
                   }
                 } else if (hasTimestamps && node.matches && node.matches(timestampSelector) && text) {
@@ -579,11 +651,49 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
 
 
 def _pick_google_messages_timestamp_text(item: dict[str, Any]) -> str:
-    for key in ("timestamp_text", "timestamp_hint", "timestamp", "aria_label", "title"):
+    for key in ("timestamp_text", "inline_timestamp_text", "timestamp_hint", "timestamp", "aria_label", "title"):
         candidate = GoogleFiClient._first_text(item.get(key))
         if candidate and _parse_google_messages_timestamp(candidate):
             return candidate
     return GoogleFiClient._first_text(item.get("timestamp_text")) or ""
+
+
+def _debug_dump_conversation_elements(page: Any, conversation_id: str, *, limit: int = 200) -> None:
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    try:
+        elements = page.evaluate(
+            """
+            (maxItems) => {
+              const selectors = [
+                "mws-message-wrapper",
+                "mws-text-message-content",
+                "mws-message-part-content",
+                "mws-message-text-content",
+                "mws-message-timestamp",
+                "[data-e2e-message-text]",
+                "[data-e2e-message-body]",
+                "[data-e2e-message-timestamp]",
+                "time",
+                "[class*='timestamp']",
+                "[class*='time']",
+              ].join(", ");
+              return Array.from(document.querySelectorAll(selectors)).slice(0, maxItems).map((node) => ({
+                tag: (node.tagName || "").toLowerCase(),
+                class_name: typeof node.className === "string" ? node.className : "",
+                text: ((node.innerText || node.textContent || "").trim()).slice(0, 160),
+                aria_label: node.getAttribute ? (node.getAttribute("aria-label") || "") : "",
+                title: node.getAttribute ? (node.getAttribute("title") || "") : "",
+                data_timestamp: node.getAttribute ? (node.getAttribute("data-message-timestamp") || node.getAttribute("data-timestamp") || "") : "",
+              }));
+            }
+            """,
+            limit,
+        )
+    except Exception:
+        logger.debug("Failed to capture Google Fi conversation element dump conversation_id=%s", conversation_id, exc_info=True)
+        return
+    logger.debug("Google Fi conversation element dump conversation_id=%s elements=%r", conversation_id, elements)
 
 
 def _parse_google_messages_timestamp(value: str | None, *, reference: datetime | None = None) -> str | None:
@@ -768,6 +878,13 @@ def receive_events(
                 bubble_selector,
             )
             bubble_entries = _collect_bubble_entries(page, bubble_selector)
+            if bubble_entries and not any(_parse_google_messages_timestamp(entry.get("timestamp_text")) for entry in bubble_entries):
+                logger.debug(
+                    "Google Fi conversation had message bubbles but no parseable inline timestamps conversation_id=%s title=%r",
+                    conversation_id,
+                    title,
+                )
+                _debug_dump_conversation_elements(page, conversation_id)
             if bubble_entries:
                 iter_entries = bubble_entries[start_idx:bubble_count]
             else:

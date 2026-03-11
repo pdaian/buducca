@@ -93,6 +93,34 @@ class GoogleFiClientTests(unittest.TestCase):
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].sent_at, "2026-03-10T13:23:00-05:00")
 
+    def test_get_updates_does_not_use_received_at_for_message_timestamp(self) -> None:
+        payload = (
+            '{"messages":[{"conversation_id":"thread-1","sender_id":"+15550001","text":"hello",'
+            '"received_at":"2026-03-11T11:42:34.182023+00:00"}]}'
+        )
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertIsNone(updates[0].sent_at)
+
+    def test_get_updates_allows_received_at_for_call_timestamp(self) -> None:
+        payload = (
+            '{"calls":[{"conversation_id":"thread-1","sender_id":"+15550001","status":"missed",'
+            '"received_at":"2026-03-11T11:42:34.182023+00:00"}]}'
+        )
+        with patch("messaging_llm_bot.google_fi_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.google_fi_client.which", return_value="/usr/bin/python3"):
+                client = GoogleFiClient(receive_command=["python3", "recv.py"], send_command=["python3", "send.py", "{recipient}", "{message}"])
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sent_at, "2026-03-11T11:42:34.182023+00:00")
+
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
     def test_browser_options_stores_profile_under_top_level_data_dir(self) -> None:
@@ -341,6 +369,25 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         self.assertEqual(
             entries,
             [{"text": "message without visible timestamp node", "timestamp_text": "Mar 10, 2026, 1:23 PM"}],
+        )
+
+    def test_collect_bubble_entries_prefers_inline_timestamp_text(self) -> None:
+        from messaging_llm_bot.google_fi_client import _collect_bubble_entries
+
+        page = Mock()
+        page.evaluate.return_value = [
+            {
+                "text": "message with inline timestamp",
+                "timestamp_text": "",
+                "inline_timestamp_text": "Mar 10, 2026, 1:23 PM",
+            },
+        ]
+
+        entries = _collect_bubble_entries(page, "mws-message-text-content")
+
+        self.assertEqual(
+            entries,
+            [{"text": "message with inline timestamp", "timestamp_text": "Mar 10, 2026, 1:23 PM"}],
         )
 
     def test_parse_google_messages_timestamp_infers_local_iso_timestamp(self) -> None:
