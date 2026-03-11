@@ -405,6 +405,15 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
             [{"text": "message after datetime attribute timestamp", "timestamp_text": "2026-03-10T13:23:00-05:00"}],
         )
 
+    def test_message_timestamp_selectors_include_google_fi_tombstones(self) -> None:
+        from messaging_llm_bot.google_fi_client import _message_timestamp_selectors
+
+        selectors = _message_timestamp_selectors()
+
+        self.assertIn("mws-relative-timestamp", selectors)
+        self.assertIn("mws-tombstone-message-wrapper", selectors)
+        self.assertIn("[data-e2e-message-tombstone]", selectors)
+
     def test_parse_google_messages_timestamp_infers_local_iso_timestamp(self) -> None:
         from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
 
@@ -422,6 +431,15 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         parsed = _parse_google_messages_timestamp("Dec 31, 11:59 PM", reference=reference)
 
         self.assertEqual(parsed, "2025-12-31T23:59:00+00:00")
+
+    def test_parse_google_messages_timestamp_accepts_narrow_nbsp_meridiem(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("10:07\u202fAM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-11T10:07:00+00:00")
 
 
 if __name__ == "__main__":

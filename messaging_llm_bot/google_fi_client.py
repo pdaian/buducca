@@ -491,7 +491,10 @@ def _message_bubble_selectors() -> list[str]:
 def _message_timestamp_selectors() -> list[str]:
     return [
         "mws-message-timestamp",
+        "mws-relative-timestamp",
+        "mws-tombstone-message-wrapper",
         "time",
+        "[data-e2e-message-tombstone]",
         "[data-e2e-message-timestamp]",
         "[data-e2e-timestamp]",
         "[data-message-timestamp]",
@@ -571,8 +574,15 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                 }
                 return "";
               };
-              const queryTimestampWithin = (node) => {
-                if (!hasTimestamps || !node || !node.querySelectorAll) {
+              const queryTimestampAtOrWithin = (node) => {
+                if (!node) {
+                  return "";
+                }
+                const ownValue = readTimestampNode(node);
+                if (ownValue) {
+                  return ownValue;
+                }
+                if (!hasTimestamps || !node.querySelectorAll) {
                   return "";
                 }
                 const matches = node.querySelectorAll(timestampSelector);
@@ -584,25 +594,20 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
                 }
                 return "";
               };
+              const queryTimestampWithin = (node) => {
+                return queryTimestampAtOrWithin(node);
+              };
               const findNearbyTimestampText = (node) => {
                 let current = node;
                 for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
-                  const ownValue = readTimestampNode(current);
+                  const ownValue = queryTimestampAtOrWithin(current);
                   if (ownValue) {
                     return ownValue;
                   }
-                  const withinValue = queryTimestampWithin(current);
-                  if (withinValue) {
-                    return withinValue;
-                  }
                   for (const sibling of [current.previousElementSibling, current.nextElementSibling]) {
-                    const siblingValue = readTimestampNode(sibling);
+                    const siblingValue = queryTimestampAtOrWithin(sibling);
                     if (siblingValue) {
                       return siblingValue;
-                    }
-                    const nestedSiblingValue = queryTimestampWithin(sibling);
-                    if (nestedSiblingValue) {
-                      return nestedSiblingValue;
                     }
                   }
                 }
