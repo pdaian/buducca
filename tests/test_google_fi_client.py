@@ -328,6 +328,21 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
             ],
         )
 
+    def test_collect_bubble_entries_falls_back_to_timestamp_hint(self) -> None:
+        from messaging_llm_bot.google_fi_client import _collect_bubble_entries
+
+        page = Mock()
+        page.evaluate.return_value = [
+            {"text": "message without visible timestamp node", "timestamp_text": "", "timestamp_hint": "Mar 10, 2026, 1:23 PM"},
+        ]
+
+        entries = _collect_bubble_entries(page, "mws-message-text-content")
+
+        self.assertEqual(
+            entries,
+            [{"text": "message without visible timestamp node", "timestamp_text": "Mar 10, 2026, 1:23 PM"}],
+        )
+
     def test_parse_google_messages_timestamp_infers_local_iso_timestamp(self) -> None:
         from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
 
