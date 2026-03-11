@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 from assistant_framework.config_files import load_json_path
@@ -38,6 +39,12 @@ def _pair_command_from_receive(receive_command: list[str]) -> list[str]:
     raise ValueError("whatsapp.receive_command must contain the `receive` subcommand")
 
 
+def _ensure_headful_pair_command(pair_command: list[str]) -> list[str]:
+    if "--headful" in pair_command or "--headless" in pair_command:
+        return pair_command
+    return [*pair_command, "--headful"]
+
+
 def _render_text_send_example(send_command: list[str]) -> list[str]:
     rendered: list[str] = []
     for index, part in enumerate(send_command):
@@ -51,7 +58,7 @@ def _render_text_send_example(send_command: list[str]) -> list[str]:
 
 def run_signup(config_path: str) -> int:
     receive_command, send_command = _load_whatsapp_commands(config_path)
-    pair_command = _pair_command_from_receive(receive_command)
+    pair_command = _ensure_headful_pair_command(_pair_command_from_receive(receive_command))
     message = f"""WhatsApp signup is concrete in this repo.
 
 Install the bridge dependencies once:
@@ -81,7 +88,8 @@ Notes:
 - If you want attachment sending, keep `{{attachment}}` in `send_command` and call the attach-file skill.
 """
     print(message)
-    return 0
+    completed = subprocess.run(pair_command, check=False)
+    return completed.returncode
 
 
 def parse_args() -> argparse.Namespace:

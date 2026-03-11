@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from messaging_llm_bot.whatsapp_signup import run_signup
 
@@ -23,8 +24,10 @@ class WhatsAppSignupTests(unittest.TestCase):
             )
 
             buf = io.StringIO()
-            with redirect_stdout(buf):
-                code = run_signup(str(config_dir))
+            with patch("messaging_llm_bot.whatsapp_signup.subprocess.run") as run:
+                run.return_value = Mock(returncode=0)
+                with redirect_stdout(buf):
+                    code = run_signup(str(config_dir))
 
         output = buf.getvalue()
         self.assertEqual(code, 0)
@@ -34,7 +37,20 @@ class WhatsAppSignupTests(unittest.TestCase):
         self.assertIn("QR", output)
         self.assertIn("Linked Devices", output)
         self.assertIn("messaging_llm_bot.whatsapp_bridge pair", output)
+        self.assertIn("--headful", output)
         self.assertIn("python3 run_bot.py --config config", output)
+        run.assert_called_once_with(
+            [
+                "python3",
+                "-m",
+                "messaging_llm_bot.whatsapp_bridge",
+                "pair",
+                "--session",
+                "data/whatsapp-personal",
+                "--headful",
+            ],
+            check=False,
+        )
 
 
 if __name__ == "__main__":
