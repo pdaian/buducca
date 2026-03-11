@@ -1221,8 +1221,25 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.llm.calls, 0)
             sent = bot.telegram.sent[0][1]
+            self.assertIn("frontend:telegram", sent)
             self.assertIn("collector:telegram_recent", sent)
             self.assertIn("last_success_at", sent)
+
+    def test_status_command_includes_frontend_worker_state_without_collectors(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("should-not-be-used")
+        bot._frontend_workers["telegram"].polls = 4
+        bot._frontend_workers["telegram"].updates_handled = 7
+        bot._frontend_workers["telegram"].last_success_at = "2026-03-11T00:00:00+00:00"
+
+        bot._handle_message(1, "/status")
+
+        sent = bot.telegram.sent[0][1]
+        self.assertIn("frontend:telegram", sent)
+        self.assertIn("polls: 4", sent)
+        self.assertIn("updates_handled: 7", sent)
+        self.assertIn("collectors: no status data yet", sent)
 
     def test_skill_command_lists_available_skills_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2158,6 +2175,21 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.signal.calls, 2)
         self.assertEqual(bot.llm.calls, 1)
+
+    def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(bot_token="t", long_poll_timeout_seconds=10),
+            signal=SignalConfig(account="+15550000000"),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = PollingTelegram([[], []])
+
+        bot._poll_telegram_once()
+
+        self.assertEqual(bot.telegram.calls[0], (None, 0))
+        self.assertEqual(bot.telegram.calls[1], (None, 10))
 
     def test_poll_frontends_disables_signal_when_unavailable(self) -> None:
         bot = self.make_bot()

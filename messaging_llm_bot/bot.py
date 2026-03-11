@@ -11,6 +11,7 @@ import threading
 import time
 from contextlib import contextmanager
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -47,6 +48,22 @@ _MAX_REMINDER_FILE_CHARS = 4_000
 _MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
 _HOURLY_NO_ACTION_REPLY = "NO_ACTION"
 _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+@dataclass
+class FrontendWorkerState:
+    name: str
+    poll_interval_seconds: float
+    thread: threading.Thread | None = None
+    polls: int = 0
+    updates_handled: int = 0
+    last_started_at: str | None = None
+    last_finished_at: str | None = None
+    last_success_at: str | None = None
+    last_error_at: str | None = None
+    last_error: str | None = None
+    disabled: bool = False
+    fatal_exception: BaseException | None = None
 
 
 class BotRunner:
@@ -131,6 +148,10 @@ class BotRunner:
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = self._load_runtime_skills()
         self._current_evidence = []
+        self._processing_lock = threading.RLock()
+        self._frontend_state_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._frontend_workers = self._build_frontend_workers()
 
     @property
     def _debug_enabled(self) -> bool:
@@ -457,106 +478,260 @@ class BotRunner:
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")
-        while True:
-            try:
-                self._poll_frontends_once()
-            except KeyboardInterrupt:
-                logging.info("Bot interrupted. Exiting.")
-                return
-            except RequestTimeoutError:
-                logging.debug("Long-poll request timed out; retrying")
-            except Exception:
-                logging.exception("Error while polling or handling message")
-                time.sleep(2)
+        self._stop_event.clear()
+        self._start_frontend_workers()
+        try:
+            while True:
+                self._raise_worker_failure_if_any()
+                try:
+                    with self._processing_lock:
+                        self._poll_due_structured_schedule_once()
+                        self._poll_due_reminders_once()
+                        self._poll_due_hourly_once()
+                except RequestTimeoutError:
+                    logging.debug("Long-poll request timed out; retrying")
+                except Exception:
+                    logging.exception("Error while polling or handling message")
+                    if self._stop_event.wait(2):
+                        break
+                    continue
+                self._raise_worker_failure_if_any()
+                if self._stop_event.wait(self._scheduler_poll_interval_seconds()):
+                    break
+        except KeyboardInterrupt:
+            logging.info("Bot interrupted. Exiting.")
+            return
+        finally:
+            self._stop_frontend_workers()
 
-            poll_interval = 0.0
-            if self.config.telegram:
-                poll_interval = max(poll_interval, self.config.telegram.poll_interval_seconds)
-            if self.config.signal:
-                poll_interval = max(poll_interval, self.config.signal.poll_interval_seconds)
-            if self.config.whatsapp:
-                poll_interval = max(poll_interval, self.config.whatsapp.poll_interval_seconds)
-            if self.config.google_fi:
-                poll_interval = max(poll_interval, self.config.google_fi.poll_interval_seconds)
-            time.sleep(poll_interval)
+    def _build_frontend_workers(self) -> dict[str, FrontendWorkerState]:
+        workers: dict[str, FrontendWorkerState] = {}
+        if self.telegram and self.config.telegram:
+            workers["telegram"] = FrontendWorkerState(name="telegram", poll_interval_seconds=self.config.telegram.poll_interval_seconds)
+        if self.signal and self.config.signal:
+            workers["signal"] = FrontendWorkerState(name="signal", poll_interval_seconds=self.config.signal.poll_interval_seconds)
+        if self.whatsapp and self.config.whatsapp:
+            workers["whatsapp"] = FrontendWorkerState(name="whatsapp", poll_interval_seconds=self.config.whatsapp.poll_interval_seconds)
+        if self.google_fi and self.config.google_fi:
+            workers["google_fi"] = FrontendWorkerState(name="google_fi", poll_interval_seconds=self.config.google_fi.poll_interval_seconds)
+        return workers
+
+    def _scheduler_poll_interval_seconds(self) -> float:
+        intervals = [state.poll_interval_seconds for state in self._frontend_workers.values() if state.poll_interval_seconds > 0]
+        return min(intervals, default=1.0)
+
+    def _start_frontend_workers(self) -> None:
+        for name, state in self._frontend_workers.items():
+            if state.thread is not None and state.thread.is_alive():
+                continue
+            worker = threading.Thread(target=self._run_frontend_worker, args=(name,), daemon=True, name=f"{name}-frontend")
+            state.thread = worker
+            worker.start()
+
+    def _stop_frontend_workers(self) -> None:
+        self._stop_event.set()
+        for state in self._frontend_workers.values():
+            thread = state.thread
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=1.0)
+
+    def _raise_worker_failure_if_any(self) -> None:
+        for state in self._frontend_workers.values():
+            if state.fatal_exception is None:
+                continue
+            exc = state.fatal_exception
+            state.fatal_exception = None
+            raise exc
+
+    def _run_frontend_worker(self, frontend: str) -> None:
+        state = self._frontend_workers[frontend]
+        while not self._stop_event.is_set():
+            with self._frontend_state_lock:
+                state.last_started_at = datetime.now(timezone.utc).isoformat()
+            try:
+                updates_handled = self._poll_single_frontend(frontend)
+            except RequestTimeoutError:
+                with self._frontend_state_lock:
+                    state.last_error_at = datetime.now(timezone.utc).isoformat()
+                    state.last_error = "request timeout"
+                logging.debug("Long-poll request timed out; retrying")
+            except BaseException as exc:
+                with self._frontend_state_lock:
+                    state.last_error_at = datetime.now(timezone.utc).isoformat()
+                    state.last_error = str(exc) or exc.__class__.__name__
+                    state.fatal_exception = exc
+                self._stop_event.set()
+                return
+            else:
+                finished_at = datetime.now(timezone.utc).isoformat()
+                with self._frontend_state_lock:
+                    state.polls += 1
+                    state.updates_handled += updates_handled
+                    state.last_finished_at = finished_at
+                    state.last_success_at = finished_at
+                    state.last_error = None
+                if self._stop_event.wait(state.poll_interval_seconds):
+                    return
+
+    def _poll_single_frontend(self, frontend: str) -> int:
+        with self._processing_lock:
+            if frontend == "telegram":
+                return self._poll_telegram_once()
+            if frontend == "signal":
+                return self._poll_signal_once()
+            if frontend == "whatsapp":
+                return self._poll_whatsapp_once()
+            if frontend == "google_fi":
+                return self._poll_google_fi_once()
+        raise ValueError(f"Unknown frontend: {frontend}")
+
+    def _set_frontend_disabled(self, frontend: str, *, disabled: bool = True, error: str | None = None) -> None:
+        state = self._frontend_workers.get(frontend)
+        if state is None:
+            return
+        with self._frontend_state_lock:
+            state.disabled = disabled
+            if error is not None:
+                state.last_error_at = datetime.now(timezone.utc).isoformat()
+                state.last_error = error
+
+    def _frontend_status_lines(self) -> list[str]:
+        if not self._frontend_workers:
+            return ["- frontends: none configured"]
+
+        lines = [f"- frontend_count: {len(self._frontend_workers)}"]
+        with self._frontend_state_lock:
+            for name in sorted(self._frontend_workers):
+                state = self._frontend_workers[name]
+                thread = state.thread
+                lines.extend(
+                    [
+                        f"frontend:{name}",
+                        f"  - thread_alive: {thread.is_alive() if thread is not None else False}",
+                        f"  - disabled: {state.disabled}",
+                        f"  - poll_interval_seconds: {state.poll_interval_seconds}",
+                        f"  - polls: {state.polls}",
+                        f"  - updates_handled: {state.updates_handled}",
+                        f"  - last_started_at: {state.last_started_at or 'never'}",
+                        f"  - last_finished_at: {state.last_finished_at or 'never'}",
+                        f"  - last_success_at: {state.last_success_at or 'never'}",
+                        f"  - last_error_at: {state.last_error_at or 'never'}",
+                        f"  - last_error: {state.last_error or 'none'}",
+                    ]
+                )
+                if name == "telegram":
+                    retry_after = self._telegram_retry_after
+                    lines.append(
+                        f"  - retry_after: {datetime.fromtimestamp(retry_after, tz=timezone.utc).isoformat() if retry_after else 'none'}"
+                    )
+        return lines
 
     def _poll_frontends_once(self) -> None:
-        self._poll_due_structured_schedule_once()
-        self._poll_due_reminders_once()
-        self._poll_due_hourly_once()
+        with self._processing_lock:
+            self._poll_due_structured_schedule_once()
+            self._poll_due_reminders_once()
+            self._poll_due_hourly_once()
+            self._poll_telegram_once()
+            self._poll_signal_once()
+            self._poll_whatsapp_once()
+            self._poll_google_fi_once()
 
-        if self.telegram and self.config.telegram:
-            if self._telegram_retry_after is not None and time.time() < self._telegram_retry_after:
-                logging.debug("Telegram polling is in conflict backoff; skipping this cycle")
-            else:
-                try:
-                    if (
-                        self._telegram_offset is None
-                        and self.config.telegram.mode == "bot"
-                        and not self.config.telegram.process_pending_updates_on_startup
-                    ):
-                        self._telegram_offset = self._offset
-                        pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
-                        if pending_updates:
-                            self._telegram_offset = pending_updates[-1].update_id + 1
-                            self._offset = self._telegram_offset
-                            logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
-
-                    telegram_timeout = self.config.telegram.long_poll_timeout_seconds if not self.signal else 0
-                    updates = self.telegram.get_updates(offset=self._telegram_offset, timeout_seconds=telegram_timeout)
-                except RuntimeError as exc:
-                    if self._is_telegram_conflict_error(exc):
-                        now = time.time()
-                        if (
-                            self._telegram_conflict_logged_at is None
-                            or now - self._telegram_conflict_logged_at >= 60
-                        ):
-                            logging.warning(
-                                "Telegram polling conflict (HTTP 409): another bot instance is already using getUpdates. "
-                                "Will keep retrying with backoff."
-                            )
-                            self._telegram_conflict_logged_at = now
-                        else:
-                            logging.debug("Telegram polling conflict (HTTP 409); retrying with backoff")
-                        self._telegram_retry_after = now + self._telegram_conflict_backoff_seconds
-                        self._telegram_conflict_backoff_seconds = min(
-                            self._telegram_conflict_backoff_seconds * 2,
-                            _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS,
-                        )
-                        return
-                    raise
-
-                self._telegram_conflict_logged_at = None
-                self._telegram_retry_after = None
-                self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
-                for update in updates:
-                    self._telegram_offset = update.update_id + 1
+    def _poll_telegram_once(self) -> int:
+        if not self.telegram or not self.config.telegram:
+            return 0
+        if self._telegram_retry_after is not None and time.time() < self._telegram_retry_after:
+            logging.debug("Telegram polling is in conflict backoff; skipping this cycle")
+            return 0
+        try:
+            if (
+                self._telegram_offset is None
+                and self.config.telegram.mode == "bot"
+                and not self.config.telegram.process_pending_updates_on_startup
+            ):
+                self._telegram_offset = self._offset
+                pending_updates = self.telegram.get_updates(offset=None, timeout_seconds=0)
+                if pending_updates:
+                    self._telegram_offset = pending_updates[-1].update_id + 1
                     self._offset = self._telegram_offset
-                    self._handle_update(update)
+                    logging.info("Skipped %s pending telegram update(s) from before startup", len(pending_updates))
 
-        if self.signal and not self._signal_frontend_disabled:
-            try:
-                for update in self.signal.get_updates():
-                    self._handle_update(update)
-            except SignalFrontendUnavailableError as exc:
-                self._signal_frontend_disabled = True
-                logging.warning("%s; continuing with telegram-only frontend", exc)
+            updates = self.telegram.get_updates(
+                offset=self._telegram_offset,
+                timeout_seconds=self.config.telegram.long_poll_timeout_seconds,
+            )
+        except RuntimeError as exc:
+            if self._is_telegram_conflict_error(exc):
+                now = time.time()
+                if (
+                    self._telegram_conflict_logged_at is None
+                    or now - self._telegram_conflict_logged_at >= 60
+                ):
+                    logging.warning(
+                        "Telegram polling conflict (HTTP 409): another bot instance is already using getUpdates. "
+                        "Will keep retrying with backoff."
+                    )
+                    self._telegram_conflict_logged_at = now
+                else:
+                    logging.debug("Telegram polling conflict (HTTP 409); retrying with backoff")
+                self._telegram_retry_after = now + self._telegram_conflict_backoff_seconds
+                self._telegram_conflict_backoff_seconds = min(
+                    self._telegram_conflict_backoff_seconds * 2,
+                    _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS,
+                )
+                self._set_frontend_disabled("telegram", disabled=False, error="telegram conflict backoff")
+                return 0
+            raise
 
-        if self.whatsapp and not self._whatsapp_frontend_disabled:
-            try:
-                for update in self.whatsapp.get_updates():
-                    self._handle_update(update)
-            except WhatsAppFrontendUnavailableError as exc:
-                self._whatsapp_frontend_disabled = True
-                logging.warning("%s; continuing without whatsapp frontend", exc)
+        self._telegram_conflict_logged_at = None
+        self._telegram_retry_after = None
+        self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
+        for update in updates:
+            self._telegram_offset = update.update_id + 1
+            self._offset = self._telegram_offset
+            self._handle_update(update)
+        return len(updates)
 
-        if self.google_fi and not self._google_fi_frontend_disabled:
-            try:
-                for update in self.google_fi.get_updates():
-                    self._handle_update(update)
-            except GoogleFiFrontendUnavailableError as exc:
-                self._google_fi_frontend_disabled = True
-                logging.warning("%s; continuing without google_fi frontend", exc)
+    def _poll_signal_once(self) -> int:
+        if not self.signal or self._signal_frontend_disabled:
+            return 0
+        try:
+            updates = self.signal.get_updates()
+        except SignalFrontendUnavailableError as exc:
+            self._signal_frontend_disabled = True
+            self._set_frontend_disabled("signal", error=str(exc))
+            logging.warning("%s; continuing with telegram-only frontend", exc)
+            return 0
+        for update in updates:
+            self._handle_update(update)
+        return len(updates)
+
+    def _poll_whatsapp_once(self) -> int:
+        if not self.whatsapp or self._whatsapp_frontend_disabled:
+            return 0
+        try:
+            updates = self.whatsapp.get_updates()
+        except WhatsAppFrontendUnavailableError as exc:
+            self._whatsapp_frontend_disabled = True
+            self._set_frontend_disabled("whatsapp", error=str(exc))
+            logging.warning("%s; continuing without whatsapp frontend", exc)
+            return 0
+        for update in updates:
+            self._handle_update(update)
+        return len(updates)
+
+    def _poll_google_fi_once(self) -> int:
+        if not self.google_fi or self._google_fi_frontend_disabled:
+            return 0
+        try:
+            updates = self.google_fi.get_updates()
+        except GoogleFiFrontendUnavailableError as exc:
+            self._google_fi_frontend_disabled = True
+            self._set_frontend_disabled("google_fi", error=str(exc))
+            logging.warning("%s; continuing without google_fi frontend", exc)
+            return 0
+        for update in updates:
+            self._handle_update(update)
+        return len(updates)
 
     @staticmethod
     def _is_telegram_conflict_error(exc: RuntimeError) -> bool:
@@ -1321,6 +1496,7 @@ class BotRunner:
             f"- handled_messages: {self._handled_messages_count}",
             f"- active_chats_in_memory: {len(self._history)}",
         ]
+        lines.extend(self._frontend_status_lines())
 
         status = self._read_collector_status()
         if not status:
@@ -1975,6 +2151,10 @@ class BotRunner:
         return "".join(ch for ch in identifier if ch == "+" or ch.isdigit())
 
     def _handle_update(self, update: IncomingMessage) -> None:
+        with self._processing_lock:
+            self._handle_update_locked(update)
+
+    def _handle_update_locked(self, update: IncomingMessage) -> None:
         backend = getattr(update, "backend", "telegram")
         update_id = getattr(update, "update_id", None)
         event_id = str(update_id) if update_id is not None else None
@@ -2200,6 +2380,21 @@ class BotRunner:
         return group_part
 
     def _handle_message(
+        self,
+        *args: Any,
+        conversation_name: str | None = None,
+        sent_at: str | None = None,
+        event_id: str | None = None,
+    ) -> bool:
+        with self._processing_lock:
+            return self._handle_message_locked(
+                *args,
+                conversation_name=conversation_name,
+                sent_at=sent_at,
+                event_id=event_id,
+            )
+
+    def _handle_message_locked(
         self,
         *args: Any,
         conversation_name: str | None = None,
