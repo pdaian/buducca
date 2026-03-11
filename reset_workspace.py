@@ -34,12 +34,40 @@ def _safe_within_repo(root: Path, candidate: Path) -> bool:
         return False
 
 
+def _add_repo_target(targets: set[Path], repo_root: Path, path: Path) -> None:
+    resolved = path.resolve()
+    if _safe_within_repo(repo_root, resolved):
+        targets.add(resolved)
+
+
+def _add_telegram_session_targets(targets: set[Path], repo_root: Path, session_path: str) -> None:
+    if not isinstance(session_path, str) or not session_path.strip():
+        return
+
+    base_target = (repo_root / session_path).resolve()
+    _add_repo_target(targets, repo_root, base_target)
+
+    if base_target.suffix == ".session":
+        session_file = base_target
+    else:
+        session_file = base_target.with_suffix(f"{base_target.suffix}.session") if base_target.suffix else base_target.with_suffix(".session")
+    _add_repo_target(targets, repo_root, session_file)
+    _add_repo_target(targets, repo_root, session_file.with_name(f"{session_file.name}-journal"))
+
+    if base_target.suffix:
+        state_target = base_target.with_suffix(f"{base_target.suffix}.updates.json")
+    else:
+        state_target = base_target.with_suffix(".updates.json")
+    _add_repo_target(targets, repo_root, state_target)
+
+
 def _gather_targets(repo_root: Path) -> list[Path]:
     config = _load_json(repo_root / "config.json")
     runtime = config.get("runtime", {}) if isinstance(config, dict) else {}
     workspace_dir = Path(runtime.get("workspace_dir", DEFAULT_WORKSPACE))
+    collector_config_path = runtime.get("collector_config_path", "agent_config.json")
 
-    agent_config = _load_json(repo_root / "agent_config.json")
+    agent_config = _load_json(repo_root / collector_config_path) if isinstance(collector_config_path, str) and collector_config_path.strip() else {}
     collector_cfg = {}
     if isinstance(agent_config, dict):
         collectors = agent_config.get("collectors", {})
@@ -53,33 +81,22 @@ def _gather_targets(repo_root: Path) -> list[Path]:
 
     targets: set[Path] = set()
 
-    ws_target = (repo_root / workspace_dir).resolve()
-    if _safe_within_repo(repo_root, ws_target):
-        targets.add(ws_target)
+    _add_repo_target(targets, repo_root, repo_root / workspace_dir)
 
-    data_target = (repo_root / "data").resolve()
-    if _safe_within_repo(repo_root, data_target):
-        targets.add(data_target)
+    _add_repo_target(targets, repo_root, repo_root / "data")
 
     for relative_path in (
         "telegram_user.session",
         "telegram_user.session-journal",
         "telegram_user.updates.json",
     ):
-        legacy_target = (repo_root / relative_path).resolve()
-        if _safe_within_repo(repo_root, legacy_target):
-            targets.add(legacy_target)
+        _add_repo_target(targets, repo_root, repo_root / relative_path)
 
-    if isinstance(session_path, str) and session_path.strip():
-        session_target = (repo_root / session_path).resolve()
-        if _safe_within_repo(repo_root, session_target):
-            targets.add(session_target)
-            if session_target.suffix:
-                state_target = session_target.with_suffix(f"{session_target.suffix}.updates.json")
-            else:
-                state_target = session_target.with_suffix(".updates.json")
-            if _safe_within_repo(repo_root, state_target):
-                targets.add(state_target)
+    telegram_cfg = config.get("telegram", {}) if isinstance(config, dict) else {}
+    if isinstance(telegram_cfg, dict):
+        _add_telegram_session_targets(targets, repo_root, telegram_cfg.get("session_path", ""))
+
+    _add_telegram_session_targets(targets, repo_root, session_path)
 
     # Common local ephemeral artifacts.
     for pattern in (
