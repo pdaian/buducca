@@ -251,6 +251,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="whatsapp-client", description="Built-in WhatsApp JSON frontend stubs")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    pair = subparsers.add_parser("pair", help="pair a WhatsApp Web session via the in-repo bridge")
+    pair.add_argument("--account", default="default")
+    pair.add_argument("--session", default="")
+    pair.add_argument("--browser-path", default="")
+    pair.add_argument("--ready-timeout-seconds", type=int, default=45)
+    pair.add_argument("--signup-wait-seconds", type=int, default=300)
+    pair.add_argument("--headless", dest="headless", action="store_true")
+    pair.add_argument("--headful", dest="headless", action="store_false")
+    pair.set_defaults(headless=False)
+
     receive = subparsers.add_parser("receive", help="emit JSON updates")
     receive.add_argument("--account", default="default")
 
@@ -261,9 +271,35 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _session_from_account(account: str) -> str:
+    return f"data/whatsapp-{account}"
+
+
+def _run_pair(args: argparse.Namespace) -> int:
+    from . import whatsapp_bridge
+
+    session = args.session or _session_from_account(args.account)
+    bridge_args = [
+        "pair",
+        "--session",
+        session,
+        "--ready-timeout-seconds",
+        str(args.ready_timeout_seconds),
+        "--signup-wait-seconds",
+        str(args.signup_wait_seconds),
+    ]
+    if args.browser_path:
+        bridge_args.extend(["--browser-path", args.browser_path])
+    bridge_args.append("--headless" if args.headless else "--headful")
+    return whatsapp_bridge.main(bridge_args)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "pair":
+        return _run_pair(args)
 
     if args.command == "receive":
         print(json.dumps({"messages": []}))

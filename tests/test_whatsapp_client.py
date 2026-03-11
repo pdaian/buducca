@@ -96,6 +96,23 @@ class WhatsAppClientTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue().strip(), '{"messages": []}')
 
+    def test_main_pair_delegates_to_bridge_with_default_session(self) -> None:
+        with patch("messaging_llm_bot.whatsapp_bridge.main", return_value=0) as bridge_main:
+            exit_code = main(["pair", "--account", "personal"])
+        self.assertEqual(exit_code, 0)
+        bridge_main.assert_called_once_with(
+            [
+                "pair",
+                "--session",
+                "data/whatsapp-personal",
+                "--ready-timeout-seconds",
+                "45",
+                "--signup-wait-seconds",
+                "300",
+                "--headful",
+            ]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
