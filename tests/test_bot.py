@@ -133,6 +133,19 @@ class BotTests(unittest.TestCase):
 
         self.assertTrue(bot.llm.debug)
 
+    def test_init_does_not_create_workspace_until_runtime_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace_dir = Path(td) / "workspace"
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=str(workspace_dir)),
+            )
+
+            BotRunner(cfg)
+
+            self.assertFalse(workspace_dir.exists())
+
     def test_split_long_message(self) -> None:
         bot = self.make_bot()
         parts = bot._split_for_telegram("a" * 5000)
@@ -169,7 +182,7 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [])
             recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
             self.assertIn('"text": "collect me"', recent)
-            self.assertEqual((Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8"), "")
+            self.assertFalse((Path(td) / "logs" / "agenta_queries.history").exists())
 
     def test_replied_message_logs_agenta_query(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -497,8 +510,7 @@ class BotTests(unittest.TestCase):
                 IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="1", text="collect me")
             )
 
-            recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
-            self.assertEqual(recent, "")
+            self.assertFalse((Path(td) / "telegram.recent").exists())
 
     def test_signal_voice_update_from_unauthorized_sender_is_ignored(self) -> None:
         cfg = BotConfig(
@@ -869,7 +881,7 @@ class BotTests(unittest.TestCase):
             telegram_history = Path(td) / "logs" / "telegram.history"
             signal_history = Path(td) / "logs" / "signal.history"
             self.assertTrue(telegram_history.exists())
-            self.assertTrue(signal_history.exists())
+            self.assertFalse(signal_history.exists())
 
             events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[0]["direction"], "incoming")

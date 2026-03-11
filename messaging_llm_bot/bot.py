@@ -117,18 +117,6 @@ class BotRunner:
             lambda: deque(maxlen=self.config.llm.history_messages * 2)
         )
         self._workspace = Workspace(self.config.runtime.workspace_dir)
-        ensure_memory_layout(self._workspace)
-        self._workspace.create_dir("logs")
-        self._workspace.write_text("logs/telegram.history", self._workspace.read_text("logs/telegram.history", default=""))
-        self._workspace.write_text("logs/signal.history", self._workspace.read_text("logs/signal.history", default=""))
-        self._workspace.write_text("logs/whatsapp.history", self._workspace.read_text("logs/whatsapp.history", default=""))
-        self._workspace.write_text("logs/google_fi.history", self._workspace.read_text("logs/google_fi.history", default=""))
-        self._workspace.write_text("logs/agenta_queries.history", self._workspace.read_text("logs/agenta_queries.history", default=""))
-        self._workspace.write_text("telegram.recent", self._workspace.read_text("telegram.recent", default=""))
-        self._workspace.write_text("signal.messages.recent", self._workspace.read_text("signal.messages.recent", default=""))
-        self._workspace.write_text("whatsapp.messages.recent", self._workspace.read_text("whatsapp.messages.recent", default=""))
-        self._workspace.write_text("google_fi.messages.recent", self._workspace.read_text("google_fi.messages.recent", default=""))
-        self._workspace.write_text("google_fi.calls.recent", self._workspace.read_text("google_fi.calls.recent", default=""))
         self._recent_unanswered_keys: dict[str, set[str]] = {
             "telegram.recent": set(),
             "signal.messages.recent": set(),

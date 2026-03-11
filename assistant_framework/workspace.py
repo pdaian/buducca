@@ -8,7 +8,6 @@ import shutil
 class Workspace:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
         self._resolved_root = self.root.resolve()
 
     def resolve(self, relative_path: str) -> Path:

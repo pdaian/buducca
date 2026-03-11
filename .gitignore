@@ -1,3 +1,6 @@
 workspace/
 data/
 config.json
+telegram_user.session
+telegram_user.session-journal
+telegram_user.updates.json

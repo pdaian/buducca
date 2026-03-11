@@ -61,6 +61,15 @@ def _gather_targets(repo_root: Path) -> list[Path]:
     if _safe_within_repo(repo_root, data_target):
         targets.add(data_target)
 
+    for relative_path in (
+        "telegram_user.session",
+        "telegram_user.session-journal",
+        "telegram_user.updates.json",
+    ):
+        legacy_target = (repo_root / relative_path).resolve()
+        if _safe_within_repo(repo_root, legacy_target):
+            targets.add(legacy_target)
+
     if isinstance(session_path, str) and session_path.strip():
         session_target = (repo_root / session_path).resolve()
         if _safe_within_repo(repo_root, session_target):

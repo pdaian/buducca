@@ -6,6 +6,12 @@ from assistant_framework.workspace import Workspace
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_init_does_not_create_root_until_needed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "workspace"
+            Workspace(root)
+            self.assertFalse(root.exists())
+
     def test_read_write_append(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             ws = Workspace(td)

@@ -30,3 +30,14 @@ class ResetWorkspaceTests(unittest.TestCase):
 
         self.assertIn((repo_root / "runtime_state/telegram_user").resolve(), targets)
         self.assertIn((repo_root / "runtime_state/telegram_user.updates.json").resolve(), targets)
+
+    def test_gather_targets_includes_legacy_root_telegram_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(td)
+            (repo_root / "config.json").write_text("{}", encoding="utf-8")
+
+            targets = _gather_targets(repo_root)
+
+        self.assertIn((repo_root / "telegram_user.session").resolve(), targets)
+        self.assertIn((repo_root / "telegram_user.session-journal").resolve(), targets)
+        self.assertIn((repo_root / "telegram_user.updates.json").resolve(), targets)
