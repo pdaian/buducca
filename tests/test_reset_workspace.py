@@ -29,3 +29,4 @@ class ResetWorkspaceTests(unittest.TestCase):
             targets = _gather_targets(repo_root)
 
         self.assertIn((repo_root / "runtime_state/telegram_user").resolve(), targets)
+        self.assertIn((repo_root / "runtime_state/telegram_user.updates.json").resolve(), targets)

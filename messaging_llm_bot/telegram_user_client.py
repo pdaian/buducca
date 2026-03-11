@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from .interfaces import IncomingMessage
@@ -15,7 +16,38 @@ class TelegramUserClient:
         self.session_path = session_path
         self.dialog_limit = dialog_limit
         self.message_limit = message_limit
-        self._last_message_ids: dict[int, int] = {}
+        self._last_message_ids = self._load_state()
+
+    def _state_path(self) -> Path:
+        session = Path(self.session_path)
+        if session.suffix:
+            return session.with_suffix(f"{session.suffix}.updates.json")
+        return session.with_suffix(".updates.json")
+
+    def _load_state(self) -> dict[int, int]:
+        state_path = self._state_path()
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        state: dict[int, int] = {}
+        for chat_id, message_id in raw.items():
+            try:
+                parsed_chat_id = int(chat_id)
+                parsed_message_id = int(message_id)
+            except (TypeError, ValueError):
+                continue
+            if parsed_message_id > 0:
+                state[parsed_chat_id] = parsed_message_id
+        return state
+
+    def _save_state(self) -> None:
+        state_path = self._state_path()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = {str(chat_id): message_id for chat_id, message_id in sorted(self._last_message_ids.items())}
+        state_path.write_text(json.dumps(serialized, separators=(",", ":")), encoding="utf-8")
 
     def _ensure_client(self):
         try:
@@ -36,6 +68,7 @@ class TelegramUserClient:
                 )
 
             updates: list[IncomingMessage] = []
+            state_changed = False
             async for dialog in client.iter_dialogs(limit=self.dialog_limit):
                 entity = dialog.entity
                 chat_id = int(getattr(entity, "id", 0) or 0)
@@ -66,6 +99,10 @@ class TelegramUserClient:
                     )
                 if max_id > min_id:
                     self._last_message_ids[chat_id] = max_id
+                    state_changed = True
+
+            if state_changed:
+                self._save_state()
 
             updates.sort(key=lambda item: item.update_id)
             return updates

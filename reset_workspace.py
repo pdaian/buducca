@@ -65,6 +65,12 @@ def _gather_targets(repo_root: Path) -> list[Path]:
         session_target = (repo_root / session_path).resolve()
         if _safe_within_repo(repo_root, session_target):
             targets.add(session_target)
+            if session_target.suffix:
+                state_target = session_target.with_suffix(f"{session_target.suffix}.updates.json")
+            else:
+                state_target = session_target.with_suffix(".updates.json")
+            if _safe_within_repo(repo_root, state_target):
+                targets.add(state_target)
 
     # Common local ephemeral artifacts.
     for pattern in (
