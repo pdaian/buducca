@@ -213,6 +213,7 @@ class BotRunner:
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
                 "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
                 "When workspace evidence is provided, prefer it over memory guesses and cite the source paths you used.",
+                "Do not mention source paths unless you explicitly referenced them in the answer.",
                 "Incoming attachments are saved under workspace/attachments/YYYY-MM-DD/.",
                 "Saved filenames include the sending platform, sender name, and Unix timestamp; PDFs also get a sibling .ocr.txt file when local extraction or OCR succeeds.",
                 "If attachment paths or OCR text are included in a user turn, use them as first-party workspace context.",

@@ -382,7 +382,7 @@ class BotTests(unittest.TestCase):
             )
             bot = BotRunner(cfg)
             bot.telegram = DummyTelegram()
-            bot.llm = DummyLLM("Your timezone is America/New_York.")
+            bot.llm = DummyLLM("According to assistant/facts/timezone.json, your timezone is America/New_York.")
             Path(td, "assistant", "facts").mkdir(parents=True, exist_ok=True)
             Path(td, "assistant", "facts", "timezone.json").write_text(
                 json.dumps({"id": "timezone", "statement": "timezone is America/New_York"}),
@@ -397,6 +397,26 @@ class BotTests(unittest.TestCase):
             self.assertEqual(len(traces), 1)
             trace = json.loads(traces[0].read_text(encoding="utf-8"))
             self.assertEqual(trace["final_reply"], bot.telegram.sent[0][1])
+
+    def test_workspace_evidence_is_not_cited_when_reply_does_not_reference_it(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("Your timezone is America/New_York.")
+            Path(td, "assistant", "facts").mkdir(parents=True, exist_ok=True)
+            Path(td, "assistant", "facts", "timezone.json").write_text(
+                json.dumps({"id": "timezone", "statement": "timezone is America/New_York"}),
+                encoding="utf-8",
+            )
+
+            bot._handle_message(1, "what is my timezone")
+
+            self.assertNotIn("Sources:", bot.telegram.sent[0][1])
 
 
     def test_telegram_chat_not_allowed_is_blocked(self) -> None:
@@ -1211,6 +1231,7 @@ class BotTests(unittest.TestCase):
             self.assertIn("save them with the learn skill as a concise one-line learning", system_prompt)
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
+            self.assertIn("Do not mention source paths unless you explicitly referenced them in the answer.", system_prompt)
 
     def test_system_prompt_includes_configured_file_skill_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as td:

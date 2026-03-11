@@ -78,12 +78,19 @@ def format_evidence_context(evidence: list[Evidence]) -> str:
 def append_sources(reply: str, evidence: list[Evidence]) -> str:
     if not evidence or "Sources:" in reply:
         return reply
-    lines = [reply.rstrip(), "", "Sources:"]
+    referenced_sources: list[str] = []
     seen: set[str] = set()
     for item in evidence:
         source = item.path.split("#", 1)[0]
         if source in seen:
             continue
+        if source not in reply and item.path not in reply:
+            continue
         seen.add(source)
+        referenced_sources.append(source)
+    if not referenced_sources:
+        return reply
+    lines = [reply.rstrip(), "", "Sources:"]
+    for source in referenced_sources:
         lines.append(f"- {source}")
     return "\n".join(lines).strip()
