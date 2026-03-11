@@ -249,7 +249,9 @@ class GoogleFiClient:
                 timestamp = float(value)
                 if timestamp > 1_000_000_000_000:
                     timestamp /= 1000.0
-                return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                logger.debug("Google Fi extracted sent_at from numeric key=%s raw=%r parsed=%s", key, value, parsed)
+                return parsed
             if isinstance(value, str):
                 cleaned = value.strip()
                 if not cleaned:
@@ -258,7 +260,9 @@ class GoogleFiClient:
                     timestamp = float(cleaned)
                     if timestamp > 1_000_000_000_000:
                         timestamp /= 1000.0
-                    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                    parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                    logger.debug("Google Fi extracted sent_at from digit-string key=%s raw=%r parsed=%s", key, value, parsed)
+                    return parsed
                 try:
                     parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
                 except ValueError:
@@ -266,10 +270,20 @@ class GoogleFiClient:
                 if parsed is not None:
                     if parsed.tzinfo is None:
                         parsed = parsed.replace(tzinfo=timezone.utc)
-                    return parsed.isoformat()
+                    rendered = parsed.isoformat()
+                    logger.debug("Google Fi extracted sent_at from iso key=%s raw=%r parsed=%s", key, value, rendered)
+                    return rendered
                 parsed_google_timestamp = _parse_google_messages_timestamp(cleaned)
                 if parsed_google_timestamp:
+                    logger.debug(
+                        "Google Fi extracted sent_at from Google Messages timestamp key=%s raw=%r parsed=%s",
+                        key,
+                        value,
+                        parsed_google_timestamp,
+                    )
                     return parsed_google_timestamp
+                logger.debug("Google Fi timestamp candidate was not parseable key=%s raw=%r", key, value)
+        logger.debug("Google Fi item did not include a parseable sent_at; keys=%s item=%r", sorted(item.keys()), item)
         return None
 
     def _extract_attachments(self, item: dict[str, Any]) -> list[IncomingAttachment]:
@@ -579,6 +593,7 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
     cleaned = " ".join(value.replace("\n", " ").split())
     cleaned = re.sub(r"^(sent|received)\s+", "", cleaned, flags=re.IGNORECASE)
     if not cleaned:
+        logger.debug("Google Fi timestamp parser received empty cleaned value raw=%r", value)
         return None
 
     now = reference or datetime.now().astimezone()
@@ -591,12 +606,15 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
         try:
             parsed_time = datetime.strptime(time_part, "%I:%M %p")
         except ValueError:
+            logger.debug("Google Fi relative timestamp parse failed raw=%r cleaned=%r", value, cleaned)
             return None
         day = now.date()
         if day_label == "yesterday":
             day = day.fromordinal(day.toordinal() - 1)
         candidate = datetime.combine(day, parsed_time.time(), tzinfo=local_tz)
-        return candidate.isoformat()
+        parsed = candidate.isoformat()
+        logger.debug("Google Fi parsed relative timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, parsed)
+        return parsed
 
     formats = [
         ("%a, %b %d, %Y, %I:%M %p", False),
@@ -618,7 +636,9 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
             candidate = datetime.combine(now.date(), parsed.time(), tzinfo=local_tz)
             if candidate > now:
                 candidate -= timedelta(days=1)
-            return candidate.isoformat()
+            rendered = candidate.isoformat()
+            logger.debug("Google Fi parsed inferred same-day timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
+            return rendered
         if needs_inference:
             candidate = parsed.replace(year=now.year, tzinfo=local_tz)
             if candidate > now:
@@ -626,8 +646,13 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
                     candidate = candidate.replace(year=candidate.year - 1)
                 except ValueError:
                     candidate -= timedelta(days=365)
-            return candidate.isoformat()
-        return parsed.replace(tzinfo=local_tz).isoformat()
+            rendered = candidate.isoformat()
+            logger.debug("Google Fi parsed inferred-year timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
+            return rendered
+        rendered = parsed.replace(tzinfo=local_tz).isoformat()
+        logger.debug("Google Fi parsed explicit timestamp raw=%r cleaned=%r parsed=%s", value, cleaned, rendered)
+        return rendered
+    logger.debug("Google Fi timestamp parser could not parse raw=%r cleaned=%r", value, cleaned)
     return None
 
 

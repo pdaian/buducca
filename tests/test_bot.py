@@ -2070,6 +2070,8 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(json.loads(history_line)["logged_at"], "2026-03-10T13:23:00+00:00")
             self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
+            self.assertNotEqual(json.loads(history_line)["collected_at"], "2026-03-10T13:23:00+00:00")
+            self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
 
     def test_google_fi_unanswered_messages_are_sorted_by_logged_at(self) -> None:
         with tempfile.TemporaryDirectory() as td:

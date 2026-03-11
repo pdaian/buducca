@@ -1657,11 +1657,13 @@ class BotRunner:
         account: str | None = None,
         source: str = "frontend_log",
         logged_at: str | None = None,
+        collected_at: str | None = None,
     ) -> dict[str, str | None]:
-        timestamp = logged_at or datetime.now(timezone.utc).isoformat()
-        return {
-            "logged_at": timestamp,
-            "collected_at": timestamp,
+        logged_timestamp = logged_at or datetime.now(timezone.utc).isoformat()
+        collected_timestamp = collected_at or datetime.now(timezone.utc).isoformat()
+        payload = {
+            "logged_at": logged_timestamp,
+            "collected_at": collected_timestamp,
             "source": source,
             "backend": backend,
             "account": account or "default",
@@ -1673,6 +1675,18 @@ class BotRunner:
             "sender_contact": sender_contact,
             "text": text,
         }
+        logging.debug(
+            "Built frontend record backend=%s conversation=%s sender=%s source=%s logged_at=%s collected_at=%s "
+            "timestamps_match=%s",
+            backend,
+            conversation_id,
+            sender_id,
+            source,
+            logged_timestamp,
+            collected_timestamp,
+            logged_timestamp == collected_timestamp,
+        )
+        return payload
 
     def _is_authorized_frontend_sender(self, backend: str, conversation_id: str, sender_id: str) -> bool:
         if backend == "telegram":
