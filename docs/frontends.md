@@ -27,7 +27,7 @@ python3 -m messaging_llm_bot.signal_signup --config config
 
 ## WhatsApp
 
-Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. The example config now points at the in-repo bridge: `node messaging_llm_bot/whatsapp_bridge.js`.
+Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. The example config now points at the in-repo bridge: `python3 -m messaging_llm_bot.whatsapp_bridge`.
 
 Backend flow:
 
@@ -35,7 +35,7 @@ Backend flow:
 - On each poll, `WhatsAppClient.get_updates()` runs `receive_command` as a subprocess and expects JSON on stdout.
 - The JSON is normalized into internal `IncomingMessage` objects, then processed by the same bot pipeline used by the other frontends.
 - When the bot replies, `WhatsAppClient.send_message()` runs `send_command` with `{recipient}` and `{message}` replaced.
-- The concrete bridge in this repo uses `whatsapp-web.js`, persists linked-device state under your configured `--session` path, and prints the signup QR in the terminal during pairing.
+- The concrete bridge in this repo uses Playwright against WhatsApp Web, persists browser state under your configured `--session` path, and opens the signup QR in a real browser window during pairing.
 
 One-time signup/help command:
 
@@ -47,7 +47,8 @@ Repo setup:
 
 ```bash
 cp -R config.example config
-npm install
+pip install playwright
+python3 -m playwright install chromium
 python3 -m messaging_llm_bot.whatsapp_signup --config config
 ```
 
@@ -60,15 +61,17 @@ Default config shape:
   "allowed_sender_ids": [],
   "allowed_group_ids_when_sender_not_allowed": [],
   "receive_command": [
-    "node",
-    "messaging_llm_bot/whatsapp_bridge.js",
+    "python3",
+    "-m",
+    "messaging_llm_bot.whatsapp_bridge",
     "receive",
     "--session",
     "data/whatsapp-personal"
   ],
   "send_command": [
-    "node",
-    "messaging_llm_bot/whatsapp_bridge.js",
+    "python3",
+    "-m",
+    "messaging_llm_bot.whatsapp_bridge",
     "send",
     "--session",
     "data/whatsapp-personal",
@@ -85,10 +88,10 @@ Default config shape:
 Signup sequence:
 
 ```bash
-node messaging_llm_bot/whatsapp_bridge.js pair --session data/whatsapp-personal
+python3 -m messaging_llm_bot.whatsapp_bridge pair --session data/whatsapp-personal --headful
 ```
 
-During `pair`, the terminal prints a QR. Scan it from WhatsApp on your phone:
+During `pair`, WhatsApp Web opens in a browser window. Scan the QR from WhatsApp on your phone:
 
 ```text
 WhatsApp -> Settings -> Linked Devices -> Link a Device
@@ -97,8 +100,8 @@ WhatsApp -> Settings -> Linked Devices -> Link a Device
 After pairing, test the same commands BUDUCCA will use:
 
 ```bash
-node messaging_llm_bot/whatsapp_bridge.js receive --session data/whatsapp-personal
-node messaging_llm_bot/whatsapp_bridge.js send --session data/whatsapp-personal --recipient "+15550001111" --message "test"
+python3 -m messaging_llm_bot.whatsapp_bridge receive --session data/whatsapp-personal
+python3 -m messaging_llm_bot.whatsapp_bridge send --session data/whatsapp-personal --recipient "+15550001111" --message "test"
 python3 run_bot.py --config config
 ```
 

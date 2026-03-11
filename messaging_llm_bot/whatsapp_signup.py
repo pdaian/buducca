@@ -55,13 +55,14 @@ def run_signup(config_path: str) -> int:
     message = f"""WhatsApp signup is concrete in this repo.
 
 Install the bridge dependencies once:
-- `npm install`
+- `pip install playwright`
+- `python3 -m playwright install chromium`
 
 Configured commands:
 - `whatsapp.receive_command`: `{json.dumps(receive_command)}`
 - `whatsapp.send_command`: `{json.dumps(send_command)}`
 
-Pair the WhatsApp account and print the signup QR:
+Pair the WhatsApp account and open the signup QR in a browser window:
 - `{_render_shell(pair_command)}`
 
 On your phone:
@@ -75,7 +76,8 @@ Then start the bot:
 - `python3 run_bot.py --config config`
 
 Notes:
-- The linked-device session is persisted under the `--session` path in your config.
+- This Playwright bridge automates WhatsApp Web, so it remains subject to upstream UI changes.
+- The linked-device browser profile is persisted under the `--session` path in your config.
 - If you want attachment sending, keep `{{attachment}}` in `send_command` and call the attach-file skill.
 """
     print(message)

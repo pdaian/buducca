@@ -4,15 +4,17 @@
   "allowed_sender_ids": [],
   "allowed_group_ids_when_sender_not_allowed": [],
   "receive_command": [
-    "node",
-    "messaging_llm_bot/whatsapp_bridge.js",
+    "python3",
+    "-m",
+    "messaging_llm_bot.whatsapp_bridge",
     "receive",
     "--session",
     "data/whatsapp-personal"
   ],
   "send_command": [
-    "node",
-    "messaging_llm_bot/whatsapp_bridge.js",
+    "python3",
+    "-m",
+    "messaging_llm_bot.whatsapp_bridge",
     "send",
     "--session",
     "data/whatsapp-personal",
