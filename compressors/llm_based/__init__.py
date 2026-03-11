@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shlex
-from pathlib import Path
 from difflib import SequenceMatcher
 
 from assistant_framework.collector_shell import run_command

@@ -1,7 +1,6 @@
 import json
 import tempfile
 import unittest
-from pathlib import Path
 
 from assistant_framework.collectors import Collector, CollectorRunner
 from assistant_framework.workspace import Workspace
