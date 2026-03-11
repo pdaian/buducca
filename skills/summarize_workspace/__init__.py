@@ -7,7 +7,13 @@ DESCRIPTION = "Summarize workspace files and their sizes."
 
 
 def run(workspace: Workspace, args: dict) -> str:
-    files = sorted([p for p in workspace.root.rglob("*") if p.is_file()])
+    files = sorted(
+        [
+            path
+            for path in workspace.root.rglob("*")
+            if path.is_file() and not path.relative_to(workspace.root).parts[:1] == ("attachments",)
+        ]
+    )
     if not files:
         return "Workspace is empty."
 

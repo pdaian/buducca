@@ -2,6 +2,7 @@
 
 ## What it does
 Lists workspace files and sizes, up to `max_items`.
+Skips the `attachments/` folder so large inbound files do not dominate the summary.
 
 ## Dependencies
 - Python standard library only.
