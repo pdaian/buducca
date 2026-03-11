@@ -1595,7 +1595,10 @@ class BotRunner:
             if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:
                 logging.warning("Blocked message from unauthorized telegram chat_id=%s", chat_id)
                 return False
-            if self._allowed_telegram_sender_ids:
+            sender_allowlist_required = bool(self._allowed_telegram_sender_ids) or (
+                bool(self.config.telegram) and self.config.telegram.mode == "user"
+            )
+            if sender_allowlist_required:
                 if telegram_sender_id in self._allowed_telegram_sender_ids:
                     return True
                 if chat_id in self._allowed_telegram_group_ids_when_sender_not_allowed:
