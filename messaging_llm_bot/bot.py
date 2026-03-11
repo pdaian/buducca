@@ -121,6 +121,7 @@ class BotRunner:
         self._workspace = Workspace(self.config.runtime.workspace_dir)
         self._recent_unanswered_keys: dict[str, set[str]] = {
             "telegram.recent": set(),
+            "telegram.messages.recent": set(),
             "signal.messages.recent": set(),
             "whatsapp.messages.recent": set(),
             "google_fi.messages.recent": set(),
@@ -1558,94 +1559,82 @@ class BotRunner:
         if not self._backend_stores_unanswered_messages(backend):
             return
 
+        self._append_recent_frontend_message(
+            backend=backend,
+            conversation_id=conversation_id,
+            conversation_name=conversation_name,
+            sender_id=sender_id,
+            text=text,
+            event_id=event_id,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+            logged_at=logged_at,
+            sent_at=logged_at,
+        )
+
+    @staticmethod
+    def _recent_workspace_paths_for_backend(backend: str) -> tuple[str, ...]:
         if backend == "telegram":
-            if not self._should_append_unanswered_message("telegram.recent", conversation_id, sender_id, text, event_id=event_id):
-                return
-            payload = self._build_frontend_record(
-                backend=backend,
-                direction="incoming",
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=text,
-                event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact or sender_id,
-                account="default",
-                source="frontend_log",
-                logged_at=logged_at,
-                sent_at=logged_at,
-            )
-            self._append_sorted_recent_message("telegram.recent", payload)
-            return
-
+            return ("telegram.recent", "telegram.messages.recent")
         if backend == "signal":
-            if not self._should_append_unanswered_message(
-                "signal.messages.recent", conversation_id, sender_id, text, event_id=event_id
-            ):
-                return
-            payload = self._build_frontend_record(
-                backend=backend,
-                direction="incoming",
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=text,
-                event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact or sender_id,
-                account="default",
-                source="frontend_log",
-                logged_at=logged_at,
-                sent_at=logged_at,
-            )
-            self._append_sorted_recent_message("signal.messages.recent", payload)
-            return
-
+            return ("signal.messages.recent",)
         if backend == "whatsapp":
-            if not self._should_append_unanswered_message(
-                "whatsapp.messages.recent", conversation_id, sender_id, text, event_id=event_id
-            ):
-                return
-            payload = self._build_frontend_record(
-                backend=backend,
-                direction="incoming",
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=text,
-                event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact or sender_id,
-                account=self.config.whatsapp.account if self.config.whatsapp else "default",
-                source="frontend_log",
-                logged_at=logged_at,
-                sent_at=logged_at,
-            )
-            self._append_sorted_recent_message("whatsapp.messages.recent", payload)
+            return ("whatsapp.messages.recent",)
+        if backend == "google_fi":
+            return ("google_fi.messages.recent",)
+        return ()
+
+    def _append_recent_frontend_message(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        conversation_name: str | None = None,
+        sender_id: str,
+        text: str,
+        event_id: str | None = None,
+        sender_name: str | None = None,
+        sender_contact: str | None = None,
+        logged_at: str | None = None,
+        sent_at: str | None = None,
+    ) -> None:
+        if not self._backend_stores_unanswered_messages(backend):
             return
 
-        if backend == "google_fi":
-            if not self._should_append_unanswered_message(
-                "google_fi.messages.recent", conversation_id, sender_id, text, event_id=event_id
-            ):
-                return
-            payload = self._build_frontend_record(
-                backend=backend,
-                direction="incoming",
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=text,
-                event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact or sender_id,
-                account=self.config.google_fi.account if self.config.google_fi else "default",
-                source="frontend_log",
-                logged_at=logged_at,
-                sent_at=logged_at,
-            )
-            self._append_sorted_recent_message("google_fi.messages.recent", payload)
+        recent_paths = self._recent_workspace_paths_for_backend(backend)
+        if not recent_paths:
+            return
+
+        payload = self._build_frontend_record(
+            backend=backend,
+            direction="incoming",
+            conversation_id=conversation_id,
+            conversation_name=conversation_name,
+            sender_id=sender_id,
+            text=text,
+            event_id=event_id,
+            sender_name=sender_name,
+            sender_contact=sender_contact or sender_id,
+            account=self._frontend_account_name(backend),
+            source="frontend_log",
+            logged_at=logged_at,
+            sent_at=sent_at,
+        )
+        appended = False
+        for file_path in recent_paths:
+            if not self._should_append_unanswered_message(file_path, conversation_id, sender_id, text, event_id=event_id):
+                continue
+            self._append_sorted_recent_message(file_path, payload)
+            appended = True
+        if appended:
+            return
+
+    def _frontend_account_name(self, backend: str) -> str:
+        if backend == "whatsapp" and self.config.whatsapp:
+            return self.config.whatsapp.account
+        if backend == "google_fi" and self.config.google_fi:
+            return self.config.google_fi.account
+        return "default"
 
     def _append_sorted_recent_message(self, file_path: str, payload: dict[str, Any]) -> None:
         entries: list[tuple[datetime | None, int, str]] = []
@@ -2013,6 +2002,18 @@ class BotRunner:
                 logged_at=sent_at,
                 sent_at=sent_at,
             )
+            self._append_recent_frontend_message(
+                backend=backend,
+                conversation_id=conversation_id,
+                conversation_name=conversation_name,
+                sender_id=sender_id,
+                text=message_text,
+                event_id=event_id,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+                logged_at=sent_at,
+                sent_at=sent_at,
+            )
             if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
                 if not self._should_append_unanswered_message(
                     "google_fi.calls.recent", conversation_id, sender_id, message_text, event_id=event_id
@@ -2042,6 +2043,7 @@ class BotRunner:
                     conversation_name=conversation_name,
                     sender_id=sender_id,
                     text=message_text,
+                    event_id=event_id,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                     logged_at=sent_at,
@@ -2056,6 +2058,7 @@ class BotRunner:
                 sender_contact,
                 conversation_name=conversation_name,
                 sent_at=sent_at,
+                event_id=event_id,
             )
             if not was_handled:
                 self._append_unanswered_collector_log(
@@ -2064,6 +2067,7 @@ class BotRunner:
                     conversation_name=conversation_name,
                     sender_id=sender_id,
                     text=message_text,
+                    event_id=event_id,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                     logged_at=sent_at,
@@ -2085,6 +2089,18 @@ class BotRunner:
                 logged_at=sent_at,
                 sent_at=sent_at,
             )
+            self._append_recent_frontend_message(
+                backend=backend,
+                conversation_id=conversation_id,
+                conversation_name=conversation_name,
+                sender_id=sender_id,
+                text=attachment_context,
+                event_id=event_id,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+                logged_at=sent_at,
+                sent_at=sent_at,
+            )
             self._handle_message(
                 backend,
                 conversation_id,
@@ -2094,6 +2110,7 @@ class BotRunner:
                 sender_contact,
                 conversation_name=conversation_name,
                 sent_at=sent_at,
+                event_id=event_id,
             )
             return
 
@@ -2137,7 +2154,26 @@ class BotRunner:
             sender_name=sender_name,
             sender_contact=sender_contact,
         )
-        self._handle_message(backend, conversation_id, sender_id, transcript_text, sender_name, sender_contact)
+        self._append_recent_frontend_message(
+            backend=backend,
+            conversation_id=conversation_id,
+            conversation_name=conversation_name,
+            sender_id=sender_id,
+            text=transcript_text,
+            event_id=event_id,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+        )
+        self._handle_message(
+            backend,
+            conversation_id,
+            sender_id,
+            transcript_text,
+            sender_name,
+            sender_contact,
+            conversation_name=conversation_name,
+            event_id=event_id,
+        )
 
     def _extract_signal_group_id(self, conversation_id: str) -> str:
         if not conversation_id.startswith(SignalClient.GROUP_CONVERSATION_PREFIX):
@@ -2159,7 +2195,13 @@ class BotRunner:
             return group_part.rsplit(WhatsAppClient.GROUP_ID_DELIMITER, 1)[-1]
         return group_part
 
-    def _handle_message(self, *args: Any, conversation_name: str | None = None, sent_at: str | None = None) -> bool:
+    def _handle_message(
+        self,
+        *args: Any,
+        conversation_name: str | None = None,
+        sent_at: str | None = None,
+        event_id: str | None = None,
+    ) -> bool:
         sender_name: str | None = None
         sender_contact: str | None = None
         if len(args) == 2:
@@ -2191,6 +2233,7 @@ class BotRunner:
                 conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
+                event_id=event_id,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
                 logged_at=sent_at,
@@ -2204,6 +2247,7 @@ class BotRunner:
                 conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=text,
+                event_id=event_id,
                 sender_name=sender_name,
                 sender_contact=sender_contact,
                 logged_at=sent_at,

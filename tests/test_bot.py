@@ -208,6 +208,60 @@ class BotTests(unittest.TestCase):
             self.assertIn('"query": "hi"', log)
             self.assertIn('"reply": "hello"', log)
 
+    def test_handled_telegram_message_is_persisted_to_recent_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    text="hi",
+                )
+            )
+
+            legacy_recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
+            compatibility_recent = (Path(td) / "telegram.messages.recent").read_text(encoding="utf-8")
+            self.assertIn('"text": "hi"', legacy_recent)
+            self.assertEqual(legacy_recent, compatibility_recent)
+
+    def test_handled_signal_message_is_persisted_to_recent_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                signal=SignalConfig(
+                    account="+15550000000",
+                    allowed_sender_ids=["+15551112222"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.signal = DummySignal()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="signal",
+                    conversation_id="+15551112222",
+                    sender_id="+15551112222",
+                    text="hi from signal",
+                )
+            )
+
+            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
+            self.assertIn('"text": "hi from signal"', recent)
+
     def test_handle_update_saves_attachment_under_dated_workspace_folder(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
