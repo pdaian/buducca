@@ -1220,6 +1220,32 @@ class BotTests(unittest.TestCase):
         self.assertIn("telegram_account: Alice (@alice_tg)", prompt[-1]["content"])
         self.assertTrue(prompt[-1]["content"].endswith("\n\nhi"))
 
+    def test_structured_memory_previews_are_added_at_start_of_user_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+            Path(td, "assistant", "facts").mkdir(parents=True)
+            Path(td, "assistant", "facts", "timezone.json").write_text('{"statement":"Timezone is America/New_York"}\n', encoding="utf-8")
+            Path(td, "assistant", "tasks").mkdir(parents=True)
+            Path(td, "assistant", "tasks", "history.jsonl").write_text('{"event":"upsert","id":"task-1"}\n', encoding="utf-8")
+
+            bot._handle_message("telegram", "1", "1", "hi", "Alice", "Alice (@alice_tg)")
+
+            user_prompt = bot.llm.messages[-1]["content"]
+            self.assertTrue(user_prompt.startswith("[Structured memory file previews]"))
+            self.assertIn("Each preview is a file preview of the last 50 lines of that file.", user_prompt)
+            self.assertIn("If you need more context from any file, use the read skill", user_prompt)
+            self.assertIn("File: assistant/facts/timezone.json", user_prompt)
+            self.assertIn("File: assistant/tasks/history.jsonl", user_prompt)
+            self.assertLess(user_prompt.index("[Structured memory file previews]"), user_prompt.index("[Sender context]"))
+            self.assertTrue(user_prompt.endswith("\n\nhi"))
+
     def test_system_prompt_includes_message_send_contacts_when_skill_enabled(self) -> None:
         runtime = RuntimeConfig(enable_message_send_skill=True)
         cfg = BotConfig(

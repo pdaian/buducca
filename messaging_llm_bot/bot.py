@@ -22,7 +22,12 @@ from assistant_framework.action_runtime import append_action_audit, decide_actio
 from assistant_framework.config_files import load_named_config_map
 from assistant_framework.ingestion import ingest_attachment
 from assistant_framework.memory import list_records, mark_routine_run, mark_task_notified
-from assistant_framework.retrieval import append_sources, format_evidence_context, search_workspace
+from assistant_framework.retrieval import (
+    append_sources,
+    build_structured_memory_context,
+    format_evidence_context,
+    search_workspace,
+)
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
 from assistant_framework.traces import write_trace
 
@@ -752,6 +757,7 @@ class BotRunner:
         self._current_evidence = search_workspace(self._workspace, text)
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[conversation_key])
+        structured_memory_context = build_structured_memory_context(self._workspace)
 
         sender_identity = sender_contact or sender_name or sender_id
         if backend == "telegram":
@@ -776,10 +782,11 @@ class BotRunner:
                 f"- sender: {sender_identity}"
             )
 
-        user_content = f"{sender_context}\n\n{text}"
+        user_parts = [structured_memory_context, sender_context, text]
         evidence_context = format_evidence_context(self._current_evidence)
         if evidence_context:
-            user_content = f"{user_content}\n\n{evidence_context}"
+            user_parts.append(evidence_context)
+        user_content = "\n\n".join(part for part in user_parts if part)
         messages.append({"role": "user", "content": user_content})
         return messages
 

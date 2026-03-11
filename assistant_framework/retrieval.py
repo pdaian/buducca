@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from .workspace import Workspace
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+_STRUCTURED_MEMORY_DIRS = (
+    "assistant/facts",
+    "assistant/people",
+    "assistant/tasks",
+    "assistant/routines",
+)
 
 
 @dataclass
@@ -17,6 +23,25 @@ class Evidence:
 
 def _tokenize(text: str) -> set[str]:
     return set(_TOKEN_RE.findall(text.lower()))
+
+
+def _tail_lines(text: str, limit: int) -> str:
+    lines = text.splitlines()
+    if len(lines) <= limit:
+        return text.strip()
+    return "\n".join(lines[-limit:]).strip()
+
+
+def _iter_structured_memory_files(workspace: Workspace) -> list[str]:
+    root = workspace.resolve(".")
+    files: list[str] = []
+    for directory in _STRUCTURED_MEMORY_DIRS:
+        base = root / directory
+        if not base.exists():
+            continue
+        for file_path in sorted(path for path in base.rglob("*") if path.is_file()):
+            files.append(str(file_path.relative_to(root)))
+    return files
 
 
 def _iter_candidate_documents(workspace: Workspace) -> list[tuple[str, str]]:
@@ -69,6 +94,26 @@ def format_evidence_context(evidence: list[Evidence]) -> str:
     for item in evidence:
         lines.append(f"- source: {item.path}")
         lines.append(f"  snippet: {item.snippet}")
+    return "\n".join(lines)
+
+
+def build_structured_memory_context(workspace: Workspace, *, line_limit: int = 50) -> str:
+    files = _iter_structured_memory_files(workspace)
+    lines = [
+        "[Structured memory file previews]",
+        "These previews cover every file currently under assistant/facts, assistant/people, assistant/tasks, and assistant/routines.",
+        f"Each preview is a file preview of the last {line_limit} lines of that file.",
+        "If you need more context from any file, use the read skill (the file skill with action `read`) on the relevant path.",
+    ]
+    if not files:
+        lines.append("No structured memory files found.")
+        return "\n".join(lines)
+
+    for relative_path in files:
+        content = workspace.read_text(relative_path, default="")
+        preview = _tail_lines(content, line_limit) if content else ""
+        lines.append(f"File: {relative_path}")
+        lines.append(preview or "(empty file)")
     return "\n".join(lines)
 
 
