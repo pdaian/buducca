@@ -8,7 +8,7 @@
     "mode": "bot",
     "api_id": 123456,
     "api_hash": "replace-with-your-telegram-api-hash",
-    "session_path": "workspace/telegram_user",
+    "session_path": "data/telegram_user",
     "allowed_sender_ids": [],
     "allowed_group_ids_when_sender_not_allowed": [],
     "store_unanswered_messages": false

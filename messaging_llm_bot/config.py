@@ -13,7 +13,7 @@ class TelegramConfig:
     mode: str = "bot"
     api_id: int | None = None
     api_hash: str = ""
-    session_path: str = "workspace/telegram_user"
+    session_path: str = "data/telegram_user"
     poll_interval_seconds: float = 1.0
     long_poll_timeout_seconds: int = 30
     allowed_chat_ids: list[int] = field(default_factory=list)

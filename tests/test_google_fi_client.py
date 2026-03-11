@@ -77,6 +77,15 @@ class GoogleFiCliErrorHandlingTests(unittest.TestCase):
 
         self.assertEqual(options.profile_dir, Path.cwd() / "data" / "google_fi_browser_profile")
 
+    def test_receive_state_defaults_to_top_level_data_dir(self) -> None:
+        from messaging_llm_bot.google_fi_client import DEFAULT_GOOGLE_FI_STATE_FILE, _resolve_google_fi_state_path
+
+        self.assertEqual(DEFAULT_GOOGLE_FI_STATE_FILE, "data/google_fi_receive_state.json")
+        self.assertEqual(
+            _resolve_google_fi_state_path(Path("workspace"), DEFAULT_GOOGLE_FI_STATE_FILE),
+            Path.cwd() / "data" / "google_fi_receive_state.json",
+        )
+
     def test_ensure_logged_in_waits_for_signup_in_headful_mode(self) -> None:
         from messaging_llm_bot import google_fi_client
 

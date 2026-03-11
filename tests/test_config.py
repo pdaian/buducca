@@ -164,7 +164,7 @@ class ConfigTests(unittest.TestCase):
                 "mode": "user",
                 "api_id": 123,
                 "api_hash": "h",
-                "session_path": "workspace/telegram_user",
+                "session_path": "data/telegram_user",
             },
             "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
         }

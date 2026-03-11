@@ -42,11 +42,13 @@ def _gather_targets(repo_root: Path) -> list[Path]:
     agent_config = _load_json(repo_root / "agent_config.json")
     collector_cfg = {}
     if isinstance(agent_config, dict):
-        collector_cfg = (
-            agent_config.get("collectors", {})
-            .get("telegram_recent", {}) or agent_config.get("collectors", {}).get("telegram_recent_collector", {})
-            .get("user_client", {})
-        )
+        collectors = agent_config.get("collectors", {})
+        if isinstance(collectors, dict):
+            telegram_recent = collectors.get("telegram_recent", {})
+            if not isinstance(telegram_recent, dict) or not telegram_recent:
+                telegram_recent = collectors.get("telegram_recent_collector", {})
+            if isinstance(telegram_recent, dict):
+                collector_cfg = telegram_recent.get("user_client", {}) or {}
     session_path = collector_cfg.get("session_path")
 
     targets: set[Path] = set()
@@ -54,6 +56,10 @@ def _gather_targets(repo_root: Path) -> list[Path]:
     ws_target = (repo_root / workspace_dir).resolve()
     if _safe_within_repo(repo_root, ws_target):
         targets.add(ws_target)
+
+    data_target = (repo_root / "data").resolve()
+    if _safe_within_repo(repo_root, data_target):
+        targets.add(data_target)
 
     if isinstance(session_path, str) and session_path.strip():
         session_target = (repo_root / session_path).resolve()

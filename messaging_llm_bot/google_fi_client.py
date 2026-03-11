@@ -17,6 +17,7 @@ from .interfaces import IncomingMessage
 GOOGLE_MESSAGES_URL = "https://messages.google.com/web/conversations"
 logger = logging.getLogger(__name__)
 _PHONE_PATTERN = re.compile(r"\+?[\d\s().-]{7,}")
+DEFAULT_GOOGLE_FI_STATE_FILE = "data/google_fi_receive_state.json"
 
 
 class GoogleFiFrontendUnavailableError(RuntimeError):
@@ -43,6 +44,17 @@ class BrowserOptions:
     def profile_dir(self) -> Path:
         workspace_root = self.workspace.resolve()
         return workspace_root.parent / "data" / "google_fi_browser_profile"
+
+
+def _runtime_root(workspace: Path) -> Path:
+    return workspace.resolve().parent
+
+
+def _resolve_google_fi_state_path(workspace: Path, state_file: str) -> Path:
+    candidate = Path(state_file)
+    if candidate.is_absolute():
+        return candidate
+    return _runtime_root(workspace) / candidate
 
 
 class GoogleFiClient:
@@ -542,7 +554,7 @@ def _wait_for_background_hydration(page: Any, *, wait_ms: int) -> None:
 
 
 def receive_events(
-    *, workspace: str = "workspace", state_file: str = "google_fi_receive_state.json", headful: bool = False,
+    *, workspace: str = "workspace", state_file: str = DEFAULT_GOOGLE_FI_STATE_FILE, headful: bool = False,
     max_conversations: int = 0, max_bubbles: int = 0, dry_run: bool = False, signup_wait_seconds: int = 300,
     post_load_wait_ms: int = 2000,
 ) -> dict[str, list[dict[str, str]]]:
@@ -552,7 +564,8 @@ def receive_events(
 
     workspace_path = Path(workspace)
     workspace_path.mkdir(parents=True, exist_ok=True)
-    state_path = workspace_path / state_file
+    state_path = _resolve_google_fi_state_path(workspace_path, state_file)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state = _load_state(state_path)
     seen: dict[str, str] = state.get("seen", {})
     logger.info(
@@ -749,7 +762,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     recv = sub.add_parser("receive")
     recv.add_argument("--workspace", default="workspace")
-    recv.add_argument("--state-file", default="google_fi_receive_state.json")
+    recv.add_argument("--state-file", default=DEFAULT_GOOGLE_FI_STATE_FILE)
     recv.add_argument("--headful", action="store_true")
     recv.add_argument("--max-conversations", type=int, default=0)
     recv.add_argument("--max-bubbles", type=int, default=0)
