@@ -1098,7 +1098,7 @@ class BotTests(unittest.TestCase):
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
             bot = self.make_bot(runtime=runtime)
             bot.telegram = DummyTelegram()
-            bot.llm = DummyLLM('{"skill_call": {"name": "echo", "args": {"text": "hello"}}}')
+            bot.llm = DummyLLM('{"skill_call": {"name": "echo", "args": {"text": "hello"}, "done": true}}')
 
             bot._handle_message(1, "run the echo skill")
 
@@ -1249,7 +1249,7 @@ class BotTests(unittest.TestCase):
 {"skill_call": {"name": "taskwarrior", "args": {"action": "list"}}}"""
         )
 
-        self.assertEqual(parsed, {"name": "taskwarrior", "args": {"action": "list"}, "done": True})
+        self.assertEqual(parsed, {"name": "taskwarrior", "args": {"action": "list"}, "done": False})
 
     def test_skill_call_parses_first_valid_json_block(self) -> None:
         bot = self.make_bot()
@@ -1260,7 +1260,7 @@ class BotTests(unittest.TestCase):
 {"skill_call": {"name": "echo", "args": {"text": "hi"}}}"""
         )
 
-        self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}, "done": True})
+        self.assertEqual(parsed, {"name": "echo", "args": {"text": "hi"}, "done": False})
 
     def test_skill_call_parses_top_level_tool_name_shape(self) -> None:
         bot = self.make_bot()
@@ -1299,7 +1299,7 @@ class BotTests(unittest.TestCase):
             {
                 "name": "web_search",
                 "args": {"query": "Howard Lutnick Epstein files role", "max_results": 10},
-                "done": True,
+                "done": False,
             },
         )
 
@@ -1319,7 +1319,7 @@ class BotTests(unittest.TestCase):
                     "paths": ["pharmacytodo"],
                     "contents": ["deodorant"],
                 },
-                "done": True,
+                "done": False,
             },
         )
 

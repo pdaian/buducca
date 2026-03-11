@@ -209,6 +209,7 @@ class BotRunner:
                 '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}, "done": <true|false>}}',
                 "Do not include any extra text before or after JSON.",
                 "Use skill_call only when user explicitly requests a skill run or task execution.",
+                "If done is omitted, it defaults to false.",
                 "If done is false, the tool result will be provided back to you so you can choose the next step.",
                 "If done is true, the tool result is usually sent to the user as the final answer.",
                 "Some skills may require an additional LLM response before replying to the user.",
@@ -914,9 +915,9 @@ class BotRunner:
         if nested_done is not None:
             args = {key: value for key, value in args.items() if key != "done"}
 
-        done = skill_call_payload.get("done", payload.get("done", nested_done if nested_done is not None else True))
+        done = skill_call_payload.get("done", payload.get("done", nested_done if nested_done is not None else False))
         if not isinstance(done, bool):
-            done = True
+            done = False
         return {"name": skill_name, "args": args, "done": done}
 
 
