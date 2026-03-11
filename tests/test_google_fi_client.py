@@ -70,6 +70,13 @@ class GoogleFiClientTests(unittest.TestCase):
 
 
 class GoogleFiCliErrorHandlingTests(unittest.TestCase):
+    def test_browser_options_stores_profile_under_top_level_data_dir(self) -> None:
+        from messaging_llm_bot.google_fi_client import BrowserOptions
+
+        options = BrowserOptions(workspace=Path("workspace"))
+
+        self.assertEqual(options.profile_dir, Path.cwd() / "data" / "google_fi_browser_profile")
+
     def test_ensure_logged_in_waits_for_signup_in_headful_mode(self) -> None:
         from messaging_llm_bot import google_fi_client
 

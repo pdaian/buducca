@@ -41,7 +41,8 @@ class BrowserOptions:
 
     @property
     def profile_dir(self) -> Path:
-        return self.workspace / "google_fi_browser_profile"
+        workspace_root = self.workspace.resolve()
+        return workspace_root.parent / "data" / "google_fi_browser_profile"
 
 
 class GoogleFiClient:
