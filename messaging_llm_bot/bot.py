@@ -1929,6 +1929,66 @@ class BotRunner:
         }
         self._workspace.append_text("logs/agenta_queries.history", json.dumps(payload, ensure_ascii=False) + "\n")
 
+    def _iter_jsonl_reverse(self, relative_path: str) -> list[dict[str, Any]]:
+        raw = self._workspace.read_text(relative_path, default="")
+        if not raw.strip():
+            return []
+        payloads: list[dict[str, Any]] = []
+        for raw_line in reversed(raw.splitlines()):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                payloads.append(payload)
+        return payloads
+
+    def _telegram_query_log_contains_reply(self, conversation_id: str, text: str) -> bool:
+        normalized_text = text.strip()
+        if not normalized_text:
+            return False
+        for payload in self._iter_jsonl_reverse("logs/agenta_queries.history"):
+            if payload.get("backend") != "telegram":
+                continue
+            if str(payload.get("conversation_id", "")).strip() != conversation_id:
+                continue
+            reply = payload.get("reply")
+            if not isinstance(reply, str) or not reply.strip():
+                continue
+            if any(chunk.strip() == normalized_text for chunk in self._split_reply(reply)):
+                return True
+        return False
+
+    def _telegram_history_contains_outgoing(self, conversation_id: str, text: str) -> bool:
+        normalized_text = text.strip()
+        if not normalized_text:
+            return False
+        for payload in self._iter_jsonl_reverse("logs/telegram.history"):
+            if payload.get("direction") != "outgoing":
+                continue
+            if str(payload.get("conversation_id", "")).strip() != conversation_id:
+                continue
+            logged_text = payload.get("text")
+            if isinstance(logged_text, str) and logged_text.strip() == normalized_text:
+                return True
+        return False
+
+    def _is_duplicate_telegram_self_message(self, conversation_id: str, text: str) -> bool:
+        seen_in_query_log = self._telegram_query_log_contains_reply(conversation_id, text)
+        seen_in_history = self._telegram_history_contains_outgoing(conversation_id, text)
+        if seen_in_query_log or seen_in_history:
+            logging.info(
+                "Skipping duplicate telegram self-message conversation=%s seen_in_query_log=%s seen_in_history=%s",
+                conversation_id,
+                seen_in_query_log,
+                seen_in_history,
+            )
+            return True
+        return False
+
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
         if not text.strip():
             logging.info("Skipping empty outgoing %s message for conversation=%s", backend, conversation_id)
@@ -2174,6 +2234,9 @@ class BotRunner:
 
         if update.text:
             message_text = f"{update.text}\n\n{attachment_context}" if attachment_context else update.text
+            if backend == "telegram" and getattr(update, "is_outgoing", False):
+                if self._is_duplicate_telegram_self_message(conversation_id, message_text):
+                    return
             self._append_frontend_log(
                 backend=backend,
                 direction="incoming",

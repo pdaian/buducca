@@ -220,6 +220,80 @@ class BotTests(unittest.TestCase):
             self.assertIn('"query": "hi"', log)
             self.assertIn('"reply": "hello"', log)
 
+    def test_telegram_outgoing_self_message_is_deduped_from_query_log_and_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="42", text="hi")
+            )
+
+            history_before = (Path(td) / "logs" / "telegram.history").read_text(encoding="utf-8")
+            log_before = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            bot.llm.calls = 0
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=2,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="999",
+                    text="hello",
+                    is_outgoing=True,
+                )
+            )
+
+            history_after = (Path(td) / "logs" / "telegram.history").read_text(encoding="utf-8")
+            log_after = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertEqual(history_after, history_before)
+            self.assertEqual(log_after, log_before)
+            self.assertEqual(bot.telegram.sent, [(1, "hello")])
+
+    def test_telegram_outgoing_self_message_is_deduped_when_reply_was_split(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime = RuntimeConfig(workspace_dir=td, max_reply_chunk_chars=5)
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=runtime,
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello world")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="42", text="hi")
+            )
+
+            history_before = (Path(td) / "logs" / "telegram.history").read_text(encoding="utf-8")
+            log_before = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            bot.llm.calls = 0
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=2,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="999",
+                    text="hello",
+                    is_outgoing=True,
+                )
+            )
+
+            history_after = (Path(td) / "logs" / "telegram.history").read_text(encoding="utf-8")
+            log_after = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            self.assertEqual(bot.llm.calls, 0)
+            self.assertEqual(history_after, history_before)
+            self.assertEqual(log_after, log_before)
+
     def test_handled_telegram_message_is_persisted_to_recent_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(

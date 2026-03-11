@@ -26,6 +26,7 @@ class IncomingMessage:
     sender_name: str | None = None
     sender_contact: str | None = None
     sent_at: str | None = None
+    is_outgoing: bool = False
     event_type: str = "message"
     attachments: list[IncomingAttachment] = field(default_factory=list)
 

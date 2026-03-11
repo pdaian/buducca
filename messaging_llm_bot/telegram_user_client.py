@@ -136,6 +136,7 @@ class TelegramUserClient:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                         sent_at=sent_at.astimezone(timezone.utc).isoformat() if sent_at else None,
+                        is_outgoing=bool(getattr(message, "out", False)),
                         attachments=attachments,
                     )
                 )
