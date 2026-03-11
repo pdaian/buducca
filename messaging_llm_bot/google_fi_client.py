@@ -710,6 +710,78 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
     return entries
 
 
+def _collect_conversation_timestamp_candidates(page: Any) -> list[str]:
+    timestamp_selector = ", ".join(_message_timestamp_selectors())
+    try:
+        raw_candidates = page.evaluate(
+            r"""
+            ({ timestampSelector }) => {
+              const timestampRegexes = [
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*(today|yesterday)\s+\d{1,2}:\d{2}\s*(am|pm)$/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*\d{1,2}\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)\s+ago$/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday),?\s+\d{1,2}:\d{2}\s*(am|pm)$/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*(sun|mon|tue|wed|thu|fri|sat),?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*(january|february|march|april|may|june|july|august|september|october|november|december)/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}(,\s+\d{4})?,?\s+\d{1,2}:\d{2}\s*(am|pm)$/i,
+                /^(?:sent|received)(?:\s+at)?[\s:.\-\u00b7\u2022]*\d{1,2}:\d{2}\s*(am|pm)$/i,
+              ];
+              const timestampAttributes = [
+                "data-message-timestamp",
+                "data-timestamp",
+                "data-e2e-message-timestamp",
+                "datetime",
+                "aria-label",
+                "title",
+              ];
+              const normalizeText = (value) => String(value || "").replace(/\u202f/g, " ").replace(/\s+/g, " ").trim();
+              const looksLikeTimestamp = (value) => {
+                const text = normalizeText(value);
+                return Boolean(text) && timestampRegexes.some((pattern) => pattern.test(text));
+              };
+              const addCandidate = (target, value) => {
+                const text = normalizeText(value);
+                if (looksLikeTimestamp(text)) {
+                  target.push(text);
+                }
+              };
+              const candidates = [];
+              const seen = new Set();
+              const nodes = Array.from(document.querySelectorAll(timestampSelector || "*"));
+              if (timestampSelector) {
+                nodes.push(...Array.from(document.querySelectorAll("*")));
+              }
+              for (const node of nodes) {
+                if (!node || seen.has(node)) {
+                  continue;
+                }
+                seen.add(node);
+                if (node.getAttribute) {
+                  for (const attr of timestampAttributes) {
+                    addCandidate(candidates, node.getAttribute(attr) || "");
+                  }
+                }
+                const text = normalizeText(node.innerText || node.textContent || "");
+                if (!text) {
+                  continue;
+                }
+                for (const line of text.split(/\s{2,}|\n+/)) {
+                  addCandidate(candidates, line);
+                }
+              }
+              return candidates;
+            }
+            """,
+            {"timestampSelector": timestamp_selector},
+        )
+    except Exception:
+        logger.debug("Failed to collect conversation timestamp candidates from DOM", exc_info=True)
+        return []
+
+    if not isinstance(raw_candidates, list):
+        return []
+    return [candidate for candidate in raw_candidates if isinstance(candidate, str) and candidate.strip()]
+
+
 def _pick_google_messages_timestamp_text(item: dict[str, Any]) -> str:
     for key in ("timestamp_text", "inline_timestamp_text", "timestamp_hint", "timestamp", "aria_label", "title"):
         candidate = GoogleFiClient._first_text(item.get(key))
@@ -819,6 +891,94 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
         )
         return parsed
 
+    relative_ago_match = re.match(
+        r"^(\d+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)\s+ago$",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if relative_ago_match:
+        quantity = int(relative_ago_match.group(1))
+        unit = relative_ago_match.group(2).lower()
+        if unit.startswith("min"):
+            delta = timedelta(minutes=quantity)
+        elif unit.startswith("h"):
+            delta = timedelta(hours=quantity)
+        elif unit.startswith("day"):
+            delta = timedelta(days=quantity)
+        else:
+            delta = timedelta(weeks=quantity)
+        parsed = (now - delta).isoformat()
+        _log_timestamp_debug(
+            "Google Fi parsed relative ago timestamp",
+            stage="parse_google_messages_timestamp",
+            raw=value,
+            cleaned=cleaned,
+            quantity=quantity,
+            unit=unit,
+            parsed=parsed,
+        )
+        return parsed
+
+    weekday_match = re.match(
+        r"^(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday),?\s+(.+)$",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if weekday_match:
+        weekday_token = weekday_match.group(1).lower()
+        time_part = weekday_match.group(2).strip()
+        normalized_weekday = {
+            "sun": 6,
+            "sunday": 6,
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+        }[weekday_token]
+        for fmt in ("%I:%M %p", "%I:%M%p"):
+            try:
+                parsed_time = datetime.strptime(time_part, fmt)
+                break
+            except ValueError:
+                parsed_time = None
+        if parsed_time is None:
+            _log_timestamp_debug(
+                "Google Fi weekday timestamp parse failed",
+                stage="parse_google_messages_timestamp",
+                raw=value,
+                cleaned=cleaned,
+                weekday=weekday_token,
+                time_part=time_part,
+            )
+            return None
+        day_delta = (now.weekday() - normalized_weekday) % 7
+        candidate_date = now.date() - timedelta(days=day_delta)
+        candidate = datetime.combine(candidate_date, parsed_time.time(), tzinfo=local_tz)
+        if day_delta == 0 and candidate > now:
+            candidate -= timedelta(days=7)
+        parsed = candidate.isoformat()
+        _log_timestamp_debug(
+            "Google Fi parsed weekday timestamp",
+            stage="parse_google_messages_timestamp",
+            raw=value,
+            cleaned=cleaned,
+            weekday=weekday_token,
+            time_part=time_part,
+            parsed=parsed,
+        )
+        return parsed
+
     explicit_formats = [
         "%a, %b %d, %Y, %I:%M %p",
         "%A, %B %d, %Y, %I:%M %p",
@@ -896,12 +1056,36 @@ def _parse_google_messages_timestamp(value: str | None, *, reference: datetime |
 
 def _normalize_google_messages_timestamp_text(value: str) -> str:
     cleaned = " ".join(value.replace("\n", " ").split())
-    return re.sub(
+    cleaned = re.sub(
         r"^(sent|received)\b(?:\s+at\b)?[\s:.\-\u00b7\u2022]*",
         "",
         cleaned,
         flags=re.IGNORECASE,
     )
+    return re.sub(r"(\d)(am|pm)\b", r"\1 \2", cleaned, flags=re.IGNORECASE)
+
+
+def _most_recent_google_messages_timestamp(
+    candidates: list[str], *, reference: datetime | None = None,
+) -> str | None:
+    latest_value: str | None = None
+    latest_timestamp: datetime | None = None
+    for candidate in candidates:
+        parsed = _parse_google_messages_timestamp(candidate, reference=reference)
+        if not parsed:
+            continue
+        try:
+            parsed_dt = datetime.fromisoformat(parsed)
+        except ValueError:
+            continue
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+        else:
+            parsed_dt = parsed_dt.astimezone(timezone.utc)
+        if latest_timestamp is None or parsed_dt > latest_timestamp:
+            latest_timestamp = parsed_dt
+            latest_value = parsed
+    return latest_value
 
 
 def _expand_message_bubbles(page: Any, bubbles: Any, *, max_bubbles: int) -> int:
@@ -1016,6 +1200,8 @@ def receive_events(
                 bubble_selector,
             )
             bubble_entries = _collect_bubble_entries(page, bubble_selector)
+            conversation_timestamp_candidates = _collect_conversation_timestamp_candidates(page)
+            latest_conversation_timestamp = _most_recent_google_messages_timestamp(conversation_timestamp_candidates)
             if bubble_entries and not any(_parse_google_messages_timestamp(entry.get("timestamp_text")) for entry in bubble_entries):
                 logger.debug(
                     "Google Fi conversation had message bubbles but no parseable inline timestamps conversation_id=%s title=%r",
@@ -1041,7 +1227,7 @@ def receive_events(
                     continue
                 seen[conversation_id] = key
                 extracted_sender_id = GoogleFiClient._phone_like_or_original(title) or conversation_id
-                sent_at = _parse_google_messages_timestamp(entry.get("timestamp_text"))
+                sent_at = latest_conversation_timestamp or _parse_google_messages_timestamp(entry.get("timestamp_text"))
                 event = {
                     "conversation_id": conversation_id,
                     "sender_id": extracted_sender_id,

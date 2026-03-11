@@ -1,6 +1,7 @@
 from pathlib import Path
 import types
 import io
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
@@ -459,6 +460,46 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(parsed, "2026-03-11T10:07:00+00:00")
 
+    def test_parse_google_messages_timestamp_accepts_relative_ago_timestamp(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("10 minutes ago", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-11T11:50:00+00:00")
+
+    def test_parse_google_messages_timestamp_accepts_weekday_timestamp_without_meridiem_space(self) -> None:
+        from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
+
+        reference = datetime(2026, 3, 13, 12, 0, tzinfo=timezone.utc)
+
+        parsed = _parse_google_messages_timestamp("Thursday 2:30PM", reference=reference)
+
+        self.assertEqual(parsed, "2026-03-12T14:30:00+00:00")
+
+    def test_collect_conversation_timestamp_candidates_returns_dom_matches(self) -> None:
+        from messaging_llm_bot.google_fi_client import _collect_conversation_timestamp_candidates
+
+        page = Mock()
+        page.evaluate.return_value = ["10 minutes ago", "Thursday 2:30PM", "noise", "", None]
+
+        candidates = _collect_conversation_timestamp_candidates(page)
+
+        self.assertEqual(candidates, ["10 minutes ago", "Thursday 2:30PM", "noise"])
+
+    def test_most_recent_google_messages_timestamp_picks_latest_parseable_candidate(self) -> None:
+        from messaging_llm_bot.google_fi_client import _most_recent_google_messages_timestamp
+
+        reference = datetime(2026, 3, 13, 12, 0, tzinfo=timezone.utc)
+
+        latest = _most_recent_google_messages_timestamp(
+            ["Thursday 2:30PM", "10 minutes ago", "not a timestamp"],
+            reference=reference,
+        )
+
+        self.assertEqual(latest, "2026-03-13T11:50:00+00:00")
+
     def test_parse_google_messages_timestamp_logs_filterable_timestamp_debug(self) -> None:
         from messaging_llm_bot.google_fi_client import _parse_google_messages_timestamp
 
@@ -480,6 +521,52 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         self.assertTrue(any("timestamp_debug" in line for line in logs.output))
         self.assertTrue(any("stage='extract_sent_at'" in line for line in logs.output))
         self.assertTrue(any("cleaned='not-a-timestamp'" in line for line in logs.output))
+
+    def test_receive_events_assigns_latest_conversation_timestamp_to_new_messages(self) -> None:
+        from messaging_llm_bot import google_fi_client
+
+        page = Mock()
+        page.mouse = Mock()
+        context = Mock()
+        proc = Mock()
+        row = Mock()
+        row.click.return_value = None
+        row.inner_text.return_value = "Mom\nrecent"
+        rows = Mock()
+        rows.nth.return_value = row
+        rows.count.return_value = 1
+        bubbles = Mock()
+        bubbles.count.return_value = 1
+
+        with tempfile.TemporaryDirectory() as td:
+            with patch.object(google_fi_client, "_open_messages_page", return_value=(proc, context, page)):
+                with patch.object(google_fi_client, "_ensure_logged_in"):
+                    with patch.object(google_fi_client, "_wait_for_background_hydration"):
+                        with patch.object(google_fi_client, "_find_conversation_rows", return_value=(rows, "rows")):
+                            with patch.object(google_fi_client, "_expand_conversation_rows", return_value=1):
+                                with patch.object(google_fi_client, "_extract_conversation_id_from_row", return_value="thread-1"):
+                                    with patch.object(google_fi_client, "_find_message_bubbles", return_value=(bubbles, "bubbles")):
+                                        with patch.object(google_fi_client, "_expand_message_bubbles", return_value=1):
+                                            with patch.object(
+                                                google_fi_client,
+                                                "_collect_bubble_entries",
+                                                return_value=[{"text": "hello", "timestamp_text": "Yesterday 9:00 AM"}],
+                                            ):
+                                                with patch.object(
+                                                    google_fi_client,
+                                                    "_collect_conversation_timestamp_candidates",
+                                                    return_value=["Thursday 2:30PM", "10 minutes ago"],
+                                                ):
+                                                    with patch.object(
+                                                        google_fi_client,
+                                                        "_most_recent_google_messages_timestamp",
+                                                        return_value="2026-03-13T11:50:00+00:00",
+                                                    ):
+                                                        payload = google_fi_client.receive_events(workspace=td, post_load_wait_ms=0)
+
+        self.assertEqual(payload["calls"], [])
+        self.assertEqual(len(payload["messages"]), 1)
+        self.assertEqual(payload["messages"][0]["sent_at"], "2026-03-13T11:50:00+00:00")
 
 
 if __name__ == "__main__":
