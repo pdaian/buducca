@@ -182,15 +182,31 @@ class SignalClientTests(unittest.TestCase):
 
         with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
-                Mock(returncode=0, stdout='[]', stderr=""),
-                Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
+                Mock(returncode=0, stdout='[]', stderr=""),
+                Mock(returncode=0, stdout='[]', stderr=""),
             ]
             with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
                 client.get_updates()
 
-        self.assertEqual(run.call_args_list[0].args[0], ["signal-cli", "-o", "json", "-a", "+15551230000", "listContacts"])
+        self.assertEqual(client.contacts_command, ["signal-cli", "-o", "json", "-a", "+15551230000", "listContacts"])
+        self.assertEqual(run.call_args_list[1].args[0], client.contacts_command)
+
+    def test_receive_runs_before_contact_and_group_refresh(self) -> None:
+        message_stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = [
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
+                Mock(returncode=0, stdout='[]', stderr=""),
+                Mock(returncode=0, stdout='[]', stderr=""),
+            ]
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                client.get_updates()
+
+        self.assertEqual(run.call_args_list[0].args[0], client.receive_command)
 
 
     def test_uses_cached_contact_name_when_message_lacks_name(self) -> None:
@@ -199,9 +215,9 @@ class SignalClientTests(unittest.TestCase):
 
         with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
                 Mock(returncode=0, stdout=contacts_stdout, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
-                Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
             with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
@@ -216,9 +232,9 @@ class SignalClientTests(unittest.TestCase):
 
         with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=groups_stdout, stderr=""),
-                Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
             with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000")
@@ -235,16 +251,16 @@ class SignalClientTests(unittest.TestCase):
 
         with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
             run.side_effect = [
+                Mock(returncode=0, stdout=message_stdout, stderr=""),
                 Mock(returncode=0, stdout=contacts_first, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
                 Mock(returncode=0, stdout=message_stdout, stderr=""),
                 Mock(returncode=0, stdout=contacts_second, stderr=""),
                 Mock(returncode=0, stdout='[]', stderr=""),
-                Mock(returncode=0, stdout=message_stdout, stderr=""),
             ]
             with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 client = SignalClient(account="+15551230000", contacts_cache_ttl_seconds=10)
-                with patch("messaging_llm_bot.signal_client.time.monotonic", side_effect=[0.0, 0.0, 20.0, 20.0]):
+                with patch("messaging_llm_bot.signal_client.time.monotonic", side_effect=[0.0, 0.0, 20.0, 20.0, 20.0]):
                     first = client.get_updates()
                     second = client.get_updates()
 

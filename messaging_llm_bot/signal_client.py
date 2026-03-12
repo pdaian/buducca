@@ -79,8 +79,6 @@ class SignalClient:
 
     def get_updates(self) -> list[IncomingMessage]:
         self._validate_receive_command()
-        self._refresh_contact_cache_if_needed()
-        self._refresh_group_cache_if_needed()
         try:
             proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
@@ -97,17 +95,11 @@ class SignalClient:
                 )
             raise RuntimeError(f"Signal receive command failed: {stderr}")
 
-        messages: list[IncomingMessage] = []
-        for line in proc.stdout.splitlines():
-            if not line.strip():
-                continue
-            try:
-                payload: dict[str, Any] = json.loads(line)
-            except json.JSONDecodeError:
-                logging.debug("Skipping non-JSON signal-cli output line: %s", line)
-                continue
+        envelopes = self._parse_receive_output(proc.stdout)
+        self._refresh_metadata_caches_for_envelopes(envelopes)
 
-            envelope = payload.get("envelope") or {}
+        messages: list[IncomingMessage] = []
+        for envelope in envelopes:
             conversation_id, sender, text, voice_file_path, attachments = self._extract_message_fields(envelope)
             if not conversation_id or not sender:
                 if self._debug:
@@ -151,12 +143,87 @@ class SignalClient:
             )
         return messages
 
-    def _refresh_contact_cache_if_needed(self) -> None:
+    def _parse_receive_output(self, output: str) -> list[dict[str, Any]]:
+        envelopes: list[dict[str, Any]] = []
+        for line in output.splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                logging.debug("Skipping non-JSON signal-cli output line: %s", line)
+                continue
+            if not isinstance(payload, dict):
+                continue
+            envelope = payload.get("envelope")
+            if isinstance(envelope, dict):
+                envelopes.append(envelope)
+        return envelopes
+
+    def _refresh_metadata_caches_for_envelopes(self, envelopes: list[dict[str, Any]]) -> None:
+        if not envelopes:
+            self._refresh_contact_cache_if_needed()
+            self._refresh_group_cache_if_needed()
+            return
+
+        should_refresh_contacts = self._contact_cache_is_stale()
+        should_refresh_groups = self._group_cache_is_stale()
+        if not should_refresh_contacts or not should_refresh_groups:
+            for envelope in envelopes:
+                if not should_refresh_contacts and self._envelope_needs_contact_lookup(envelope):
+                    should_refresh_contacts = True
+                if not should_refresh_groups and self._envelope_needs_group_lookup(envelope):
+                    should_refresh_groups = True
+                if should_refresh_contacts and should_refresh_groups:
+                    break
+
+        if should_refresh_contacts:
+            self._refresh_contact_cache_if_needed(force=True)
+        if should_refresh_groups:
+            self._refresh_group_cache_if_needed(force=True)
+
+    def _contact_cache_is_stale(self) -> bool:
+        if not self._contact_names:
+            return True
+        return time.monotonic() - self._contact_names_loaded_at >= self.contacts_cache_ttl_seconds
+
+    def _group_cache_is_stale(self) -> bool:
+        if not self._group_names:
+            return True
+        return time.monotonic() - self._group_names_loaded_at >= self.contacts_cache_ttl_seconds
+
+    def _envelope_needs_contact_lookup(self, envelope: dict[str, Any]) -> bool:
+        sender = self._first_non_empty_string(
+            envelope.get("sourceNumber"),
+            envelope.get("source"),
+            envelope.get("sourceUuid"),
+        )
+        if not sender:
+            return False
+        if self._extract_sender_name(envelope, sender):
+            return False
+        return sender not in self._contact_names
+
+    def _envelope_needs_group_lookup(self, envelope: dict[str, Any]) -> bool:
+        sync_message = envelope.get("syncMessage") or {}
+        sync_sent_message = sync_message.get("sentMessage") if isinstance(sync_message, dict) else None
+        for message in (envelope.get("dataMessage"), sync_sent_message):
+            if not isinstance(message, dict):
+                continue
+            group_id = self._extract_group_id(message)
+            if not group_id:
+                continue
+            if self._extract_group_title(message):
+                return False
+            return group_id not in self._group_names
+        return False
+
+    def _refresh_contact_cache_if_needed(self, *, force: bool = False) -> None:
         if not self.contacts_command:
             return
 
         now = time.monotonic()
-        if self._contact_names and now - self._contact_names_loaded_at < self.contacts_cache_ttl_seconds:
+        if not force and self._contact_names and now - self._contact_names_loaded_at < self.contacts_cache_ttl_seconds:
             return
 
         try:
@@ -284,12 +351,12 @@ class SignalClient:
             return f"{self.GROUP_CONVERSATION_PREFIX}{title}{self.GROUP_ID_DELIMITER}{group_id}"
         return f"{self.GROUP_CONVERSATION_PREFIX}{group_id}"
 
-    def _refresh_group_cache_if_needed(self) -> None:
+    def _refresh_group_cache_if_needed(self, *, force: bool = False) -> None:
         if not self.groups_command:
             return
 
         now = time.monotonic()
-        if self._group_names and now - self._group_names_loaded_at < self.contacts_cache_ttl_seconds:
+        if not force and self._group_names and now - self._group_names_loaded_at < self.contacts_cache_ttl_seconds:
             return
 
         try:
