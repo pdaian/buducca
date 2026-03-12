@@ -346,6 +346,19 @@ class SignalClientTests(unittest.TestCase):
             with self.assertRaises(SignalFrontendUnavailableError):
                 client.get_updates()
 
+    def test_debug_logs_when_receive_returns_no_output(self) -> None:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000", debug=True)
+                with self.assertLogs(level="DEBUG") as logs:
+                    updates = client.get_updates()
+
+        self.assertEqual(updates, [])
+        self.assertTrue(any("Signal receive command returned no output" in line for line in logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()

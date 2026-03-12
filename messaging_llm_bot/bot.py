@@ -483,6 +483,13 @@ class BotRunner:
 
     def run_forever(self) -> None:
         logging.info("Bot started. Waiting for messages...")
+        if self.signal and self.config.signal:
+            logging.info(
+                "Signal frontend configured: account=%s poll_interval_seconds=%s receive_command=%s",
+                self.config.signal.account,
+                self.config.signal.poll_interval_seconds,
+                getattr(self.signal, "receive_command", "<unavailable>"),
+            )
         self._stop_event.clear()
         self._start_frontend_workers()
         try:
@@ -539,6 +546,11 @@ class BotRunner:
         for name, state in self._frontend_workers.items():
             if state.thread is not None and state.thread.is_alive():
                 continue
+            logging.debug(
+                "Starting frontend worker: frontend=%s poll_interval_seconds=%s",
+                name,
+                state.poll_interval_seconds,
+            )
             worker = threading.Thread(target=self._run_frontend_worker, args=(name,), daemon=True, name=f"{name}-frontend")
             state.thread = worker
             worker.start()
@@ -708,7 +720,14 @@ class BotRunner:
 
     def _poll_signal_once(self) -> int:
         if not self.signal or self._signal_frontend_disabled:
+            if self._debug_enabled and self.signal:
+                logging.debug(
+                    "Signal poll skipped: frontend_disabled=%s",
+                    self._signal_frontend_disabled,
+                )
             return 0
+        if self._debug_enabled:
+            logging.debug("Polling signal frontend")
         try:
             updates = self.signal.get_updates()
         except SignalFrontendUnavailableError as exc:
@@ -716,7 +735,19 @@ class BotRunner:
             self._set_frontend_disabled("signal", error=str(exc))
             logging.warning("%s; continuing with telegram-only frontend", exc)
             return 0
+        if self._debug_enabled:
+            logging.debug("Signal poll returned %s update(s)", len(updates))
         for update in updates:
+            if self._debug_enabled:
+                logging.debug(
+                    "Handling signal update: update_id=%s conversation_id=%s sender_id=%s text_present=%s voice_present=%s attachments=%s",
+                    update.update_id,
+                    update.conversation_id,
+                    update.sender_id,
+                    bool(update.text),
+                    bool(update.voice_file_path),
+                    len(update.attachments),
+                )
             self._handle_update(update)
         return len(updates)
 

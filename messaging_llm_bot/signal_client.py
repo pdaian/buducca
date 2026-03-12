@@ -78,6 +78,12 @@ class SignalClient:
             )
 
     def get_updates(self) -> list[IncomingMessage]:
+        if self._debug:
+            logging.debug(
+                "Signal polling started: account=%s receive_command=%s",
+                self.account,
+                self.receive_command,
+            )
         self._validate_receive_command()
         try:
             proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
@@ -85,6 +91,13 @@ class SignalClient:
             raise SignalFrontendUnavailableError(
                 f"Signal frontend disabled: executable {exc.filename!r} was not found"
             ) from exc
+        if self._debug:
+            logging.debug(
+                "Signal receive command finished: returncode=%s stdout_len=%s stderr=%s",
+                proc.returncode,
+                len(proc.stdout),
+                proc.stderr.strip() or "none",
+            )
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             if self._is_registration_error(stderr):
@@ -96,6 +109,8 @@ class SignalClient:
             raise RuntimeError(f"Signal receive command failed: {stderr}")
 
         envelopes = self._parse_receive_output(proc.stdout)
+        if self._debug:
+            logging.debug("Signal receive output parsed: envelopes=%s", len(envelopes))
         self._refresh_metadata_caches_for_envelopes(envelopes)
 
         messages: list[IncomingMessage] = []
@@ -129,6 +144,16 @@ class SignalClient:
             sender_name = self._extract_sender_name(envelope, sender)
 
             self._update_counter += 1
+            if self._debug:
+                logging.debug(
+                    "Signal message parsed: update_id=%s conversation_id=%s sender=%s text_present=%s voice_present=%s attachments=%s",
+                    self._update_counter,
+                    conversation_id,
+                    sender,
+                    bool(text),
+                    bool(voice_file_path),
+                    len(attachments),
+                )
             messages.append(
                 IncomingMessage(
                     update_id=self._update_counter,
@@ -141,6 +166,8 @@ class SignalClient:
                     attachments=attachments,
                 )
             )
+        if self._debug:
+            logging.debug("Signal polling completed: messages=%s", len(messages))
         return messages
 
     def _parse_receive_output(self, output: str) -> list[dict[str, Any]]:
@@ -158,6 +185,8 @@ class SignalClient:
             envelope = payload.get("envelope")
             if isinstance(envelope, dict):
                 envelopes.append(envelope)
+        if self._debug and not output.strip():
+            logging.debug("Signal receive command returned no output")
         return envelopes
 
     def _refresh_metadata_caches_for_envelopes(self, envelopes: list[dict[str, Any]]) -> None:
