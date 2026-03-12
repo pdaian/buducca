@@ -3019,6 +3019,38 @@ class BotTests(unittest.TestCase):
             recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
             self.assertIn("request that times out", recent)
 
+    def test_signal_uses_sent_at_for_logged_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                signal=SignalConfig(
+                    account="+15550000000",
+                    allowed_sender_ids=["+15550000000"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.signal = object()
+            bot._send_message = lambda backend, conversation_id, text: None
+            bot.llm = TimeoutLLM()
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="signal",
+                    conversation_id="+15550000000",
+                    sender_id="+15550000000",
+                    text="collect me",
+                    sent_at="2026-03-10T13:23:00+00:00",
+                )
+            )
+
+            recent_line = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8").splitlines()[0]
+
+            self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
+            self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
+
     def test_google_fi_uses_sent_at_for_logged_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(

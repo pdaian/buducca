@@ -159,6 +159,22 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].sender_id, "+15550001")
         self.assertEqual(updates[0].text, "hi group")
 
+    def test_parses_signal_message_timestamp_into_sent_at(self) -> None:
+        stdout = (
+            '{"envelope":{"source":"+15550001","timestamp":1741700000000,"dataMessage":{"message":"hello"}}}'
+        )
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = stdout
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                client = SignalClient(account="+15551230000")
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sent_at, "2025-03-11T13:33:20+00:00")
+
     def test_parses_sync_sent_group_message_using_group_conversation_id(self) -> None:
         stdout = (
             '{"envelope":{"source":"+15551230000","syncMessage":{"sentMessage":{"groupInfo":{"groupId":"group-123","title":"Family Chat"},"message":"group note"}}}}'

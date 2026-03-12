@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import subprocess
@@ -101,7 +102,7 @@ class SignalClient:
 
         messages: list[IncomingMessage] = []
         for envelope in envelopes:
-            conversation_id, sender, text, voice_file_path, attachments, is_outgoing = self._extract_message_fields(
+            conversation_id, sender, text, voice_file_path, attachments, is_outgoing, sent_at = self._extract_message_fields(
                 envelope
             )
             if not conversation_id or not sender:
@@ -149,6 +150,7 @@ class SignalClient:
                     conversation_id=conversation_id,
                     sender_id=sender,
                     text=text,
+                    sent_at=sent_at,
                     voice_file_path=voice_file_path,
                     sender_name=sender_name,
                     attachments=attachments,
@@ -302,7 +304,7 @@ class SignalClient:
     def _extract_message_fields(
         self,
         envelope: dict[str, Any],
-    ) -> tuple[str, str, str | None, str | None, list[IncomingAttachment], bool]:
+    ) -> tuple[str, str, str | None, str | None, list[IncomingAttachment], bool, str | None]:
         sender = self._first_non_empty_string(
             envelope.get("sourceNumber"),
             envelope.get("source"),
@@ -319,15 +321,16 @@ class SignalClient:
             text = data_message.get("message")
             voice_file_path = self._find_voice_attachment_path(data_message)
             attachments = self._extract_non_voice_attachments(data_message)
+            sent_at = self._extract_message_timestamp(data_message, envelope)
             if sender and conversation_id and (text or voice_file_path or attachments):
-                return conversation_id, sender, text, voice_file_path, attachments, False
+                return conversation_id, sender, text, voice_file_path, attachments, False, sent_at
 
         sync_message = envelope.get("syncMessage") or {}
         if not isinstance(sync_message, dict):
-            return "", "", None, None, [], False
+            return "", "", None, None, [], False, None
         sent_message = sync_message.get("sentMessage") or {}
         if not isinstance(sent_message, dict):
-            return "", "", None, None, [], False
+            return "", "", None, None, [], False, None
 
         group_id = self._extract_group_id(sent_message)
         if group_id:
@@ -346,7 +349,16 @@ class SignalClient:
         voice_file_path = self._find_voice_attachment_path(sent_message)
         attachments = self._extract_non_voice_attachments(sent_message)
         is_outgoing = bool(group_id) or destination != self.account
-        return destination, source, text, voice_file_path, attachments, is_outgoing
+        sent_at = self._extract_message_timestamp(sent_message, envelope)
+        return destination, source, text, voice_file_path, attachments, is_outgoing, sent_at
+
+    def _extract_message_timestamp(self, message: dict[str, Any], envelope: dict[str, Any]) -> str | None:
+        for candidate in (message.get("timestamp"), envelope.get("timestamp")):
+            if not isinstance(candidate, (int, float)):
+                continue
+            timestamp_seconds = candidate / 1000.0 if candidate > 10_000_000_000 else candidate
+            return datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc).isoformat()
+        return None
 
     def _extract_group_id(self, message: dict[str, Any]) -> str:
         group_info = message.get("groupInfo")
