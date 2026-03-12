@@ -455,7 +455,7 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].text, "hello")
 
-    def test_legacy_receive_command_strips_json_output_flag_before_running(self) -> None:
+    def test_legacy_receive_command_runs_as_configured(self) -> None:
         client = SignalClient(
             account="+15551230000",
             receive_command=["signal-cli", "-o", "json", "-a", "+15551230000", "receive"],
@@ -468,7 +468,7 @@ class SignalClientTests(unittest.TestCase):
             with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
                 updates = client.get_updates()
 
-        self.assertEqual(run.call_args_list[0].args[0], ["signal-cli", "-a", "+15551230000", "receive"])
+        self.assertEqual(run.call_args_list[0].args[0], ["signal-cli", "-o", "json", "-a", "+15551230000", "receive"])
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].text, "hello")
 
