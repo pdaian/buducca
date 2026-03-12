@@ -8,12 +8,13 @@ from assistant_framework.workspace import Workspace
 
 NAME = "search_files"
 DESCRIPTION = (
-    "Search workspace files with grep-style matching. "
-    "Args: pattern (required), paths (optional list of files or directories), "
+    "Search workspace text files with literal or regex matching across a single file, "
+    "a list of files, or a directory tree. "
+    "Args: pattern (required), path or paths (optional file or directory scope), "
     "regex (optional bool), case_sensitive (optional bool), max_matches (optional int, default 50)."
 )
 ARGS_SCHEMA = (
-    '{"pattern":"required","paths":["optional/file/or/dir"],'
+    '{"pattern":"required","path":"optional/file/or/dir","paths":["optional/file/or/dir"],'
     '"regex":false,"case_sensitive":false,"max_matches":50}'
 )
 

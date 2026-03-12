@@ -50,6 +50,11 @@ If you delete a plugin folder, it is not loaded.
 3. Add `skills/<name>/README.md` with behavior, dependencies, config, and examples.
 4. Run tests.
 
+For agent-facing skills, keep the README explicit:
+- Add a `## What it does` section. The bot surfaces this section in `/skill <name>` help.
+- Keep `ARGS_SCHEMA` accurate, or provide a matching `## Args schema` block in the README.
+- Document common scope forms directly when a skill accepts one item or many, such as `path` vs `paths`.
+
 ## Add a new collector
 
 1. Create `collectors/<name>/__init__.py`.

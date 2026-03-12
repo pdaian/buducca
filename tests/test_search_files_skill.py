@@ -55,6 +55,32 @@ class SearchFilesSkillTests(unittest.TestCase):
             self.assertIn("notes/b.txt:1:todo: second", result)
             self.assertNotIn("archive/c.txt", result)
 
+    def test_searches_single_path_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/a.txt", "alpha\nneedle\nomega\n")
+            workspace.write_text("notes/b.txt", "needle elsewhere\n")
+
+            result = self.module.run(workspace, {"pattern": "needle", "path": "notes/a.txt"})
+
+            self.assertIn("Found 1 match(es) for `needle` across 1 file(s).", result)
+            self.assertIn("notes/a.txt:2:needle", result)
+            self.assertNotIn("notes/b.txt", result)
+
+    def test_searches_directory_path_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("logs/app/a.log", "info\nerror one\n")
+            workspace.write_text("logs/app/b.log", "warning\nerror two\n")
+            workspace.write_text("logs/archive/c.log", "error three\n")
+
+            result = self.module.run(workspace, {"pattern": r"error (one|two)", "path": "logs/app", "regex": True})
+
+            self.assertIn("Found 2 match(es) for `error (one|two)` across 2 file(s).", result)
+            self.assertIn("logs/app/a.log:2:error one", result)
+            self.assertIn("logs/app/b.log:2:error two", result)
+            self.assertNotIn("logs/archive/c.log", result)
+
     def test_reports_no_match_for_scoped_search(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
