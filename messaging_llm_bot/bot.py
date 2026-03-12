@@ -2943,7 +2943,16 @@ class BotRunner:
 
         if attachment.file_id and backend == "telegram" and self.telegram:
             upstream_path = self.telegram.get_file_path(attachment.file_id)
-            self._workspace.write_bytes(relative_path, self.telegram.download_file(upstream_path))
+            try:
+                payload = self.telegram.download_file(upstream_path)
+            except Exception:
+                logging.exception(
+                    "Skipping telegram attachment after download failure: file_id=%s path=%s",
+                    attachment.file_id,
+                    upstream_path,
+                )
+                return ""
+            self._workspace.write_bytes(relative_path, payload)
             return relative_path
 
         if attachment.file_path:

@@ -716,6 +716,39 @@ class BotTests(unittest.TestCase):
             self.assertIn("[Attachments]", result)
             self.assertIn("- saved: attachments/", result)
 
+    def test_save_incoming_attachments_skips_failed_telegram_downloads(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+
+            def fail_download(_file_path: str) -> bytes:
+                raise RuntimeError("download failed")
+
+            bot.telegram.download_file = fail_download  # type: ignore[method-assign]
+
+            recent_timestamp = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            result = bot._save_incoming_attachments(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    sender_name="Alice",
+                    sent_at=recent_timestamp,
+                    attachments=[IncomingAttachment(file_id="doc-id", filename="source.pdf", mime_type="application/pdf")],
+                ),
+                backend="telegram",
+                sender_name="Alice",
+                sender_id="1",
+            )
+
+            self.assertEqual(result, "")
+
     def test_hourly_task_sends_to_latest_logged_conversation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
