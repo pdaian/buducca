@@ -37,6 +37,8 @@ python3 reset_workspace.py --yes
 - `workspace/hourly` — optional plaintext instructions evaluated once per hour at the top of the hour.
 - `workspace/hourly_status.json` — last completed hourly slot.
 - `workspace/telegram.recent` — Telegram snapshots when storage is enabled.
-- `workspace/telegram.messages.recent` — legacy Telegram snapshots file still read for compatibility.
+- `workspace/telegram.messages.recent` — legacy Telegram snapshots file still read for compatibility, but no longer written.
 - `workspace/signal.messages.recent` — Signal snapshots when storage is enabled.
 - `workspace/whatsapp.messages.recent` — WhatsApp snapshots when storage is enabled.
+- `workspace/google_fi.messages.recent` — Google Fi message snapshots when storage is enabled.
+- `workspace/google_fi.calls.recent` — Google Fi call-event snapshots.

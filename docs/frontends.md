@@ -118,6 +118,13 @@ Per frontend (`telegram`, `signal`, `whatsapp`):
 - `read_only: true` → receive-only mode, no outgoing replies.
 - `store_unanswered_messages: true` → persist non-agent/unanswered messages into workspace files.
 
+Unread-storage files by frontend:
+
+- Telegram writes `workspace/logs/telegram.history` and `workspace/telegram.recent`. `workspace/telegram.messages.recent` is legacy compatibility input and is no longer written.
+- Signal writes `workspace/logs/signal.history` and `workspace/signal.messages.recent`.
+- WhatsApp writes `workspace/logs/whatsapp.history` and `workspace/whatsapp.messages.recent`.
+- Google Fi writes `workspace/logs/google_fi.history`, `workspace/google_fi.messages.recent` for messages, and `workspace/google_fi.calls.recent` for call events. Call events are stored once in `google_fi.calls.recent`; they are not duplicated into `google_fi.messages.recent`.
+
 Global runtime:
 
 - `runtime.max_reply_chunk_chars` → split long responses into smaller message chunks.

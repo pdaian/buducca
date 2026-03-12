@@ -1871,6 +1871,10 @@ class BotRunner:
         if appended:
             return
 
+    @staticmethod
+    def _is_google_fi_call_event(update: IncomingMessage) -> bool:
+        return getattr(update, "backend", None) == "google_fi" and getattr(update, "event_type", "message") == "call"
+
     def _frontend_account_name(self, backend: str) -> str:
         if backend == "whatsapp" and self.config.whatsapp:
             return self.config.whatsapp.account
@@ -2442,6 +2446,7 @@ class BotRunner:
         )
 
         attachment_context = self._save_incoming_attachments(update, backend=backend, sender_name=sender_name, sender_id=sender_id)
+        is_google_fi_call_event = self._is_google_fi_call_event(update)
 
         if update.text:
             message_text = f"{update.text}\n\n{attachment_context}" if attachment_context else update.text
@@ -2460,19 +2465,20 @@ class BotRunner:
                 logged_at=sent_at,
                 sent_at=sent_at,
             )
-            self._append_recent_frontend_message(
-                backend=backend,
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=message_text,
-                event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact,
-                logged_at=sent_at,
-                sent_at=sent_at,
-            )
-            if backend == "google_fi" and getattr(update, "event_type", "message") == "call":
+            if not is_google_fi_call_event:
+                self._append_recent_frontend_message(
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    conversation_name=conversation_name,
+                    sender_id=sender_id,
+                    text=message_text,
+                    event_id=event_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                    logged_at=sent_at,
+                    sent_at=sent_at,
+                )
+            if is_google_fi_call_event:
                 if not self._should_append_unanswered_message(
                     "google_fi.calls.recent", conversation_id, sender_id, message_text, event_id=event_id
                 ):
@@ -2492,7 +2498,7 @@ class BotRunner:
                     logged_at=sent_at,
                     sent_at=sent_at,
                 )
-                self._workspace.append_text("google_fi.calls.recent", json.dumps(payload, ensure_ascii=False) + "\n")
+                self._append_sorted_recent_message("google_fi.calls.recent", payload)
                 return
             if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
                 self._append_unanswered_collector_log(
