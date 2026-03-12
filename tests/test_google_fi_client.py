@@ -351,9 +351,24 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
         self.assertEqual(
             entries,
             [
-                {"text": "first message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
-                {"text": "second message", "timestamp_text": "Mar 10, 2026, 1:23 PM"},
-                {"text": "third message", "timestamp_text": "Mar 10, 2026, 1:25 PM"},
+                {
+                    "text": "first message",
+                    "timestamp_text": "Mar 10, 2026, 1:23 PM",
+                    "timestamp_source": "timestamp_text",
+                    "timestamp_resolution": "parseable_bubble_candidate",
+                },
+                {
+                    "text": "second message",
+                    "timestamp_text": "Mar 10, 2026, 1:23 PM",
+                    "timestamp_source": "timestamp_text",
+                    "timestamp_resolution": "parseable_bubble_candidate",
+                },
+                {
+                    "text": "third message",
+                    "timestamp_text": "Mar 10, 2026, 1:25 PM",
+                    "timestamp_source": "timestamp_text",
+                    "timestamp_resolution": "parseable_bubble_candidate",
+                },
             ],
         )
 
@@ -369,7 +384,14 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(
             entries,
-            [{"text": "message without visible timestamp node", "timestamp_text": "Mar 10, 2026, 1:23 PM"}],
+            [
+                {
+                    "text": "message without visible timestamp node",
+                    "timestamp_text": "Mar 10, 2026, 1:23 PM",
+                    "timestamp_source": "timestamp_hint",
+                    "timestamp_resolution": "parseable_bubble_candidate",
+                }
+            ],
         )
 
     def test_collect_bubble_entries_prefers_inline_timestamp_text(self) -> None:
@@ -388,7 +410,14 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(
             entries,
-            [{"text": "message with inline timestamp", "timestamp_text": "Mar 10, 2026, 1:23 PM"}],
+            [
+                {
+                    "text": "message with inline timestamp",
+                    "timestamp_text": "Mar 10, 2026, 1:23 PM",
+                    "timestamp_source": "inline_timestamp_text",
+                    "timestamp_resolution": "parseable_bubble_candidate",
+                }
+            ],
         )
 
     def test_collect_bubble_entries_preserves_attr_only_timestamp_nodes(self) -> None:
@@ -403,7 +432,14 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
 
         self.assertEqual(
             entries,
-            [{"text": "message after datetime attribute timestamp", "timestamp_text": "2026-03-10T13:23:00-05:00"}],
+            [
+                {
+                    "text": "message after datetime attribute timestamp",
+                    "timestamp_text": "2026-03-10T13:23:00-05:00",
+                    "timestamp_source": "timestamp_text",
+                    "timestamp_resolution": "unparseable_bubble_fallback",
+                }
+            ],
         )
 
     def test_message_timestamp_selectors_include_google_fi_tombstones(self) -> None:
@@ -562,11 +598,15 @@ class GoogleFiConversationParsingTests(unittest.TestCase):
                                                         "_most_recent_google_messages_timestamp",
                                                         return_value="2026-03-13T11:50:00+00:00",
                                                     ):
-                                                        payload = google_fi_client.receive_events(workspace=td, post_load_wait_ms=0)
+                                                        with self.assertLogs("messaging_llm_bot.google_fi_client", level="DEBUG") as logs:
+                                                            payload = google_fi_client.receive_events(workspace=td, post_load_wait_ms=0)
 
         self.assertEqual(payload["calls"], [])
         self.assertEqual(len(payload["messages"]), 1)
         self.assertEqual(payload["messages"][0]["sent_at"], "2026-03-13T11:50:00+00:00")
+        self.assertTrue(any("source_element=conversation_timestamp_candidates" in line for line in logs.output))
+        self.assertTrue(any("resolution=latest_conversation_timestamp" in line for line in logs.output))
+        self.assertTrue(any("real_timestamp=2026-03-13T11:50:00+00:00" in line for line in logs.output))
 
 
 if __name__ == "__main__":

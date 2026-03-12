@@ -185,3 +185,11 @@ The receive command stores its dedupe state under `workspace/data/google_fi_rece
 If login takes longer, increase the wait window with `--signup-wait-seconds` (default: `300`).
 
 Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.
+
+Timestamp logging note:
+
+- `logged_collected_match` in frontend debug logs compares `logged_at` and `collected_at` only.
+- For Google Fi, incoming messages prefer the message timestamp recovered from Google Messages as `logged_at` and `sent_at`.
+- `collected_at` is still set when BUDUCCA writes the record locally.
+- Because of that, `logged_collected_match=False` is expected whenever Google Fi successfully recovers an older message timestamp from the DOM. It means "message time differs from ingestion time", not "timestamp parsing failed".
+- If Google Fi cannot recover a parseable message timestamp, `logged_at` falls back to the current write time and `logged_collected_match` will usually be `True`.

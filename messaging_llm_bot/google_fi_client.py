@@ -705,8 +705,15 @@ def _collect_bubble_entries(page: Any, bubble_selector: str) -> list[dict[str, s
         text = GoogleFiClient._first_text(item.get("text"))
         if not text:
             continue
-        timestamp_text = _pick_google_messages_timestamp_text(item)
-        entries.append({"text": text, "timestamp_text": timestamp_text})
+        timestamp_details = _pick_google_messages_timestamp_details(item)
+        entries.append(
+            {
+                "text": text,
+                "timestamp_text": timestamp_details["timestamp_text"],
+                "timestamp_source": timestamp_details["timestamp_source"],
+                "timestamp_resolution": timestamp_details["timestamp_resolution"],
+            }
+        )
     return entries
 
 
@@ -782,12 +789,21 @@ def _collect_conversation_timestamp_candidates(page: Any) -> list[str]:
     return [candidate for candidate in raw_candidates if isinstance(candidate, str) and candidate.strip()]
 
 
-def _pick_google_messages_timestamp_text(item: dict[str, Any]) -> str:
+def _pick_google_messages_timestamp_details(item: dict[str, Any]) -> dict[str, str]:
     for key in ("timestamp_text", "inline_timestamp_text", "timestamp_hint", "timestamp", "aria_label", "title"):
         candidate = GoogleFiClient._first_text(item.get(key))
         if candidate and _parse_google_messages_timestamp(candidate):
-            return candidate
-    return GoogleFiClient._first_text(item.get("timestamp_text")) or ""
+            return {
+                "timestamp_text": candidate,
+                "timestamp_source": key,
+                "timestamp_resolution": "parseable_bubble_candidate",
+            }
+    fallback = GoogleFiClient._first_text(item.get("timestamp_text")) or ""
+    return {
+        "timestamp_text": fallback,
+        "timestamp_source": "timestamp_text" if fallback else "",
+        "timestamp_resolution": "unparseable_bubble_fallback" if fallback else "missing_bubble_timestamp",
+    }
 
 
 def _debug_dump_conversation_elements(page: Any, conversation_id: str, *, limit: int = 200) -> None:
@@ -1227,7 +1243,19 @@ def receive_events(
                     continue
                 seen[conversation_id] = key
                 extracted_sender_id = GoogleFiClient._phone_like_or_original(title) or conversation_id
-                sent_at = latest_conversation_timestamp or _parse_google_messages_timestamp(entry.get("timestamp_text"))
+                bubble_timestamp_text = entry.get("timestamp_text") or ""
+                bubble_timestamp = _parse_google_messages_timestamp(bubble_timestamp_text)
+                sent_at = latest_conversation_timestamp or bubble_timestamp
+                timestamp_resolution = (
+                    "latest_conversation_timestamp"
+                    if latest_conversation_timestamp
+                    else entry.get("timestamp_resolution") or ("bubble_timestamp_text" if bubble_timestamp else "missing_timestamp")
+                )
+                timestamp_source_element = (
+                    "conversation_timestamp_candidates"
+                    if latest_conversation_timestamp
+                    else entry.get("timestamp_source") or "none"
+                )
                 event = {
                     "conversation_id": conversation_id,
                     "sender_id": extracted_sender_id,
@@ -1237,6 +1265,17 @@ def receive_events(
                 }
                 if sent_at:
                     event["sent_at"] = sent_at
+                logger.debug(
+                    "Google Fi resolved event timestamp conversation_id=%s source_element=%s resolution=%s "
+                    "real_timestamp=%s bubble_timestamp_text=%r bubble_timestamp=%s latest_conversation_timestamp=%s",
+                    conversation_id,
+                    timestamp_source_element,
+                    timestamp_resolution,
+                    sent_at,
+                    bubble_timestamp_text,
+                    bubble_timestamp,
+                    latest_conversation_timestamp,
+                )
                 call_state = _parse_possible_call_state(text)
                 if call_state:
                     logger.debug("Captured call event conversation_id=%s state=%s text=%r", conversation_id, call_state, text)

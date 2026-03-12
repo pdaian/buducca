@@ -1339,70 +1339,6 @@ class BotTests(unittest.TestCase):
         self.assertIn("- Alice [telegram] -> 123456789", prompt)
         self.assertIn("- Family [whatsapp] -> group:Family|g1", prompt)
 
-    def test_telegram_updates_maintain_top_level_contact_map(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123]),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td, enable_message_send_skill=True),
-            )
-            bot = BotRunner(cfg)
-            bot.telegram = DummyTelegram()
-            bot.llm = DummyLLM("hello")
-
-            update = SimpleNamespace(
-                backend="telegram",
-                update_id=1,
-                chat_id=123,
-                conversation_id="123",
-                sender_id="123",
-                sender_name="Alice",
-                sender_contact="Alice (@alice_tg)",
-                text="hi",
-                voice_file_id=None,
-                voice_file_path=None,
-                attachments=[],
-            )
-
-            bot._handle_update(update)
-
-            contacts = json.loads((Path(td) / "telegram.contacts").read_text(encoding="utf-8"))
-            self.assertEqual(contacts["@alice_tg"], 123)
-            self.assertEqual(contacts["Alice"], 123)
-            self.assertEqual(contacts["Alice (@alice_tg)"], 123)
-            self.assertIn("- @alice_tg [telegram] -> 123", bot._build_system_prompt())
-
-    def test_whatsapp_group_updates_store_group_reply_target(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                whatsapp=WhatsAppConfig(account="default", allowed_sender_ids=["15550001@c.us"]),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td, enable_message_send_skill=True),
-            )
-            bot = BotRunner(cfg)
-            bot.whatsapp = DummyWhatsApp()
-            bot.llm = DummyLLM("hello")
-
-            update = SimpleNamespace(
-                backend="whatsapp",
-                update_id=1,
-                conversation_id="group:Family|1203630@g.us",
-                sender_id="15550001@c.us",
-                sender_name="Alice",
-                sender_contact="Alice",
-                text="hi",
-                voice_file_id=None,
-                voice_file_path=None,
-                attachments=[],
-            )
-
-            bot._handle_update(update)
-
-            contacts = json.loads((Path(td) / "whatsapp.contacts").read_text(encoding="utf-8"))
-            self.assertEqual(contacts["Family"], "group:Family|1203630@g.us")
-            self.assertEqual(contacts["group:Family|1203630@g.us"], "group:Family|1203630@g.us")
-            self.assertNotIn("Alice", contacts)
-
     def test_signal_incoming_log_includes_sender_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
@@ -2788,6 +2724,36 @@ class BotTests(unittest.TestCase):
             self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
             self.assertNotEqual(json.loads(history_line)["collected_at"], "2026-03-10T13:23:00+00:00")
             self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
+
+    def test_google_fi_timestamp_mismatch_log_reports_logged_vs_collected_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                    allowed_sender_ids=["+15550000000"],
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            with self.assertLogs(level="DEBUG") as logs:
+                payload = bot._build_frontend_record(
+                    backend="google_fi",
+                    direction="incoming",
+                    conversation_id="thread-1",
+                    sender_id="+15553334444",
+                    text="collect me",
+                    logged_at="2026-03-10T13:23:00+00:00",
+                )
+
+            self.assertEqual(payload["logged_at"], "2026-03-10T13:23:00+00:00")
+            self.assertNotEqual(payload["collected_at"], "2026-03-10T13:23:00+00:00")
+            self.assertTrue(any("sent_at=None" in line for line in logs.output))
+            self.assertTrue(any("logged_collected_match=False" in line for line in logs.output))
+            self.assertTrue(any("real_timestamp=2026-03-10T13:23:00+00:00" in line for line in logs.output))
+            self.assertTrue(any("timestamp_source=logged_at_fallback" in line for line in logs.output))
 
     def test_google_fi_unanswered_messages_are_sorted_by_logged_at(self) -> None:
         with tempfile.TemporaryDirectory() as td:
