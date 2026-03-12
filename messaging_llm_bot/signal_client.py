@@ -101,7 +101,9 @@ class SignalClient:
 
         messages: list[IncomingMessage] = []
         for envelope in envelopes:
-            conversation_id, sender, text, voice_file_path, attachments = self._extract_message_fields(envelope)
+            conversation_id, sender, text, voice_file_path, attachments, is_outgoing = self._extract_message_fields(
+                envelope
+            )
             if not conversation_id or not sender:
                 if self._debug:
                     logging.debug(
@@ -150,6 +152,7 @@ class SignalClient:
                     voice_file_path=voice_file_path,
                     sender_name=sender_name,
                     attachments=attachments,
+                    is_outgoing=is_outgoing,
                 )
             )
         if self._debug:
@@ -299,7 +302,7 @@ class SignalClient:
     def _extract_message_fields(
         self,
         envelope: dict[str, Any],
-    ) -> tuple[str, str, str | None, str | None, list[IncomingAttachment]]:
+    ) -> tuple[str, str, str | None, str | None, list[IncomingAttachment], bool]:
         sender = self._first_non_empty_string(
             envelope.get("sourceNumber"),
             envelope.get("source"),
@@ -317,14 +320,14 @@ class SignalClient:
             voice_file_path = self._find_voice_attachment_path(data_message)
             attachments = self._extract_non_voice_attachments(data_message)
             if sender and conversation_id and (text or voice_file_path or attachments):
-                return conversation_id, sender, text, voice_file_path, attachments
+                return conversation_id, sender, text, voice_file_path, attachments, False
 
         sync_message = envelope.get("syncMessage") or {}
         if not isinstance(sync_message, dict):
-            return "", "", None, None, []
+            return "", "", None, None, [], False
         sent_message = sync_message.get("sentMessage") or {}
         if not isinstance(sent_message, dict):
-            return "", "", None, None, []
+            return "", "", None, None, [], False
 
         group_id = self._extract_group_id(sent_message)
         if group_id:
@@ -342,7 +345,8 @@ class SignalClient:
         text = sent_message.get("message")
         voice_file_path = self._find_voice_attachment_path(sent_message)
         attachments = self._extract_non_voice_attachments(sent_message)
-        return destination, source, text, voice_file_path, attachments
+        is_outgoing = bool(group_id) or destination != self.account
+        return destination, source, text, voice_file_path, attachments, is_outgoing
 
     def _extract_group_id(self, message: dict[str, Any]) -> str:
         group_info = message.get("groupInfo")

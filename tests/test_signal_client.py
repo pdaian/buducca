@@ -60,6 +60,7 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].conversation_id, "+15551230000")
         self.assertEqual(updates[0].sender_id, "+15551230000")
         self.assertEqual(updates[0].text, "remember milk")
+        self.assertFalse(updates[0].is_outgoing)
 
     def test_parses_sync_sent_message_with_audio_attachment(self) -> None:
         stdout = (
@@ -78,6 +79,7 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].conversation_id, "+15559998888")
         self.assertEqual(updates[0].sender_id, "+15551230000")
         self.assertTrue(updates[0].voice_file_path.endswith("sync.ogg"))
+        self.assertTrue(updates[0].is_outgoing)
 
     def test_parses_note_to_self_audio_when_content_type_is_missing(self) -> None:
         stdout = (
@@ -174,6 +176,7 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].conversation_id, "group:Family Chat|group-123")
         self.assertEqual(updates[0].sender_id, "+15551230000")
         self.assertEqual(updates[0].text, "group note")
+        self.assertTrue(updates[0].is_outgoing)
 
 
 

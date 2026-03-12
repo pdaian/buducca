@@ -2501,6 +2501,9 @@ class BotRunner:
         sender_contact = getattr(update, "sender_contact", None)
         sent_at = getattr(update, "sent_at", None)
         chat_id = getattr(update, "chat_id", None)
+        if getattr(update, "is_outgoing", False):
+            logging.info("Ignoring outgoing %s echo conversation=%s sender=%s", backend, conversation_id, sender_id)
+            return
 
         if not sender_contact:
             sender_contact = sender_id
