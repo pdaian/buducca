@@ -92,6 +92,18 @@ class TimeoutLLM:
         raise RequestTimeoutError("timed out")
 
 
+class BlockingLLM:
+    def __init__(self, started: threading.Event, release: threading.Event, reply: str = "hello") -> None:
+        self.started = started
+        self.release = release
+        self.reply = reply
+
+    def generate_reply(self, messages):
+        self.started.set()
+        self.release.wait(timeout=1.0)
+        return self.reply
+
+
 
 
 class PollingTelegram:
@@ -1816,7 +1828,7 @@ class BotTests(unittest.TestCase):
         )
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "find x"}]
-        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "final")
         self.assertIn("<html><body>Huge page</body></html>", bot.llm.calls[1][-1]["content"])
@@ -1856,7 +1868,7 @@ class BotTests(unittest.TestCase):
         bot._run_skill_call = lambda *_args, **_kwargs: "x" * 5000
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "search"}]
-        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "summarized")
         self.assertEqual(bot.llm.calls, 2)
@@ -1872,7 +1884,7 @@ class BotTests(unittest.TestCase):
         bot._run_skill_call = lambda *_args, **_kwargs: "x" * 5000
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "search"}]
-        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "summarized")
         self.assertEqual(bot.llm.calls, 2)
@@ -2354,6 +2366,47 @@ class BotTests(unittest.TestCase):
         runner_thread.join(timeout=1.0)
 
         self.assertGreaterEqual(bot.signal.calls, 1)
+
+    def test_frontend_file_writes_do_not_block_while_llm_call_is_in_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                signal=SignalConfig(
+                    account="+15550000000",
+                    allowed_sender_ids=["+15551112222"],
+                    read_only=True,
+                    store_unanswered_messages=True,
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+
+            llm_started = threading.Event()
+            llm_release = threading.Event()
+            bot.llm = BlockingLLM(llm_started, llm_release)
+
+            worker = threading.Thread(target=bot._handle_message, args=(1, "hi"))
+            worker.start()
+            self.assertTrue(llm_started.wait(timeout=0.5))
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=2,
+                    backend="signal",
+                    conversation_id="+15551112222",
+                    sender_id="+15551112222",
+                    text="logged while llm busy",
+                )
+            )
+
+            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
+            self.assertIn("logged while llm busy", recent)
+
+            llm_release.set()
+            worker.join(timeout=1.0)
+            self.assertFalse(worker.is_alive())
 
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(
