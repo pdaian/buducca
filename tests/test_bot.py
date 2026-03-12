@@ -1,5 +1,7 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
@@ -132,6 +134,19 @@ class PollingSignal:
         if isinstance(result, BaseException):
             raise result
         return result
+
+
+class BlockingTelegram:
+    def __init__(self, started: threading.Event, release: threading.Event) -> None:
+        self.started = started
+        self.release = release
+        self.calls = []
+
+    def get_updates(self, offset=None, timeout_seconds=30):
+        self.calls.append((offset, timeout_seconds))
+        self.started.set()
+        self.release.wait(timeout=1.0)
+        raise KeyboardInterrupt()
 
 
 class BotTests(unittest.TestCase):
@@ -2312,6 +2327,33 @@ class BotTests(unittest.TestCase):
         self.assertIn("signal", bot._frontend_workers)
         self.assertEqual(bot.signal.calls, 2)
         self.assertEqual(bot.llm.calls, 1)
+
+    def test_signal_worker_polls_while_telegram_long_poll_is_blocked(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(bot_token="t", long_poll_timeout_seconds=30),
+            signal=SignalConfig(account="+15550000000", allowed_sender_ids=["+15551112222"], poll_interval_seconds=0.01),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        telegram_started = threading.Event()
+        telegram_release = threading.Event()
+        bot.telegram = BlockingTelegram(telegram_started, telegram_release)
+        bot.signal = PollingSignal([[], KeyboardInterrupt()])
+        bot._send_message = lambda backend, conversation_id, text: None
+
+        runner_thread = threading.Thread(target=bot.run_forever)
+        runner_thread.start()
+        self.assertTrue(telegram_started.wait(timeout=0.5))
+
+        deadline = time.time() + 0.5
+        while bot.signal.calls == 0 and time.time() < deadline:
+            time.sleep(0.01)
+
+        telegram_release.set()
+        runner_thread.join(timeout=1.0)
+
+        self.assertGreaterEqual(bot.signal.calls, 1)
 
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(

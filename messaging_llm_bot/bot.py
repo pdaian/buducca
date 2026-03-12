@@ -601,16 +601,20 @@ class BotRunner:
                     return
 
     def _poll_single_frontend(self, frontend: str) -> int:
-        with self._processing_lock:
-            if frontend == "telegram":
-                return self._poll_telegram_once()
-            if frontend == "signal":
-                return self._poll_signal_once()
-            if frontend == "whatsapp":
-                return self._poll_whatsapp_once()
-            if frontend == "google_fi":
-                return self._poll_google_fi_once()
+        if frontend == "telegram":
+            return self._poll_telegram_once()
+        if frontend == "signal":
+            return self._poll_signal_once()
+        if frontend == "whatsapp":
+            return self._poll_whatsapp_once()
+        if frontend == "google_fi":
+            return self._poll_google_fi_once()
         raise ValueError(f"Unknown frontend: {frontend}")
+
+    def _handle_updates_with_lock(self, updates: list[IncomingMessage]) -> None:
+        with self._processing_lock:
+            for update in updates:
+                self._handle_update(update)
 
     def _set_frontend_disabled(self, frontend: str, *, disabled: bool = True, error: str | None = None) -> None:
         state = self._frontend_workers.get(frontend)
@@ -712,10 +716,11 @@ class BotRunner:
         self._telegram_conflict_logged_at = None
         self._telegram_retry_after = None
         self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
-        for update in updates:
-            self._telegram_offset = update.update_id + 1
-            self._offset = self._telegram_offset
-            self._handle_update(update)
+        with self._processing_lock:
+            for update in updates:
+                self._telegram_offset = update.update_id + 1
+                self._offset = self._telegram_offset
+                self._handle_update(update)
         return len(updates)
 
     def _poll_signal_once(self) -> int:
@@ -741,8 +746,8 @@ class BotRunner:
             return 0
         if self._debug_enabled:
             logging.debug("Signal poll returned %s update(s)", len(updates))
-        for update in updates:
-            if self._debug_enabled:
+        if self._debug_enabled:
+            for update in updates:
                 logging.debug(
                     "Handling signal update: update_id=%s conversation_id=%s sender_id=%s text_present=%s voice_present=%s attachments=%s",
                     update.update_id,
@@ -752,7 +757,7 @@ class BotRunner:
                     bool(update.voice_file_path),
                     len(update.attachments),
                 )
-            self._handle_update(update)
+        self._handle_updates_with_lock(updates)
         return len(updates)
 
     def _poll_whatsapp_once(self) -> int:
@@ -765,8 +770,7 @@ class BotRunner:
             self._set_frontend_disabled("whatsapp", error=str(exc))
             logging.warning("%s; continuing without whatsapp frontend", exc)
             return 0
-        for update in updates:
-            self._handle_update(update)
+        self._handle_updates_with_lock(updates)
         return len(updates)
 
     def _poll_google_fi_once(self) -> int:
@@ -779,8 +783,7 @@ class BotRunner:
             self._set_frontend_disabled("google_fi", error=str(exc))
             logging.warning("%s; continuing without google_fi frontend", exc)
             return 0
-        for update in updates:
-            self._handle_update(update)
+        self._handle_updates_with_lock(updates)
         return len(updates)
 
     @staticmethod

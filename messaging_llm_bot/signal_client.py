@@ -53,15 +53,6 @@ class SignalClient:
         self._group_names_loaded_at = 0.0
         self._debug = debug
 
-    def _is_receive_json_configured(self) -> bool:
-        command = self.receive_command
-        for idx, token in enumerate(command):
-            if token == "-o" and idx + 1 < len(command) and command[idx + 1].lower() == "json":
-                return True
-            if token.lower().startswith("--output=") and token.split("=", 1)[1].lower() == "json":
-                return True
-        return False
-
     def _validate_receive_command(self) -> None:
         if not self.receive_command:
             raise SignalFrontendUnavailableError("Signal frontend disabled: receive command is empty")
@@ -70,11 +61,6 @@ class SignalClient:
         if "/" not in executable and which(executable) is None:
             raise SignalFrontendUnavailableError(
                 f"Signal frontend disabled: executable {executable!r} was not found in PATH"
-            )
-
-        if not self._is_receive_json_configured():
-            raise SignalFrontendUnavailableError(
-                "Signal frontend disabled: receive command must enable JSON output (for example `-o json`)"
             )
 
     def get_updates(self) -> list[IncomingMessage]:
@@ -172,6 +158,7 @@ class SignalClient:
 
     def _parse_receive_output(self, output: str) -> list[dict[str, Any]]:
         envelopes: list[dict[str, Any]] = []
+        saw_json_payload = False
         for line in output.splitlines():
             if not line.strip():
                 continue
@@ -180,11 +167,14 @@ class SignalClient:
             except json.JSONDecodeError:
                 logging.debug("Skipping non-JSON signal-cli output line: %s", line)
                 continue
+            saw_json_payload = True
             if not isinstance(payload, dict):
                 continue
             envelope = payload.get("envelope")
             if isinstance(envelope, dict):
                 envelopes.append(envelope)
+        if output.strip() and not envelopes and not saw_json_payload:
+            raise RuntimeError("Signal receive command must output valid JSON")
         if self._debug and not output.strip():
             logging.debug("Signal receive command returned no output")
         return envelopes

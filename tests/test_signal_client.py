@@ -339,12 +339,32 @@ class SignalClientTests(unittest.TestCase):
 
         self.assertIn("signal_signup", str(exc.exception))
 
-    def test_raises_when_json_output_not_configured(self) -> None:
+    def test_custom_receive_command_runs_without_explicit_json_flag(self) -> None:
         client = SignalClient(account="+15551230000", receive_command=["signal-cli", "-a", "+15551230000", "receive"])
 
-        with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
-            with self.assertRaises(SignalFrontendUnavailableError):
-                client.get_updates()
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                updates = client.get_updates()
+
+        self.assertEqual(run.call_args_list[0].args[0], client.receive_command)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].text, "hello")
+
+    def test_raises_when_receive_output_is_not_json(self) -> None:
+        client = SignalClient(account="+15551230000", receive_command=["signal-cli", "-a", "+15551230000", "receive"])
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "plain text output"
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                with self.assertRaises(RuntimeError) as exc:
+                    client.get_updates()
+
+        self.assertIn("must output valid JSON", str(exc.exception))
 
     def test_debug_logs_when_receive_returns_no_output(self) -> None:
         with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
