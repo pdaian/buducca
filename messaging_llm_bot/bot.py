@@ -525,7 +525,17 @@ class BotRunner:
         intervals = [state.poll_interval_seconds for state in self._frontend_workers.values() if state.poll_interval_seconds > 0]
         return min(intervals, default=1.0)
 
+    def _sync_frontend_workers(self) -> None:
+        desired_workers = self._build_frontend_workers()
+        for name, desired_state in desired_workers.items():
+            existing = self._frontend_workers.get(name)
+            if existing is None:
+                self._frontend_workers[name] = desired_state
+                continue
+            existing.poll_interval_seconds = desired_state.poll_interval_seconds
+
     def _start_frontend_workers(self) -> None:
+        self._sync_frontend_workers()
         for name, state in self._frontend_workers.items():
             if state.thread is not None and state.thread.is_alive():
                 continue

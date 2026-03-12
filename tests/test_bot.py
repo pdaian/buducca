@@ -2290,6 +2290,29 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.signal.calls, 2)
         self.assertEqual(bot.llm.calls, 1)
 
+    def test_run_forever_rebuilds_missing_signal_worker_before_start(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15550000000", allowed_sender_ids=["+15551112222"]),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = PollingSignal(
+            responses=[
+                [IncomingMessage(update_id=5, backend="signal", conversation_id="+15551112222", sender_id="+15551112222", text="recent")],
+                KeyboardInterrupt(),
+            ]
+        )
+        bot.llm = DummyLLM("hello")
+        bot._send_message = lambda backend, conversation_id, text: None
+        bot._frontend_workers = {}
+
+        bot.run_forever()
+
+        self.assertIn("signal", bot._frontend_workers)
+        self.assertEqual(bot.signal.calls, 2)
+        self.assertEqual(bot.llm.calls, 1)
+
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(
             telegram=TelegramConfig(bot_token="t", long_poll_timeout_seconds=10),
