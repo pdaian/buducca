@@ -114,6 +114,14 @@ class BotConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 
+WORKSPACE_CONTACT_MAP_FILES = {
+    "telegram": "telegram.contacts",
+    "signal": "signal.contacts",
+    "whatsapp": "whatsapp.contacts",
+    "google_fi": "google_fi.contacts",
+}
+
+
 def _read_json(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -175,20 +183,84 @@ def _load_contacts(raw: Any) -> list[ContactConfig]:
     return contacts
 
 
+def _resolve_workspace_root(runtime: RuntimeConfig, *, config_path: Path) -> Path:
+    workspace_root = Path(runtime.workspace_dir)
+    if not workspace_root.is_absolute():
+        workspace_root = (config_path.parent / workspace_root).resolve()
+    return workspace_root
+
+
 def _load_contacts_from_workspace(runtime: RuntimeConfig, *, config_path: Path) -> list[ContactConfig]:
     contacts_file = runtime.contacts_file.strip()
     if not contacts_file:
         return []
 
-    workspace_root = Path(runtime.workspace_dir)
-    if not workspace_root.is_absolute():
-        workspace_root = (config_path.parent / workspace_root).resolve()
+    workspace_root = _resolve_workspace_root(runtime, config_path=config_path)
     contacts_path = Path(contacts_file)
     if not contacts_path.is_absolute():
         contacts_path = workspace_root / contacts_path
     if not contacts_path.exists():
         return []
     return _load_contacts(_read_json(contacts_path))
+
+
+def _load_contact_map_contacts(raw: Any, *, platform: str) -> list[ContactConfig]:
+    if not isinstance(raw, dict):
+        return []
+
+    contacts: list[ContactConfig] = []
+    for raw_name, raw_value in raw.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+
+        description = ""
+        recipient = raw_value
+        if isinstance(raw_value, dict):
+            description = str(raw_value.get("description", "")).strip()
+            recipient = raw_value.get("recipient")
+
+        if isinstance(recipient, bool) or recipient is None:
+            continue
+        if isinstance(recipient, (int, float)):
+            recipient_value: str | int = int(recipient)
+        else:
+            recipient_text = str(recipient).strip()
+            if not recipient_text:
+                continue
+            recipient_value = recipient_text
+
+        contacts.append(
+            ContactConfig(
+                name=name,
+                platform=platform,
+                recipient=recipient_value,
+                description=description,
+            )
+        )
+    return contacts
+
+
+def _load_top_level_contact_maps(runtime: RuntimeConfig, *, config_path: Path) -> list[ContactConfig]:
+    workspace_root = _resolve_workspace_root(runtime, config_path=config_path)
+    contacts: list[ContactConfig] = []
+    for platform, relative_path in WORKSPACE_CONTACT_MAP_FILES.items():
+        contacts_path = workspace_root / relative_path
+        if not contacts_path.exists():
+            continue
+        contacts.extend(_load_contact_map_contacts(_read_json(contacts_path), platform=platform))
+    return contacts
+
+
+def _dedupe_contacts(contacts: list[ContactConfig]) -> list[ContactConfig]:
+    merged: dict[tuple[str, str], ContactConfig] = {}
+    order: list[tuple[str, str]] = []
+    for contact in contacts:
+        key = (contact.platform, contact.name)
+        if key not in merged:
+            order.append(key)
+        merged[key] = contact
+    return [merged[key] for key in order]
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
@@ -293,7 +365,10 @@ def load_config(path: str | Path) -> BotConfig:
         raise ValueError("Missing required top-level section: llm") from exc
     runtime_raw = raw.get("runtime", {})
     runtime = RuntimeConfig(**_strip_comment_keys(runtime_raw if isinstance(runtime_raw, dict) else {}))
-    contacts = _load_contacts_from_workspace(runtime, config_path=config_path)
+    contacts = _dedupe_contacts(
+        _load_contacts_from_workspace(runtime, config_path=config_path)
+        + _load_top_level_contact_maps(runtime, config_path=config_path)
+    )
 
     config = BotConfig(
         telegram=telegram,

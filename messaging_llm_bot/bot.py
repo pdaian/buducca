@@ -31,7 +31,7 @@ from assistant_framework.retrieval import (
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
 from assistant_framework.traces import write_trace
 
-from .config import BotConfig
+from .config import BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
 from .http import HttpClient, RequestTimeoutError
 from .interfaces import IncomingAttachment, IncomingMessage
 from .llm_client import OpenAICompatibleClient
@@ -53,6 +53,8 @@ _MAX_REMINDER_FILE_CHARS = 4_000
 _MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
 _HOURLY_NO_ACTION_REPLY = "NO_ACTION"
 _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+_CONTACT_HANDLE_RE = re.compile(r"@\w[\w.]*")
+_CONTACT_ANGLE_RE = re.compile(r"<([^>]+)>")
 
 
 @dataclass
@@ -2265,6 +2267,143 @@ class BotRunner:
     def _normalize_signal_identifier(identifier: str) -> str:
         return "".join(ch for ch in identifier if ch == "+" or ch.isdigit())
 
+    def _remember_contact_mapping(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        conversation_name: str | None,
+        sender_id: str,
+        sender_name: str | None,
+        sender_contact: str | None,
+        chat_id: int | None,
+    ) -> None:
+        contacts_path = WORKSPACE_CONTACT_MAP_FILES.get(backend)
+        if not contacts_path:
+            return
+
+        recipient = self._contact_recipient_for_backend(
+            backend=backend,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            chat_id=chat_id,
+        )
+        if recipient is None:
+            return
+
+        aliases = self._contact_aliases_for_update(
+            backend=backend,
+            conversation_id=conversation_id,
+            conversation_name=conversation_name,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+        )
+        if not aliases:
+            return
+
+        raw_contacts = self._workspace.read_text(contacts_path, default="").strip()
+        try:
+            existing = json.loads(raw_contacts) if raw_contacts else {}
+        except json.JSONDecodeError:
+            logging.warning("Ignoring invalid contact map file: %s", contacts_path)
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+
+        updated = False
+        for alias in aliases:
+            if existing.get(alias) == recipient:
+                continue
+            existing[alias] = recipient
+            updated = True
+            self._upsert_runtime_contact(alias=alias, platform=backend, recipient=recipient)
+
+        if updated:
+            self._workspace.write_text(contacts_path, json.dumps(existing, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+    def _contact_recipient_for_backend(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        sender_id: str,
+        chat_id: int | None,
+    ) -> str | int | None:
+        if backend == "telegram":
+            if chat_id is not None:
+                return chat_id
+            try:
+                return int(conversation_id)
+            except (TypeError, ValueError):
+                return None
+        if backend == "signal":
+            return conversation_id if conversation_id.startswith(SignalClient.GROUP_CONVERSATION_PREFIX) else (sender_id or conversation_id)
+        if backend == "whatsapp":
+            return conversation_id or sender_id
+        if backend == "google_fi":
+            return sender_id or conversation_id
+        return None
+
+    def _contact_aliases_for_update(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        conversation_name: str | None,
+        sender_id: str,
+        sender_name: str | None,
+        sender_contact: str | None,
+    ) -> list[str]:
+        aliases: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: str | None) -> None:
+            if value is None:
+                return
+            alias = str(value).strip()
+            if not alias or alias in seen:
+                return
+            seen.add(alias)
+            aliases.append(alias)
+
+        add(conversation_id)
+        add(conversation_name)
+        if backend in {"signal", "whatsapp"} and conversation_id.startswith("group:"):
+            payload = conversation_id.split(":", 1)[1]
+            if "|" in payload:
+                add(payload.rsplit("|", 1)[0].strip())
+
+        is_direct_conversation = backend == "google_fi" or conversation_id == sender_id
+        if is_direct_conversation:
+            add(sender_id)
+            add(sender_name)
+            add(sender_contact)
+
+        for raw_value in (conversation_name, sender_name, sender_contact):
+            if not raw_value:
+                continue
+            for match in _CONTACT_HANDLE_RE.findall(raw_value):
+                add(match)
+            angle_match = _CONTACT_ANGLE_RE.search(raw_value)
+            if angle_match:
+                add(angle_match.group(1).strip())
+
+        return aliases
+
+    def _upsert_runtime_contact(self, *, alias: str, platform: str, recipient: str | int) -> None:
+        for index, contact in enumerate(self.config.contacts):
+            if contact.platform == platform and contact.name == alias:
+                if contact.recipient != recipient:
+                    self.config.contacts[index] = ContactConfig(
+                        name=alias,
+                        platform=platform,
+                        recipient=recipient,
+                        description=contact.description,
+                    )
+                return
+        self.config.contacts.append(ContactConfig(name=alias, platform=platform, recipient=recipient))
+
     def _handle_update(self, update: IncomingMessage) -> None:
         with self._processing_lock:
             self._handle_update_locked(update)
@@ -2279,11 +2418,22 @@ class BotRunner:
         sender_name = getattr(update, "sender_name", None)
         sender_contact = getattr(update, "sender_contact", None)
         sent_at = getattr(update, "sent_at", None)
+        chat_id = getattr(update, "chat_id", None)
 
         if not sender_contact:
             sender_contact = sender_id
             if backend == "signal" and sender_name:
                 sender_contact = f"{sender_name} <{sender_id}>"
+
+        self._remember_contact_mapping(
+            backend=backend,
+            conversation_id=conversation_id,
+            conversation_name=conversation_name,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            sender_contact=sender_contact,
+            chat_id=chat_id,
+        )
 
         attachment_context = self._save_incoming_attachments(update, backend=backend, sender_name=sender_name, sender_id=sender_id)
 

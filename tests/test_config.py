@@ -310,6 +310,32 @@ class ConfigTests(unittest.TestCase):
                 load_config(path)
             self.assertIn("contacts[].platform", str(ctx.exception))
 
+    def test_contacts_load_from_top_level_service_maps(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            workspace.mkdir()
+            (workspace / "telegram.contacts").write_text(
+                json.dumps({"@alice": 123, "Alice": 123}),
+                encoding="utf-8",
+            )
+            (workspace / "whatsapp.contacts").write_text(
+                json.dumps({"Family": "group:Family|g1"}),
+                encoding="utf-8",
+            )
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_config(path)
+
+            self.assertEqual(len(config.contacts), 3)
+            self.assertEqual(config.contacts[0].platform, "telegram")
+            self.assertEqual(config.contacts[0].recipient, 123)
+            self.assertEqual(config.contacts[-1].platform, "whatsapp")
+
 
     def test_google_fi_only_config_is_valid(self) -> None:
         data = {
