@@ -285,6 +285,22 @@ class SignalClient:
             return group_id not in self._group_names
         return False
 
+    def _send_command_base(self) -> list[str]:
+        if not self.send_command:
+            return ["signal-cli", "-a", self.account, "send"]
+
+        message_placeholder_index = next(
+            (index for index, part in enumerate(self.send_command) if "{message}" in part),
+            None,
+        )
+        if message_placeholder_index is None:
+            return list(self.send_command)
+
+        command = list(self.send_command[:message_placeholder_index])
+        if command and command[-1] == "-m":
+            command.pop()
+        return command
+
     def _refresh_contact_cache_if_needed(self, *, force: bool = False) -> None:
         if not self.contacts_command:
             return
@@ -697,10 +713,12 @@ class SignalClient:
             raise RuntimeError(f"Signal attachment file not found: {file_path}")
 
         group_id = self._extract_group_id_from_recipient(recipient)
+        command = self._send_command_base()
+        command.extend(["-m", caption or "", "--attachment", str(path)])
         if group_id:
-            command = ["signal-cli", "-a", self.account, "send", "-m", caption or "", "-a", str(path), "-g", group_id]
+            command.extend(["-g", group_id])
         else:
-            command = ["signal-cli", "-a", self.account, "send", "-m", caption or "", "-a", str(path), recipient]
+            command.append(recipient)
 
         proc = subprocess.run(command, capture_output=True, text=True, check=False)
         if proc.returncode != 0:

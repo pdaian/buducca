@@ -378,6 +378,41 @@ class SignalClientTests(unittest.TestCase):
 
         run.assert_not_called()
 
+    def test_send_file_uses_attachment_flag_for_direct_recipient(self) -> None:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.Path.exists", return_value=True):
+                client = SignalClient(account="+15551230000")
+                client.send_file("+15550001", "docs/file.pdf", caption="note")
+
+        run.assert_called_once_with(
+            ["signal-cli", "-a", "+15551230000", "send", "-m", "note", "--attachment", "docs/file.pdf", "+15550001"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_send_file_reuses_custom_send_command_prefix(self) -> None:
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.Path.exists", return_value=True):
+                client = SignalClient(
+                    account="+15551230000",
+                    send_command=["python3", "/opt/signal-wrapper.py", "--account", "+15551230000", "send", "-m", "{message}", "{recipient}"],
+                )
+                client.send_file("group:Family Chat|group-123", "docs/file.pdf", caption="note")
+
+        run.assert_called_once_with(
+            ["python3", "/opt/signal-wrapper.py", "--account", "+15551230000", "send", "-m", "note", "--attachment", "docs/file.pdf", "-g", "group-123"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_raises_when_signal_cli_missing(self) -> None:
         client = SignalClient(account="+15551230000")
 
