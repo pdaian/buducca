@@ -13,6 +13,7 @@ from .interfaces import IncomingAttachment, IncomingMessage
 
 class TelegramUserClient(BaseTelegramUserClient):
     _MAX_FLOOD_WAIT_RETRIES = 3
+    _FILE_TOKEN_PREFIX = "tguser"
 
     def __init__(self, api_id: int, api_hash: str, session_path: str, dialog_limit: int = 50, message_limit: int = 20) -> None:
         super().__init__(api_id, api_hash, session_path, error_prefix="telegram user mode")
@@ -74,8 +75,9 @@ class TelegramUserClient(BaseTelegramUserClient):
             async for message in client.iter_messages(entity, limit=self.message_limit, min_id=min_id, reverse=True):
                 max_id = max(max_id, int(getattr(message, "id", 0) or 0))
                 text = str(getattr(message, "message", "") or "").strip()
-                attachments = await self._extract_attachments(message)
-                if not text and not attachments:
+                voice_file_id = self._build_file_token(chat_id, int(getattr(message, "id", 0) or 0)) if self._is_voice_message(message) else None
+                attachments = self._extract_attachments(message, chat_id=chat_id)
+                if not text and not voice_file_id and not attachments:
                     continue
                 sender = getattr(message, "sender", None)
                 if sender is None:
@@ -98,6 +100,7 @@ class TelegramUserClient(BaseTelegramUserClient):
                         sender_contact=sender_contact,
                         sent_at=sent_at.astimezone(timezone.utc).isoformat() if sent_at else None,
                         is_outgoing=bool(getattr(message, "out", False)),
+                        voice_file_id=voice_file_id,
                         attachments=attachments,
                     )
                 )
@@ -165,12 +168,29 @@ class TelegramUserClient(BaseTelegramUserClient):
     def send_typing_action(self, chat_id: int) -> None:
         _ = chat_id
 
-    async def _extract_attachments(self, message: object) -> list[IncomingAttachment]:
-        attachment = await self._extract_attachment(message)
+    @classmethod
+    def _build_file_token(cls, chat_id: int, message_id: int) -> str:
+        return f"{cls._FILE_TOKEN_PREFIX}:{chat_id}:{message_id}"
+
+    @classmethod
+    def _parse_file_token(cls, value: str) -> tuple[int, int]:
+        prefix, chat_id, message_id = value.split(":", 2)
+        if prefix != cls._FILE_TOKEN_PREFIX:
+            raise ValueError(f"Unsupported telegram user file token: {value}")
+        return int(chat_id), int(message_id)
+
+    @staticmethod
+    def _is_voice_message(message: object) -> bool:
+        return bool(getattr(message, "voice", None) is not None or getattr(message, "audio", None) is not None)
+
+    def _extract_attachments(self, message: object, *, chat_id: int) -> list[IncomingAttachment]:
+        attachment = self._extract_attachment(message, chat_id=chat_id)
         return [attachment] if attachment else []
 
-    async def _extract_attachment(self, message: object) -> IncomingAttachment | None:
+    def _extract_attachment(self, message: object, *, chat_id: int) -> IncomingAttachment | None:
         if not getattr(message, "media", None):
+            return None
+        if self._is_voice_message(message):
             return None
 
         filename = None
@@ -190,12 +210,28 @@ class TelegramUserClient(BaseTelegramUserClient):
         if not filename:
             suffix = mimetypes.guess_extension(mime_type or "") or ""
             filename = f"attachment_{getattr(message, 'id', 'telegram')}{suffix}"
-
-        payload = await message.download_media(file=bytes)
-        if not isinstance(payload, (bytes, bytearray)):
-            return None
         return IncomingAttachment(
+            file_id=self._build_file_token(chat_id, int(getattr(message, "id", 0) or 0)),
             filename=filename,
             mime_type=mime_type,
-            content=bytes(payload),
         )
+
+    async def _download_file_async(self, file_token: str) -> bytes:
+        chat_id, message_id = self._parse_file_token(file_token)
+        client = await self._get_connected_client()
+        entity = self._entity_cache.get(chat_id)
+        if entity is None:
+            entity = self._cache_entity(await client.get_entity(chat_id))
+        message = await client.get_messages(entity, ids=message_id)
+        if message is None or not getattr(message, "media", None):
+            raise RuntimeError(f"Telegram user attachment is unavailable for chat_id={chat_id} message_id={message_id}")
+        payload = await message.download_media(file=bytes)
+        if not isinstance(payload, (bytes, bytearray)):
+            raise RuntimeError(f"Telegram user attachment download failed for chat_id={chat_id} message_id={message_id}")
+        return bytes(payload)
+
+    def get_file_path(self, file_id: str) -> str:
+        return file_id
+
+    def download_file(self, file_path: str) -> bytes:
+        return self._run(self._download_file_async(file_path))

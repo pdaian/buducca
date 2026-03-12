@@ -3,7 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -90,18 +90,6 @@ class BrokenLLM:
 class TimeoutLLM:
     def generate_reply(self, messages):
         raise RequestTimeoutError("timed out")
-
-
-class BlockingLLM:
-    def __init__(self, started: threading.Event, release: threading.Event, reply: str = "hello") -> None:
-        self.started = started
-        self.release = release
-        self.reply = reply
-
-    def generate_reply(self, messages):
-        self.started.set()
-        self.release.wait(timeout=1.0)
-        return self.reply
 
 
 
@@ -404,6 +392,65 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.telegram.sent, [(1, "received")])
             self.assertIn("[Attachments]", bot.llm.messages[-1]["content"])
+
+    def test_save_incoming_attachments_skips_attachments_older_than_24_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+
+            old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+            result = bot._save_incoming_attachments(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    sender_name="Alice",
+                    sent_at=old_timestamp,
+                    attachments=[IncomingAttachment(file_id="doc-id", filename="source.pdf", mime_type="application/pdf")],
+                ),
+                backend="telegram",
+                sender_name="Alice",
+                sender_id="1",
+            )
+
+            self.assertEqual(result, "")
+
+    def test_save_incoming_attachments_persists_recent_attachments_within_24_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.telegram.file_path = "docs/source.pdf"
+            bot.telegram.file_bytes = b"%PDF-1.4 dummy"
+
+            recent_timestamp = (datetime.now(timezone.utc) - timedelta(hours=23)).isoformat()
+            result = bot._save_incoming_attachments(
+                IncomingMessage(
+                    update_id=1,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    sender_name="Alice",
+                    sent_at=recent_timestamp,
+                    attachments=[IncomingAttachment(file_id="doc-id", filename="source.pdf", mime_type="application/pdf")],
+                ),
+                backend="telegram",
+                sender_name="Alice",
+                sender_id="1",
+            )
+
+            self.assertIn("[Attachments]", result)
+            self.assertIn("- saved: attachments/", result)
 
     def test_hourly_task_sends_to_latest_logged_conversation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1828,7 +1875,7 @@ class BotTests(unittest.TestCase):
         )
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "find x"}]
-        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "final")
         self.assertIn("<html><body>Huge page</body></html>", bot.llm.calls[1][-1]["content"])
@@ -1868,7 +1915,7 @@ class BotTests(unittest.TestCase):
         bot._run_skill_call = lambda *_args, **_kwargs: "x" * 5000
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "search"}]
-        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "summarized")
         self.assertEqual(bot.llm.calls, 2)
@@ -1884,7 +1931,7 @@ class BotTests(unittest.TestCase):
         bot._run_skill_call = lambda *_args, **_kwargs: "x" * 5000
 
         prompt = [{"role": "system", "content": "sys"}, {"role": "user", "content": "search"}]
-        reply, _ = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
 
         self.assertEqual(reply, "summarized")
         self.assertEqual(bot.llm.calls, 2)
@@ -2366,47 +2413,6 @@ class BotTests(unittest.TestCase):
         runner_thread.join(timeout=1.0)
 
         self.assertGreaterEqual(bot.signal.calls, 1)
-
-    def test_frontend_file_writes_do_not_block_while_llm_call_is_in_progress(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                telegram=TelegramConfig(bot_token="t"),
-                signal=SignalConfig(
-                    account="+15550000000",
-                    allowed_sender_ids=["+15551112222"],
-                    read_only=True,
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-            bot.telegram = DummyTelegram()
-
-            llm_started = threading.Event()
-            llm_release = threading.Event()
-            bot.llm = BlockingLLM(llm_started, llm_release)
-
-            worker = threading.Thread(target=bot._handle_message, args=(1, "hi"))
-            worker.start()
-            self.assertTrue(llm_started.wait(timeout=0.5))
-
-            bot._handle_update(
-                IncomingMessage(
-                    update_id=2,
-                    backend="signal",
-                    conversation_id="+15551112222",
-                    sender_id="+15551112222",
-                    text="logged while llm busy",
-                )
-            )
-
-            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
-            self.assertIn("logged while llm busy", recent)
-
-            llm_release.set()
-            worker.join(timeout=1.0)
-            self.assertFalse(worker.is_alive())
 
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(

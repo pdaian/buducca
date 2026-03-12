@@ -81,6 +81,7 @@ class _FakeDialogClient(_FakeClient):
         self._messages_by_chat = messages_by_chat
         self._entities = entities or {}
         self.iter_messages_calls: list[tuple[int, int, int, bool]] = []
+        self.get_messages_calls: list[tuple[int, int]] = []
 
     async def iter_dialogs(self, limit=50):
         self.dialog_calls += 1
@@ -96,6 +97,47 @@ class _FakeDialogClient(_FakeClient):
 
     async def get_entity(self, entity):
         return self._entities.get(entity)
+
+    async def get_messages(self, entity, ids):
+        chat_id = int(getattr(entity, "id"))
+        self.get_messages_calls.append((chat_id, int(ids)))
+        for message in self._messages_by_chat.get(chat_id, []):
+            if int(message.id) == int(ids):
+                return message
+        return None
+
+
+class _FakeMediaAttribute:
+    def __init__(self, file_name: str | None = None) -> None:
+        self.file_name = file_name
+
+
+class _FakeDocument:
+    def __init__(self, mime_type: str, file_name: str | None = None) -> None:
+        self.mime_type = mime_type
+        self.attributes = [_FakeMediaAttribute(file_name)]
+
+
+class _FakeMediaMessage(_FakeMessage):
+    def __init__(self, message_id: int, sender: object, *, mime_type: str, file_name: str | None = None, payload: bytes = b"file") -> None:
+        super().__init__(message_id, "", sender)
+        self.media = object()
+        self.document = _FakeDocument(mime_type, file_name)
+        self.photo = None
+        self.voice = None
+        self.audio = None
+        self._payload = payload
+        self.download_calls = 0
+
+    async def download_media(self, file=bytes):
+        self.download_calls += 1
+        return self._payload
+
+
+class _FakeVoiceMessage(_FakeMediaMessage):
+    def __init__(self, message_id: int, sender: object, payload: bytes = b"voice") -> None:
+        super().__init__(message_id, sender, mime_type="audio/ogg", file_name="voice.ogg", payload=payload)
+        self.voice = object()
 
 
 class TelegramUserClientTests(unittest.TestCase):
@@ -362,6 +404,47 @@ class TelegramUserClientTests(unittest.TestCase):
             self.assertEqual([update.text for update in first_updates], ["hello", "again"])
             self.assertEqual(second_updates, [])
             self.assertEqual(fake_client.connect_calls, 1)
+
+    def test_bot_client_keeps_attachment_download_lazy_until_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice"})()
+            entity = type("Entity", (), {"id": 42})()
+            dialog = type("Dialog", (), {"entity": entity})()
+            media_message = _FakeMediaMessage(5, sender, mime_type="application/pdf", file_name="report.pdf", payload=b"%PDF")
+            fake_client = _FakeDialogClient(dialogs=[dialog], messages_by_chat={42: [media_message]}, entities={42: entity})
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            updates = client.get_updates()
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(media_message.download_calls, 0)
+            self.assertEqual(updates[0].attachments[0].file_id, "tguser:42:5")
+            self.assertEqual(updates[0].attachments[0].filename, "report.pdf")
+
+            payload = client.download_file(client.get_file_path(updates[0].attachments[0].file_id or ""))
+
+            self.assertEqual(payload, b"%PDF")
+            self.assertEqual(media_message.download_calls, 1)
+            self.assertEqual(fake_client.get_messages_calls, [(42, 5)])
+
+    def test_bot_client_exposes_voice_messages_as_lazy_file_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice"})()
+            entity = type("Entity", (), {"id": 42})()
+            dialog = type("Dialog", (), {"entity": entity})()
+            voice_message = _FakeVoiceMessage(5, sender, payload=b"OggS")
+            fake_client = _FakeDialogClient(dialogs=[dialog], messages_by_chat={42: [voice_message]}, entities={42: entity})
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: fake_client  # type: ignore[assignment]
+
+            updates = client.get_updates()
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(updates[0].voice_file_id, "tguser:42:5")
+            self.assertEqual(updates[0].attachments, [])
 
 
 if __name__ == "__main__":
