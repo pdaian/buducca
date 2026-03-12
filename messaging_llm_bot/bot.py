@@ -1865,7 +1865,14 @@ class BotRunner:
         )
         appended = False
         for file_path in recent_paths:
-            if not self._should_append_unanswered_message(file_path, conversation_id, sender_id, text, event_id=event_id):
+            if not self._should_append_unanswered_message(
+                file_path,
+                conversation_id,
+                sender_id,
+                text,
+                event_id=event_id,
+                sent_at=sent_at,
+            ):
                 continue
             self._append_sorted_recent_message(file_path, payload)
             appended = True
@@ -1941,8 +1948,20 @@ class BotRunner:
                         event_id = self._coerce_event_id(payload.get("update_id"))
                     if not isinstance(text, str) or not isinstance(conversation_id, str) or not isinstance(sender_id, str):
                         continue
-                    self._recent_unanswered_keys[file_path].add(
-                        self._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id)
+                    sent_at = payload.get("sent_at")
+                    if not isinstance(sent_at, str):
+                        sent_at = payload.get("logged_at")
+                    if not isinstance(sent_at, str):
+                        sent_at = payload.get("collected_at")
+                    self._recent_unanswered_keys[file_path].update(
+                        self._unanswered_message_keys(
+                            file_path,
+                            conversation_id,
+                            sender_id,
+                            text,
+                            event_id=event_id,
+                            sent_at=sent_at,
+                        )
                     )
 
     @staticmethod
@@ -1950,6 +1969,22 @@ class BotRunner:
         if event_id:
             return f"event:{event_id}"
         return f"{conversation_id}\n{sender_id}\n{text}"
+
+    @classmethod
+    def _unanswered_message_keys(
+        cls,
+        file_path: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        *,
+        event_id: str | None = None,
+        sent_at: str | None = None,
+    ) -> set[str]:
+        keys = {cls._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id)}
+        if file_path == "google_fi.calls.recent":
+            keys.add(f"call:{conversation_id}\n{sender_id}\n{sent_at or ''}\n{text}")
+        return keys
 
     @staticmethod
     def _coerce_event_id(value: Any) -> str | None:
@@ -1962,16 +1997,30 @@ class BotRunner:
         return None
 
     def _should_append_unanswered_message(
-        self, file_path: str, conversation_id: str, sender_id: str, text: str, *, event_id: str | None = None
+        self,
+        file_path: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        *,
+        event_id: str | None = None,
+        sent_at: str | None = None,
     ) -> bool:
-        key = self._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id)
+        keys = self._unanswered_message_keys(
+            file_path,
+            conversation_id,
+            sender_id,
+            text,
+            event_id=event_id,
+            sent_at=sent_at,
+        )
         known = self._recent_unanswered_keys.get(file_path)
         if known is None:
-            self._recent_unanswered_keys[file_path] = {key}
+            self._recent_unanswered_keys[file_path] = set(keys)
             return True
-        if key in known:
+        if any(key in known for key in keys):
             return False
-        known.add(key)
+        known.update(keys)
         return True
 
     def _append_agenta_query_log(
@@ -2537,7 +2586,12 @@ class BotRunner:
                 return
             if is_google_fi_call_event:
                 if not self._should_append_unanswered_message(
-                    "google_fi.calls.recent", conversation_id, sender_id, message_text, event_id=event_id
+                    "google_fi.calls.recent",
+                    conversation_id,
+                    sender_id,
+                    message_text,
+                    event_id=event_id,
+                    sent_at=sent_at,
                 ):
                     return
                 payload = self._build_frontend_record(

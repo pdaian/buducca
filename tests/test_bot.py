@@ -3028,6 +3028,44 @@ class BotTests(unittest.TestCase):
             recent_lines = [line for line in call_log.read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(recent_lines), 1)
 
+    def test_google_fi_voicemail_call_events_are_deduplicated_across_event_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(
+                    account="default",
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            first = IncomingMessage(
+                update_id=14784,
+                backend="google_fi",
+                conversation_id="thread-1",
+                sender_id="+1845514475900",
+                text="[Call event] call",
+                sent_at="2026-03-12T16:48:33.691086+00:00",
+            )
+            second = IncomingMessage(
+                update_id=14785,
+                backend="google_fi",
+                conversation_id="thread-1",
+                sender_id="+1845514475900",
+                text="[Call event] call",
+                sent_at="2026-03-12T16:48:33.691086+00:00",
+            )
+            setattr(first, "event_type", "call")
+            setattr(second, "event_type", "call")
+
+            bot._handle_update(first)
+            bot._handle_update(second)
+
+            recent_lines = [
+                line for line in (Path(td) / "google_fi.calls.recent").read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            self.assertEqual(len(recent_lines), 1)
+
     def test_google_fi_timeout_is_stored_as_unprocessed_message(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
