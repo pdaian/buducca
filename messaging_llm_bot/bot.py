@@ -735,6 +735,10 @@ class BotRunner:
             self._set_frontend_disabled("signal", error=str(exc))
             logging.warning("%s; continuing with telegram-only frontend", exc)
             return 0
+        except RuntimeError as exc:
+            self._set_frontend_disabled("signal", disabled=False, error=str(exc))
+            logging.warning("Signal polling failed: %s; will retry", exc)
+            return 0
         if self._debug_enabled:
             logging.debug("Signal poll returned %s update(s)", len(updates))
         for update in updates:

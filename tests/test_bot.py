@@ -2342,6 +2342,21 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.signal.calls, 1)
         self.assertTrue(any("continuing with telegram-only frontend" in line for line in logs.output))
 
+    def test_poll_frontends_retries_signal_after_runtime_error(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = None
+        bot.signal = PollingSignal(
+            responses=[RuntimeError("dbus timeout"), []]
+        )
+
+        with self.assertLogs(level="WARNING") as logs:
+            bot._poll_frontends_once()
+            bot._poll_frontends_once()
+
+        self.assertEqual(bot.signal.calls, 2)
+        self.assertFalse(bot._signal_frontend_disabled)
+        self.assertTrue(any("Signal polling failed: dbus timeout; will retry" in line for line in logs.output))
+
     def test_handle_voice_update_replies_on_transcription_error(self) -> None:
         bot = self.make_bot(runtime=RuntimeConfig(enable_voice_notes=True, voice_transcribe_command=["cat", "{input}"]))
         bot.telegram = DummyTelegram()
