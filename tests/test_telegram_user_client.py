@@ -1,7 +1,9 @@
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from assistant_framework.telegram_user_client import TelegramUserClient
 from messaging_llm_bot.interfaces import IncomingMessage
@@ -97,6 +99,38 @@ class _FakeDialogClient(_FakeClient):
 
 
 class TelegramUserClientTests(unittest.TestCase):
+    def test_close_disconnects_client_and_clears_loop(self) -> None:
+        client = TelegramUserClient(api_id=1, api_hash="h", session_path="telegram_user")
+        fake_client = _FakeClient(authorized=True)
+        client._client = fake_client
+        loop = asyncio.new_event_loop()
+        client._loop = loop
+
+        try:
+            client.close()
+        finally:
+            if not loop.is_closed():
+                loop.close()
+
+        self.assertEqual(fake_client.disconnect_calls, 1)
+        self.assertIsNone(client._client)
+        self.assertIsNone(client._loop)
+
+    def test_del_skips_cleanup_while_python_is_finalizing(self) -> None:
+        client = TelegramUserClient(api_id=1, api_hash="h", session_path="telegram_user")
+        close_calls = 0
+
+        def fake_close() -> None:
+            nonlocal close_calls
+            close_calls += 1
+
+        client.close = fake_close  # type: ignore[method-assign]
+
+        with patch("assistant_framework.telegram_user_client_base.sys.is_finalizing", return_value=True):
+            client.__del__()
+
+        self.assertEqual(close_calls, 0)
+
     def test_get_recent_messages_returns_empty_without_session(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             client = TelegramUserClient(api_id=1, api_hash="h", session_path=str(Path(td) / "telegram_user"))

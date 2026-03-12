@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 
@@ -86,21 +87,44 @@ class BaseTelegramUserClient:
         return self._cache_entity(dialog_entity)
 
     def close(self) -> None:
+        loop = self._loop
         client = self._client
-        if client is not None and self._loop is not None and not self._loop.is_closed():
-            disconnect = getattr(client, "disconnect", None)
-            if callable(disconnect):
-                try:
-                    self._loop.run_until_complete(disconnect())
-                except Exception:
-                    pass
         self._client = None
-        if self._loop is not None and not self._loop.is_closed():
-            self._loop.close()
         self._loop = None
 
+        if loop is None or loop.is_closed():
+            return
+        if sys.is_finalizing():
+            return
+
+        disconnect = getattr(client, "disconnect", None) if client is not None else None
+        if callable(disconnect):
+            try:
+                loop.run_until_complete(disconnect())
+            except Exception:
+                pass
+
+        pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            try:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
+
     def __del__(self) -> None:
-        self.close()
+        if sys.is_finalizing():
+            return
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @staticmethod
     def _extract_sender_name(sender: object) -> str | None:
