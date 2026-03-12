@@ -398,32 +398,65 @@ class BotTests(unittest.TestCase):
                     self.assertEqual(log_after, log_before)
                     self.assertEqual(getattr(bot, backend).sent, [("thread-1", "hello")])
 
-    def test_signal_outgoing_echo_is_ignored_without_creating_history(self) -> None:
+    def test_signal_outgoing_note_to_self_is_processed_and_stored_when_unanswered(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
-                signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550002"], store_unanswered_messages=True),
+                signal=SignalConfig(
+                    account="+15550001",
+                    allowed_sender_ids=["+15550001"],
+                    store_unanswered_messages=True,
+                ),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
                 runtime=RuntimeConfig(workspace_dir=td),
             )
             bot = BotRunner(cfg)
             bot.signal = DummySignal()
-            bot.llm = DummyLLM("hello")
+            bot._send_message = lambda backend, conversation_id, text: None
+            bot.llm = TimeoutLLM()
 
             bot._handle_update(
                 IncomingMessage(
                     update_id=1,
                     backend="signal",
-                    conversation_id="+15550002",
+                    conversation_id="+15550001",
                     sender_id="+15550001",
-                    text="manual outbound",
+                    text="remember milk",
                     is_outgoing=True,
                 )
             )
 
-            self.assertEqual(bot.llm.calls, 0)
+            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
+            self.assertIn("remember milk", recent)
             self.assertFalse((Path(td) / "logs" / "signal.history").exists())
             self.assertFalse((Path(td) / "logs" / "agenta_queries.history").exists())
-            self.assertFalse((Path(td) / "signal.messages.recent").exists())
+
+    def test_signal_outgoing_self_group_message_is_processed_when_group_is_allowed(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(
+                account="+15550001",
+                allowed_sender_ids=["+15550002"],
+                allowed_group_ids_when_sender_not_allowed=["group-123"],
+            ),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = DummySignal()
+        bot.llm = DummyLLM("hello")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="signal",
+                conversation_id="group:Family Chat|group-123",
+                sender_id="+15550001",
+                text="group note",
+                is_outgoing=True,
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 1)
+        self.assertEqual(bot.signal.sent, [("group:Family Chat|group-123", "hello")])
 
     def test_signal_note_to_self_timeout_is_stored_in_signal_messages_recent(self) -> None:
         with tempfile.TemporaryDirectory() as td:
