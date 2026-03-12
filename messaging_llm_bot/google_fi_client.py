@@ -55,7 +55,7 @@ def _resolve_google_fi_state_path(workspace: Path, state_file: str) -> Path:
     candidate = Path(state_file)
     if candidate.is_absolute():
         return candidate
-    return _runtime_root(workspace) / candidate
+    return workspace.resolve() / candidate
 
 
 class GoogleFiClient:
