@@ -29,8 +29,8 @@ You can override with args per call:
 {
   "action": "on",
   "lights": ["Kitchen"],
-  "list_command": "python3 scripts/list_openhue_lights.py",
-  "set_command_template": "python3 scripts/set_openhue_light.py --action {action} --id {id}"
+  "list_command": "my-openhue-wrapper list --json",
+  "set_command_template": "my-openhue-wrapper set --action {action} --id {id}"
 }
 ```
 

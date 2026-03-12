@@ -42,7 +42,6 @@ python3 run_bot.py --config config
 - Start here: [`docs/getting-started.md`](docs/getting-started.md)
 - Frontend behavior and safety notes: [`docs/frontends.md`](docs/frontends.md)
 - Architecture and extension guide: [`docs/developer-guide.md`](docs/developer-guide.md)
-- Known cleanup items: [`docs/tech-debt.md`](docs/tech-debt.md)
 
 Plugin docs live next to each plugin:
 
