@@ -21,7 +21,7 @@ Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small
 ## Why it feels different
 
 - **Local-first by default:** data, automation, and local-model reasoning stay on your machine for stronger data sovereignty.
-- **Simple plugin model:** skills, collectors, and compressors are regular Python modules, loaded dynamically from disk.
+- **Simple plugin model:** skills and collectors are regular Python modules, loaded dynamically from disk.
 - **Readable architecture:** no giant framework, no hidden telemetry pipeline, no required cloud backend.
 - **Hackable workflows:** every meaningful behavior is configurable with JSON + Python, including how local models reason over your data.
 
@@ -33,7 +33,6 @@ Run your own Telegram, Signal, WhatsApp, and/or Google Fi assistant with a small
 ```bash
 cp -R config.example config
 python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config config/collectors
-python3 -m assistant_framework.cli compressors --workspace workspace --compressors compressors --config config/compressors
 python3 run_bot.py --config config
 ```
 
@@ -49,4 +48,3 @@ Google Fi CLI: `python3 -m messaging_llm_bot.google_fi_client --help`
 
 - `skills/<name>/README.md`
 - `collectors/<name>/README.md`
-- `compressors/<name>/README.md`

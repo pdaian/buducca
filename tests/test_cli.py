@@ -6,13 +6,6 @@ from assistant_framework.workspace import Workspace
 
 
 class CLITests(unittest.TestCase):
-    def test_compressors_command_defaults(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["compressors"])
-        self.assertEqual(args.workspace, "workspace")
-        self.assertEqual(args.compressors, "compressors")
-        self.assertEqual(args.config, "config/compressors")
-
     def test_collectors_command_defaults(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["collectors"])

@@ -6,9 +6,8 @@
   - `Workspace` for file-backed state
   - `SkillManager` for loading runnable skills
   - `CollectorManager` + `CollectorRunner` for data ingestion loops
-  - `CompressorManager` + `CompressorRunner` for workspace cleanup loops
 - `messaging_llm_bot/` provides frontend clients and bot orchestration.
-- `skills/`, `collectors/`, and `compressors/` are dynamic plugin directories.
+- `skills/` and `collectors/` are dynamic plugin directories.
 
 ## Plugin layout
 
@@ -23,11 +22,6 @@ Collectors:
 - docs: `collectors/<collector_name>/README.md`
 - metadata: declare `DESCRIPTION`, `FILE_STRUCTURE`, and `GENERATED_FILES` so the bot can describe loaded collector outputs in its system prompt
 
-Compressors:
-
-- code: `compressors/<compressor_name>/__init__.py`
-- optional config: `config/compressors/<compressor_name>.json`
-
 ## Config layout
 
 - Bot/runtime config can be a single JSON file or a directory tree.
@@ -36,7 +30,6 @@ Compressors:
   - `config/llm.json` -> `llm`
   - `config/runtime.json` -> `runtime`
   - `config/collectors/gmail.json` -> `collectors.gmail`
-  - `config/compressors/file_size.json` -> `compressors.file_size`
 - `index.json` may be used to assign config to a directory key directly.
 
 If you delete a plugin folder, it is not loaded.
@@ -72,14 +65,3 @@ For agent-facing skills, keep the README explicit:
 - Keep names explicit and predictable.
 - Avoid duplicated logic between skills/collectors/core runtime.
 - Write code that reads like a clear script first, clever trick second.
-
-
-
-## Add a new compressor
-
-1. Create `compressors/<name>/__init__.py`.
-2. Expose either:
-   - `create_compressor(config)` returning `name`, `interval_seconds`, and `run`, or
-   - module constants + `run(workspace)`.
-3. Keep compression idempotent whenever possible (safe repeated runs).
-4. Add `compressors/<name>/README.md`.

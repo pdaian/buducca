@@ -1,7 +1,0 @@
-{
-  "interval_seconds": 3600,
-  "include": [
-    "*"
-  ],
-  "max_lines": 200
-}
