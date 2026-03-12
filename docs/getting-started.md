@@ -34,6 +34,8 @@ python3 reset_workspace.py --yes
 - `workspace/collector_status.json` — collector health and loop state.
 - `workspace/collector_status.json` also includes each loaded collector's declared generated workspace files.
 - `workspace/logs/agenta_queries.history` — handled incoming interactions and replies.
+- `workspace/logs/{backend}.history` — JSONL frontend traffic logs for outgoing replies and any frontend messages the bot persists by backend.
+- `workspace/logs/traces/*.json` — one JSON trace per handled request, including the last message, built prompt, retrieved evidence, intermediate skill steps, and final reply or error.
 - `workspace/hourly` — optional plaintext instructions evaluated once per hour at the top of the hour.
 - `workspace/hourly_status.json` — last completed hourly slot.
 - `workspace/telegram.recent` — unanswered Telegram snapshots when storage is enabled.
