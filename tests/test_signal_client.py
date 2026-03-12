@@ -5,6 +5,14 @@ from messaging_llm_bot.signal_client import SignalClient, SignalFrontendUnavaila
 
 
 class SignalClientTests(unittest.TestCase):
+    def test_default_receive_command_omits_legacy_json_output_flag(self) -> None:
+        client = SignalClient(account="+15551230000")
+
+        self.assertEqual(
+            client.receive_command,
+            ["signal-cli", "-a", "+15551230000", "receive", "--timeout", "1"],
+        )
+
     def test_parses_text_and_voice_messages(self) -> None:
         stdout = "\n".join(
             [
@@ -444,6 +452,23 @@ class SignalClientTests(unittest.TestCase):
                 updates = client.get_updates()
 
         self.assertEqual(run.call_args_list[0].args[0], client.receive_command)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].text, "hello")
+
+    def test_legacy_receive_command_strips_json_output_flag_before_running(self) -> None:
+        client = SignalClient(
+            account="+15551230000",
+            receive_command=["signal-cli", "-o", "json", "-a", "+15551230000", "receive"],
+        )
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{"envelope":{"source":"+15550001","dataMessage":{"message":"hello"}}}'
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                updates = client.get_updates()
+
+        self.assertEqual(run.call_args_list[0].args[0], ["signal-cli", "-a", "+15551230000", "receive"])
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].text, "hello")
 

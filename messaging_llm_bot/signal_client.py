@@ -33,16 +33,17 @@ class SignalClient:
         debug: bool = False,
     ) -> None:
         self.account = account
-        self.receive_command = receive_command or [
-            "signal-cli",
-            "-o",
-            "json",
-            "-a",
-            account,
-            "receive",
-            "--timeout",
-            str(poll_timeout_seconds),
-        ]
+        self.receive_command = self._normalize_receive_command(
+            receive_command
+            or [
+                "signal-cli",
+                "-a",
+                account,
+                "receive",
+                "--timeout",
+                str(poll_timeout_seconds),
+            ]
+        )
         self.send_command = send_command or ["signal-cli", "-a", account, "send", "-m", "{message}", "{recipient}"]
         self.contacts_command = contacts_command or ["signal-cli", "-o", "json", "-a", account, "listContacts"]
         self.groups_command = groups_command or ["signal-cli", "-o", "json", "-a", account, "listGroups"]
@@ -54,6 +55,19 @@ class SignalClient:
         self._contact_names_loaded_at = 0.0
         self._group_names_loaded_at = 0.0
         self._debug = debug
+
+    @staticmethod
+    def _normalize_receive_command(command: list[str]) -> list[str]:
+        normalized: list[str] = []
+        index = 0
+        while index < len(command):
+            token = command[index]
+            if token == "-o" and index + 1 < len(command) and command[index + 1] == "json":
+                index += 2
+                continue
+            normalized.append(token)
+            index += 1
+        return normalized
 
     def _validate_receive_command(self) -> None:
         if not self.receive_command:

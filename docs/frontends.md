@@ -19,6 +19,8 @@ User-mode note:
 
 Configure `signal` in `config/signal.json` and point BUDUCCA to your `signal-cli` setup.
 
+Use a `receive_command` shaped like `["signal-cli", "-a", "<account>", "receive", "--timeout", "1"]`. The older `-o json` flag is no longer included for `receive`.
+
 One-time signup/help command:
 
 ```bash

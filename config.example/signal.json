@@ -7,8 +7,6 @@
   ],
   "receive_command": [
     "signal-cli",
-    "-o",
-    "json",
     "-a",
     "+15551234567",
     "receive",
