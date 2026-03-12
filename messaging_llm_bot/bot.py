@@ -154,6 +154,7 @@ class BotRunner:
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = self._load_runtime_skills()
         self._current_evidence = []
+        self._recent_handled_queries: dict[tuple[str, str, str], str] = {}
         self._processing_lock = threading.RLock()
         self._frontend_state_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -1981,14 +1982,19 @@ class BotRunner:
         sender_id: str,
         text: str,
         reply: str,
+        event_id: str | None = None,
         sender_name: str | None = None,
         sender_contact: str | None = None,
     ) -> None:
+        normalized_query = text.strip()
+        if normalized_query:
+            self._recent_handled_queries[(backend, conversation_id, sender_id)] = normalized_query
         payload = {
             "logged_at": datetime.now(timezone.utc).isoformat(),
             "backend": backend,
             "conversation_id": conversation_id,
             "sender_id": sender_id,
+            "event_id": event_id,
             "sender_name": sender_name,
             "sender_contact": sender_contact,
             "query": text,
@@ -2013,12 +2019,19 @@ class BotRunner:
                 payloads.append(payload)
         return payloads
 
-    def _telegram_query_log_contains_reply(self, conversation_id: str, text: str) -> bool:
+    def _query_log_contains_query(self, backend: str, conversation_id: str, sender_id: str, text: str, event_id: str | None) -> bool:
+        _ = event_id
+        normalized_text = text.strip()
+        if not normalized_text:
+            return False
+        return self._recent_handled_queries.get((backend, conversation_id, sender_id)) == normalized_text
+
+    def _query_log_contains_reply_chunk(self, backend: str, conversation_id: str, text: str) -> bool:
         normalized_text = text.strip()
         if not normalized_text:
             return False
         for payload in self._iter_jsonl_reverse("logs/agenta_queries.history"):
-            if payload.get("backend") != "telegram":
+            if payload.get("backend") != backend:
                 continue
             if str(payload.get("conversation_id", "")).strip() != conversation_id:
                 continue
@@ -2029,31 +2042,90 @@ class BotRunner:
                 return True
         return False
 
-    def _telegram_history_contains_outgoing(self, conversation_id: str, text: str) -> bool:
+    def _frontend_history_contains_message(
+        self,
+        backend: str,
+        direction: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        event_id: str | None,
+    ) -> bool:
         normalized_text = text.strip()
         if not normalized_text:
             return False
-        for payload in self._iter_jsonl_reverse("logs/telegram.history"):
-            if payload.get("direction") != "outgoing":
+        for payload in self._iter_jsonl_reverse(f"logs/{backend}.history"):
+            if payload.get("direction") != direction:
                 continue
             if str(payload.get("conversation_id", "")).strip() != conversation_id:
+                continue
+            logged_event_id = self._coerce_event_id(payload.get("event_id"))
+            if event_id and logged_event_id == event_id:
+                return True
+            if str(payload.get("sender_id", "")).strip() != sender_id:
                 continue
             logged_text = payload.get("text")
             if isinstance(logged_text, str) and logged_text.strip() == normalized_text:
                 return True
         return False
 
-    def _is_duplicate_telegram_self_message(self, conversation_id: str, text: str) -> bool:
-        seen_in_query_log = self._telegram_query_log_contains_reply(conversation_id, text)
-        seen_in_history = self._telegram_history_contains_outgoing(conversation_id, text)
+    def _is_duplicate_frontend_message(
+        self,
+        *,
+        backend: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        event_id: str | None,
+        outgoing: bool,
+    ) -> bool:
+        if outgoing:
+            seen_in_query_log = self._query_log_contains_reply_chunk(backend, conversation_id, text)
+            seen_in_history = self._frontend_history_contains_message(
+                backend,
+                "outgoing",
+                conversation_id,
+                "bot",
+                text,
+                event_id,
+            )
+        else:
+            seen_in_query_log = self._query_log_contains_query(backend, conversation_id, sender_id, text, event_id)
+            seen_in_history = False
         if seen_in_query_log or seen_in_history:
             logging.info(
-                "Skipping duplicate telegram self-message conversation=%s seen_in_query_log=%s seen_in_history=%s",
+                "Skipping duplicate frontend message backend=%s conversation=%s outgoing=%s seen_in_query_log=%s "
+                "seen_in_history=%s",
+                backend,
                 conversation_id,
+                outgoing,
                 seen_in_query_log,
                 seen_in_history,
             )
             return True
+        return False
+
+    def _is_whatsapp_self_sender(self, sender_id: str) -> bool:
+        if not self.config.whatsapp:
+            return False
+        account = self.config.whatsapp.account
+        return bool(account and sender_id.strip() == account.strip())
+
+    def _is_google_fi_self_sender(self, sender_id: str) -> bool:
+        if not self.config.google_fi:
+            return False
+        account = self.config.google_fi.account
+        return bool(account and sender_id.strip() == account.strip())
+
+    def _is_frontend_outgoing_update(self, update: IncomingMessage, backend: str, sender_id: str) -> bool:
+        if getattr(update, "is_outgoing", False):
+            return True
+        if backend == "signal":
+            return self._is_signal_self_sender(sender_id)
+        if backend == "whatsapp":
+            return self._is_whatsapp_self_sender(sender_id)
+        if backend == "google_fi":
+            return self._is_google_fi_self_sender(sender_id)
         return False
 
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
@@ -2447,37 +2519,19 @@ class BotRunner:
 
         attachment_context = self._save_incoming_attachments(update, backend=backend, sender_name=sender_name, sender_id=sender_id)
         is_google_fi_call_event = self._is_google_fi_call_event(update)
+        is_outgoing_update = self._is_frontend_outgoing_update(update, backend, sender_id)
 
         if update.text:
             message_text = f"{update.text}\n\n{attachment_context}" if attachment_context else update.text
-            if backend == "telegram" and getattr(update, "is_outgoing", False):
-                if self._is_duplicate_telegram_self_message(conversation_id, message_text):
-                    return
-            self._append_frontend_log(
+            if self._is_duplicate_frontend_message(
                 backend=backend,
-                direction="incoming",
                 conversation_id=conversation_id,
-                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=message_text,
-                sender_name=sender_name,
-                sender_contact=sender_contact,
-                logged_at=sent_at,
-                sent_at=sent_at,
-            )
-            if not is_google_fi_call_event:
-                self._append_recent_frontend_message(
-                    backend=backend,
-                    conversation_id=conversation_id,
-                    conversation_name=conversation_name,
-                    sender_id=sender_id,
-                    text=message_text,
-                    event_id=event_id,
-                    sender_name=sender_name,
-                    sender_contact=sender_contact,
-                    logged_at=sent_at,
-                    sent_at=sent_at,
-                )
+                event_id=event_id,
+                outgoing=is_outgoing_update,
+            ):
+                return
             if is_google_fi_call_event:
                 if not self._should_append_unanswered_message(
                     "google_fi.calls.recent", conversation_id, sender_id, message_text, event_id=event_id
@@ -2539,33 +2593,18 @@ class BotRunner:
             return
 
         if attachment_context:
-            if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
-                return
-            self._append_frontend_log(
-                backend=backend,
-                direction="incoming",
-                conversation_id=conversation_id,
-                conversation_name=conversation_name,
-                sender_id=sender_id,
-                text=attachment_context,
-                sender_name=sender_name,
-                sender_contact=sender_contact,
-                logged_at=sent_at,
-                sent_at=sent_at,
-            )
-            self._append_recent_frontend_message(
+            if self._is_duplicate_frontend_message(
                 backend=backend,
                 conversation_id=conversation_id,
-                conversation_name=conversation_name,
                 sender_id=sender_id,
                 text=attachment_context,
                 event_id=event_id,
-                sender_name=sender_name,
-                sender_contact=sender_contact,
-                logged_at=sent_at,
-                sent_at=sent_at,
-            )
-            self._handle_message(
+                outgoing=is_outgoing_update,
+            ):
+                return
+            if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
+                return
+            was_handled = self._handle_message(
                 backend,
                 conversation_id,
                 sender_id,
@@ -2576,6 +2615,18 @@ class BotRunner:
                 sent_at=sent_at,
                 event_id=event_id,
             )
+            if not was_handled:
+                self._append_unanswered_collector_log(
+                    backend=backend,
+                    conversation_id=conversation_id,
+                    conversation_name=conversation_name,
+                    sender_id=sender_id,
+                    text=attachment_context,
+                    event_id=event_id,
+                    sender_name=sender_name,
+                    sender_contact=sender_contact,
+                    logged_at=sent_at,
+                )
             return
 
         voice_file_id = getattr(update, "voice_file_id", None)
@@ -2609,26 +2660,7 @@ class BotRunner:
             return
 
         transcript_text = f"[Voice note transcript]\n{transcript}"
-        self._append_frontend_log(
-            backend=backend,
-            direction="incoming",
-            conversation_id=conversation_id,
-            sender_id=sender_id,
-            text=transcript_text,
-            sender_name=sender_name,
-            sender_contact=sender_contact,
-        )
-        self._append_recent_frontend_message(
-            backend=backend,
-            conversation_id=conversation_id,
-            conversation_name=conversation_name,
-            sender_id=sender_id,
-            text=transcript_text,
-            event_id=event_id,
-            sender_name=sender_name,
-            sender_contact=sender_contact,
-        )
-        self._handle_message(
+        was_handled = self._handle_message(
             backend,
             conversation_id,
             sender_id,
@@ -2638,6 +2670,17 @@ class BotRunner:
             conversation_name=conversation_name,
             event_id=event_id,
         )
+        if not was_handled:
+            self._append_unanswered_collector_log(
+                backend=backend,
+                conversation_id=conversation_id,
+                conversation_name=conversation_name,
+                sender_id=sender_id,
+                text=transcript_text,
+                event_id=event_id,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
+            )
 
     def _extract_signal_group_id(self, conversation_id: str) -> str:
         if not conversation_id.startswith(SignalClient.GROUP_CONVERSATION_PREFIX):
@@ -2822,6 +2865,7 @@ class BotRunner:
             sender_id=sender_id,
             text=text,
             reply=reply,
+            event_id=event_id,
             sender_name=sender_name,
             sender_contact=sender_contact,
         )

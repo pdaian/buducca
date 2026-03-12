@@ -33,12 +33,12 @@ python3 reset_workspace.py --yes
 
 - `workspace/collector_status.json` — collector health and loop state.
 - `workspace/collector_status.json` also includes each loaded collector's declared generated workspace files.
-- `workspace/logs/agenta_queries.history` — answered interactions.
+- `workspace/logs/agenta_queries.history` — handled incoming interactions and replies.
 - `workspace/hourly` — optional plaintext instructions evaluated once per hour at the top of the hour.
 - `workspace/hourly_status.json` — last completed hourly slot.
-- `workspace/telegram.recent` — Telegram snapshots when storage is enabled.
+- `workspace/telegram.recent` — unanswered Telegram snapshots when storage is enabled.
 - `workspace/telegram.messages.recent` — legacy Telegram snapshots file still read for compatibility, but no longer written.
-- `workspace/signal.messages.recent` — Signal snapshots when storage is enabled.
-- `workspace/whatsapp.messages.recent` — WhatsApp snapshots when storage is enabled.
-- `workspace/google_fi.messages.recent` — Google Fi message snapshots when storage is enabled.
+- `workspace/signal.messages.recent` — unanswered Signal snapshots when storage is enabled.
+- `workspace/whatsapp.messages.recent` — unanswered WhatsApp snapshots when storage is enabled.
+- `workspace/google_fi.messages.recent` — unanswered Google Fi message snapshots when storage is enabled.
 - `workspace/google_fi.calls.recent` — Google Fi call-event snapshots.

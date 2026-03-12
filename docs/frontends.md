@@ -120,10 +120,12 @@ Per frontend (`telegram`, `signal`, `whatsapp`):
 
 Unread-storage files by frontend:
 
-- Telegram writes `workspace/logs/telegram.history` and `workspace/telegram.recent`. `workspace/telegram.messages.recent` is legacy compatibility input and is no longer written.
-- Signal writes `workspace/logs/signal.history` and `workspace/signal.messages.recent`.
-- WhatsApp writes `workspace/logs/whatsapp.history` and `workspace/whatsapp.messages.recent`.
-- Google Fi writes `workspace/logs/google_fi.history`, `workspace/google_fi.messages.recent` for messages, and `workspace/google_fi.calls.recent` for call events. Call events are stored once in `google_fi.calls.recent`; they are not duplicated into `google_fi.messages.recent`.
+- Handled incoming messages are recorded in `workspace/logs/agenta_queries.history`.
+- Outgoing frontend messages are recorded in `workspace/logs/{backend}.history`.
+- Unanswered incoming Telegram messages are stored in `workspace/telegram.recent`. `workspace/telegram.messages.recent` is legacy compatibility input and is no longer written.
+- Unanswered incoming Signal messages are stored in `workspace/signal.messages.recent`.
+- Unanswered incoming WhatsApp messages are stored in `workspace/whatsapp.messages.recent`.
+- Unanswered incoming Google Fi messages are stored in `workspace/google_fi.messages.recent`. Google Fi call events are stored once in `workspace/google_fi.calls.recent`.
 
 Global runtime:
 

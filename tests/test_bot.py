@@ -56,6 +56,14 @@ class DummySignal:
     def send_message(self, recipient: str, text: str) -> None:
         self.sent.append((recipient, text))
 
+
+class DummyGoogleFi:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_message(self, recipient: str, text: str) -> None:
+        self.sent.append((recipient, text))
+
 class DummyLLM:
     def __init__(self, reply: str) -> None:
         self.reply = reply
@@ -309,7 +317,170 @@ class BotTests(unittest.TestCase):
             self.assertEqual(history_after, history_before)
             self.assertEqual(log_after, log_before)
 
-    def test_handled_telegram_message_is_persisted_to_canonical_recent_file(self) -> None:
+    def test_frontend_outgoing_self_messages_are_deduped_across_non_telegram_frontends(self) -> None:
+        cases = [
+            (
+                "signal",
+                BotConfig(
+                    signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550002"]),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummySignal,
+                "+15550002",
+                "+15550001",
+            ),
+            (
+                "whatsapp",
+                BotConfig(
+                    whatsapp=WhatsAppConfig(
+                        account="me",
+                        allowed_sender_ids=["friend"],
+                        receive_command=["python3", "recv.py"],
+                        send_command=["python3", "send.py", "{recipient}", "{message}"],
+                    ),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummyWhatsApp,
+                "friend",
+                "me",
+            ),
+            (
+                "google_fi",
+                BotConfig(
+                    google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"]),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummyGoogleFi,
+                "friend",
+                "me",
+            ),
+        ]
+
+        for backend, cfg, frontend_factory, user_sender_id, self_sender_id in cases:
+            with self.subTest(backend=backend):
+                with tempfile.TemporaryDirectory() as td:
+                    cfg.runtime.workspace_dir = td
+                    bot = BotRunner(cfg)
+                    setattr(bot, backend, frontend_factory())
+                    bot.llm = DummyLLM("hello")
+
+                    bot._handle_update(
+                        IncomingMessage(
+                            update_id=1,
+                            backend=backend,
+                            conversation_id="thread-1",
+                            sender_id=user_sender_id,
+                            text="hi",
+                        )
+                    )
+
+                    history_before = (Path(td) / "logs" / f"{backend}.history").read_text(encoding="utf-8")
+                    log_before = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+                    bot.llm.calls = 0
+
+                    bot._handle_update(
+                        IncomingMessage(
+                            update_id=2,
+                            backend=backend,
+                            conversation_id="thread-1",
+                            sender_id=self_sender_id,
+                            text="hello",
+                        )
+                    )
+
+                    history_after = (Path(td) / "logs" / f"{backend}.history").read_text(encoding="utf-8")
+                    log_after = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+                    self.assertEqual(bot.llm.calls, 0)
+                    self.assertEqual(history_after, history_before)
+                    self.assertEqual(log_after, log_before)
+                    self.assertEqual(getattr(bot, backend).sent, [("thread-1", "hello")])
+
+    def test_handled_user_messages_are_deduped_across_frontends(self) -> None:
+        cases = [
+            (
+                "telegram",
+                BotConfig(
+                    telegram=TelegramConfig(bot_token="t"),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummyTelegram,
+                "1",
+            ),
+            (
+                "signal",
+                BotConfig(
+                    signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550002"]),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummySignal,
+                "+15550002",
+            ),
+            (
+                "whatsapp",
+                BotConfig(
+                    whatsapp=WhatsAppConfig(
+                        account="me",
+                        allowed_sender_ids=["friend"],
+                        receive_command=["python3", "recv.py"],
+                        send_command=["python3", "send.py", "{recipient}", "{message}"],
+                    ),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummyWhatsApp,
+                "friend",
+            ),
+            (
+                "google_fi",
+                BotConfig(
+                    google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"]),
+                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                    runtime=RuntimeConfig(),
+                ),
+                DummyGoogleFi,
+                "friend",
+            ),
+        ]
+
+        for backend, cfg, frontend_factory, sender_id in cases:
+            with self.subTest(backend=backend):
+                with tempfile.TemporaryDirectory() as td:
+                    cfg.runtime.workspace_dir = td
+                    bot = BotRunner(cfg)
+                    setattr(bot, backend, frontend_factory())
+                    bot.llm = DummyLLM("hello")
+
+                    update = IncomingMessage(
+                        update_id=1,
+                        backend=backend,
+                        conversation_id="thread-1" if backend != "telegram" else "1",
+                        sender_id=sender_id,
+                        chat_id=1 if backend == "telegram" else None,
+                        text="hi",
+                    )
+                    bot._handle_update(update)
+                    bot._handle_update(
+                        IncomingMessage(
+                            update_id=2,
+                            backend=backend,
+                            conversation_id=update.conversation_id,
+                            sender_id=sender_id,
+                            chat_id=update.chat_id,
+                            text="hi",
+                        )
+                    )
+
+                    self.assertEqual(bot.llm.calls, 1)
+                    sent = getattr(bot, backend).sent
+                    expected_recipient = 1 if backend == "telegram" else update.conversation_id
+                    self.assertEqual(sent, [(expected_recipient, "hello")])
+
+    def test_handled_telegram_message_is_logged_only_to_agenta_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
                 telegram=TelegramConfig(bot_token="t", store_unanswered_messages=True),
@@ -330,8 +501,9 @@ class BotTests(unittest.TestCase):
                 )
             )
 
-            recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
-            self.assertIn('"text": "hi"', recent)
+            log = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            self.assertIn('"query": "hi"', log)
+            self.assertFalse((Path(td) / "telegram.recent").exists())
             self.assertFalse((Path(td) / "telegram.messages.recent").exists())
 
     def test_telegram_recent_loader_accepts_legacy_messages_file(self) -> None:
@@ -368,7 +540,7 @@ class BotTests(unittest.TestCase):
 
             self.assertFalse((Path(td) / "telegram.recent").exists())
 
-    def test_handled_signal_message_is_persisted_to_recent_file(self) -> None:
+    def test_handled_signal_message_is_logged_only_to_agenta_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
                 signal=SignalConfig(
@@ -393,8 +565,9 @@ class BotTests(unittest.TestCase):
                 )
             )
 
-            recent = (Path(td) / "signal.messages.recent").read_text(encoding="utf-8")
-            self.assertIn('"text": "hi from signal"', recent)
+            log = (Path(td) / "logs" / "agenta_queries.history").read_text(encoding="utf-8")
+            self.assertIn('"query": "hi from signal"', log)
+            self.assertFalse((Path(td) / "signal.messages.recent").exists())
 
     def test_handle_update_saves_attachment_under_dated_workspace_folder(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -816,10 +989,9 @@ class BotTests(unittest.TestCase):
             )
 
             self.assertEqual(bot.llm.calls, 0)
-            signal_history = Path(td) / "logs" / "signal.history"
-            self.assertIn("self note", signal_history.read_text(encoding="utf-8"))
             signal_recent = Path(td) / "signal.messages.recent"
             self.assertIn("self note", signal_recent.read_text(encoding="utf-8"))
+            self.assertFalse((Path(td) / "logs" / "signal.history").exists())
 
     def test_unanswered_messages_are_not_stored_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1209,37 +1381,9 @@ class BotTests(unittest.TestCase):
             self.assertFalse(signal_history.exists())
 
             events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(events[0]["direction"], "incoming")
-            self.assertEqual(events[0]["text"], "hi")
-            self.assertEqual(events[-1]["direction"], "outgoing")
-            self.assertEqual(events[-1]["text"], "hello")
-
-
-    def test_telegram_incoming_log_includes_sender_contact(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            runtime = RuntimeConfig(workspace_dir=td)
-            bot = self.make_bot(runtime=runtime)
-            bot.telegram = DummyTelegram()
-            bot.llm = DummyLLM("hello")
-
-            update = SimpleNamespace(
-                backend="telegram",
-                conversation_id="1",
-                conversation_name="Ops Room",
-                sender_id="1",
-                sender_name="Alice",
-                sender_contact="Alice (@alice_tg)",
-                text="hi",
-                voice_file_id=None,
-                voice_file_path=None,
-            )
-            bot._handle_update(update)
-
-            telegram_history = Path(td) / "logs" / "telegram.history"
-            events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(events[0]["conversation_name"], "Ops Room")
-            self.assertEqual(events[0]["sender_name"], "Alice")
-            self.assertEqual(events[0]["sender_contact"], "Alice (@alice_tg)")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["direction"], "outgoing")
+            self.assertEqual(events[0]["text"], "hello")
 
     def test_telegram_unanswered_log_includes_sender_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1436,7 +1580,7 @@ class BotTests(unittest.TestCase):
             self.assertEqual(contacts["group:Family|1203630@g.us"], "group:Family|1203630@g.us")
             self.assertNotIn("Alice", contacts)
 
-    def test_signal_incoming_log_includes_sender_name(self) -> None:
+    def test_signal_handled_query_log_includes_sender_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
                 signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550001"]),
@@ -1459,8 +1603,8 @@ class BotTests(unittest.TestCase):
             )
             bot._handle_update(update)
 
-            signal_history = Path(td) / "logs" / "signal.history"
-            events = [json.loads(line) for line in signal_history.read_text(encoding="utf-8").splitlines()]
+            agenta_history = Path(td) / "logs" / "agenta_queries.history"
+            events = [json.loads(line) for line in agenta_history.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[0]["sender_name"], "Alice")
             self.assertEqual(events[0]["sender_contact"], "Alice <+15550001>")
 
@@ -2352,7 +2496,7 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.telegram.sent, [(1, "heard")])
 
-    def test_handle_voice_update_logs_transcript_to_frontend_history(self) -> None:
+    def test_handle_voice_update_logs_transcript_to_agenta_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             runtime = RuntimeConfig(
                 workspace_dir=td,
@@ -2366,10 +2510,9 @@ class BotTests(unittest.TestCase):
 
             bot._handle_update(IncomingMessage(update_id=1, chat_id=1, voice_file_id="voice-id"))
 
-            telegram_history = Path(td) / "logs" / "telegram.history"
-            events = [json.loads(line) for line in telegram_history.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(events[0]["direction"], "incoming")
-            self.assertEqual(events[0]["text"], "[Voice note transcript]\nturn on lights")
+            agenta_history = Path(td) / "logs" / "agenta_queries.history"
+            events = [json.loads(line) for line in agenta_history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[0]["query"], "[Voice note transcript]\nturn on lights")
 
         self.assertIn("Voice note transcript", bot.llm.messages[-1]["content"])
 
@@ -2842,13 +2985,11 @@ class BotTests(unittest.TestCase):
                 )
             )
 
-            history_line = (Path(td) / "logs" / "google_fi.history").read_text(encoding="utf-8").splitlines()[0]
             recent_line = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines()[0]
 
-            self.assertEqual(json.loads(history_line)["logged_at"], "2026-03-10T13:23:00+00:00")
             self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
-            self.assertNotEqual(json.loads(history_line)["collected_at"], "2026-03-10T13:23:00+00:00")
             self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
+            self.assertFalse((Path(td) / "logs" / "google_fi.history").exists())
 
     def test_google_fi_unanswered_messages_are_sorted_by_logged_at(self) -> None:
         with tempfile.TemporaryDirectory() as td:
