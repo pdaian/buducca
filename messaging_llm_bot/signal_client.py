@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import subprocess
@@ -132,11 +133,19 @@ class SignalClient:
                 continue
             sender_name = self._extract_sender_name(envelope, sender)
 
-            self._update_counter += 1
+            update_id = self._build_stable_update_id(
+                conversation_id=conversation_id,
+                sender=sender,
+                text=text,
+                voice_file_path=voice_file_path,
+                attachments=attachments,
+                is_outgoing=is_outgoing,
+                sent_at=sent_at,
+            )
             if self._debug:
                 logging.debug(
                     "Signal message parsed: update_id=%s conversation_id=%s sender=%s text_present=%s voice_present=%s attachments=%s",
-                    self._update_counter,
+                    update_id,
                     conversation_id,
                     sender,
                     bool(text),
@@ -145,7 +154,7 @@ class SignalClient:
                 )
             messages.append(
                 IncomingMessage(
-                    update_id=self._update_counter,
+                    update_id=update_id,
                     backend="signal",
                     conversation_id=conversation_id,
                     sender_id=sender,
@@ -160,6 +169,40 @@ class SignalClient:
         if self._debug:
             logging.debug("Signal polling completed: messages=%s", len(messages))
         return messages
+
+    def _build_stable_update_id(
+        self,
+        *,
+        conversation_id: str,
+        sender: str,
+        text: str | None,
+        voice_file_path: str | None,
+        attachments: list[IncomingAttachment],
+        is_outgoing: bool,
+        sent_at: str | None,
+    ) -> int:
+        attachment_payload = [
+            {
+                "file_id": attachment.file_id,
+                "file_path": attachment.file_path,
+                "filename": attachment.filename,
+                "mime_type": attachment.mime_type,
+            }
+            for attachment in attachments
+        ]
+        payload = {
+            "conversation_id": conversation_id,
+            "sender": sender,
+            "text": text,
+            "voice_file_path": voice_file_path,
+            "attachments": attachment_payload,
+            "is_outgoing": is_outgoing,
+            "sent_at": sent_at,
+        }
+        digest = hashlib.sha1(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).digest()
+        return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
     def _parse_receive_output(self, output: str) -> list[dict[str, Any]]:
         envelopes: list[dict[str, Any]] = []

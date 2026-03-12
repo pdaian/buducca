@@ -194,6 +194,46 @@ class SignalClientTests(unittest.TestCase):
         self.assertEqual(updates[0].text, "group note")
         self.assertTrue(updates[0].is_outgoing)
 
+    def test_signal_update_ids_are_stable_across_client_restarts(self) -> None:
+        stdout = '{"envelope":{"source":"+15550001","timestamp":1741700000000,"dataMessage":{"message":"hello"}}}'
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = stdout
+            run.return_value.stderr = ""
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                first_client = SignalClient(account="+15551230000")
+                first_client.contacts_command = []
+                first_client.groups_command = []
+                second_client = SignalClient(account="+15551230000")
+                second_client.contacts_command = []
+                second_client.groups_command = []
+                first = first_client.get_updates()[0].update_id
+                second = second_client.get_updates()[0].update_id
+
+        self.assertEqual(first, second)
+
+    def test_distinct_signal_messages_do_not_reuse_first_update_id_after_restart(self) -> None:
+        first_stdout = '{"envelope":{"source":"+15550001","timestamp":1741700000000,"dataMessage":{"message":"first"}}}'
+        second_stdout = '{"envelope":{"source":"+15550001","timestamp":1741700001000,"dataMessage":{"message":"second"}}}'
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = [
+                Mock(returncode=0, stdout=first_stdout, stderr=""),
+                Mock(returncode=0, stdout=second_stdout, stderr=""),
+            ]
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                first_client = SignalClient(account="+15551230000")
+                first_client.contacts_command = []
+                first_client.groups_command = []
+                second_client = SignalClient(account="+15551230000")
+                second_client.contacts_command = []
+                second_client.groups_command = []
+                first = first_client.get_updates()[0].update_id
+                second = second_client.get_updates()[0].update_id
+
+        self.assertNotEqual(first, second)
+
 
 
     def test_default_contacts_command_uses_json_output_flag(self) -> None:
