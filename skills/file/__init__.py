@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from assistant_framework.action_runtime import ActionEnvelope
@@ -9,32 +10,21 @@ from assistant_framework.workspace import Workspace
 NAME = "file"
 DESCRIPTION = (
     "Manage workspace files and directories in bulk. "
-    "Use args.action (or args.command) with one of: read/list/write/append/create_dir/delete_dir/move. "
-    "File actions require args.paths as a list. write/append also require args.contents as a list "
-    "(or args.content to apply the same text to every path). "
-    "read accepts optional args.read_line_limit to return only the last N lines. "
-    "list browses files/directories and accepts optional args.path/args.paths, args.recursive, "
-    "args.include_hidden, and args.max_entries. "
-    "move requires args.paths and args.destination_dir. "
-    "Directory actions require args.directories as a list."
+    "Use args.action (or args.command) with: read/list/browse/write/append/move/copy/delete/"
+    "replace_text/create_dir/delete_dir. "
+    "Paths are workspace-relative. File actions accept args.path or args.paths. "
+    "read supports full, head, tail, and range modes with read_mode/read_line_limit/start_line/end_line. "
+    "move/copy support exact destinations via args.destinations or a shared args.destination_dir. "
+    "replace_text updates one or more files using args.find and optional args.replace/regex/case_sensitive."
 )
 ARGS_SCHEMA = (
-    '{"action":"read|list|write|append|create_dir|delete_dir|move","path":"optional","paths":["optional"],'
-    '"directories":["optional"],"contents":["optional"],"content":"optional","destination_dir":"optional",'
-    '"read_line_limit":25,"recursive":false,"include_hidden":false,"max_entries":200}'
+    '{"action":"read|list|browse|write|append|move|copy|delete|replace_text|create_dir|delete_dir",'
+    '"path":"optional","paths":["optional"],"directories":["optional"],"contents":["optional"],'
+    '"content":"optional","destination_dir":"optional","destinations":["optional"],'
+    '"read_mode":"full|head|tail|range","read_line_limit":25,"start_line":1,"end_line":25,'
+    '"recursive":false,"include_hidden":false,"max_entries":200,"find":"optional",'
+    '"replace":"optional","regex":false,"case_sensitive":true,"max_replacements_per_file":0}'
 )
-
-
-def _normalize_list(value: Any) -> list[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, list):
-        cleaned = [_normalize_workspace_path(str(item).strip()) for item in value if str(item).strip()]
-        return cleaned
-    item = _normalize_workspace_path(str(value).strip())
-    if not item:
-        return []
-    return [item]
 
 
 def _normalize_workspace_path(path: str) -> str:
@@ -42,6 +32,15 @@ def _normalize_workspace_path(path: str) -> str:
     while "workspace/" in normalized:
         normalized = normalized.replace("workspace/", "")
     return normalized
+
+
+def _normalize_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [_normalize_workspace_path(str(item).strip()) for item in value if str(item).strip()]
+    item = _normalize_workspace_path(str(value).strip())
+    return [item] if item else []
 
 
 def _resolve_paths(args: dict[str, Any]) -> list[str] | None:
@@ -70,21 +69,6 @@ def _resolve_contents(args: dict[str, Any], path_count: int) -> list[str] | None
     return None
 
 
-def _resolve_read_line_limit(args: dict[str, Any]) -> int | None:
-    read_line_limit = args.get("read_line_limit")
-    if read_line_limit is None:
-        return None
-
-    try:
-        limit = int(read_line_limit)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("`read_line_limit` must be an integer greater than 0.") from exc
-
-    if limit <= 0:
-        raise ValueError("`read_line_limit` must be an integer greater than 0.")
-    return limit
-
-
 def _resolve_bool(value: Any, *, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -96,10 +80,9 @@ def _resolve_bool(value: Any, *, field_name: str) -> bool:
     raise ValueError(f"`{field_name}` must be a boolean.")
 
 
-def _resolve_positive_int(value: Any, *, field_name: str, default: int) -> int:
-    raw_value = default if value is None else value
+def _resolve_positive_int(value: Any, *, field_name: str) -> int:
     try:
-        resolved = int(raw_value)
+        resolved = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"`{field_name}` must be an integer greater than 0.") from exc
     if resolved <= 0:
@@ -107,9 +90,71 @@ def _resolve_positive_int(value: Any, *, field_name: str, default: int) -> int:
     return resolved
 
 
-def _tail_lines(content: str, limit: int) -> str:
+def _resolve_non_negative_int(value: Any, *, field_name: str, default: int = 0) -> int:
+    raw_value = default if value is None else value
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"`{field_name}` must be an integer greater than or equal to 0.") from exc
+    if resolved < 0:
+        raise ValueError(f"`{field_name}` must be an integer greater than or equal to 0.")
+    return resolved
+
+
+def _resolve_read_options(args: dict[str, Any]) -> tuple[str, int | None, int | None, int | None]:
+    raw_mode = str(args.get("read_mode", "")).strip().lower()
+    read_line_limit = args.get("read_line_limit")
+    start_line = args.get("start_line")
+    end_line = args.get("end_line")
+
+    has_limit = read_line_limit is not None
+    has_start = start_line is not None
+    has_end = end_line is not None
+
+    if raw_mode:
+        if raw_mode not in {"full", "head", "tail", "range"}:
+            raise ValueError("`read_mode` must be one of: full, head, tail, range.")
+        mode = raw_mode
+    elif has_start or has_end:
+        mode = "range"
+    elif has_limit:
+        mode = "tail"
+    else:
+        mode = "full"
+
+    limit = _resolve_positive_int(read_line_limit, field_name="read_line_limit") if has_limit else None
+    start = _resolve_positive_int(start_line, field_name="start_line") if has_start else None
+    end = _resolve_positive_int(end_line, field_name="end_line") if has_end else None
+
+    if mode in {"head", "tail"} and limit is None:
+        raise ValueError(f"`read_line_limit` is required for read_mode `{mode}`.")
+    if mode == "range":
+        if start is None and end is None:
+            raise ValueError("`start_line` or `end_line` is required for read_mode `range`.")
+        if start is not None and end is not None and end < start:
+            raise ValueError("`end_line` must be greater than or equal to `start_line`.")
+    elif start is not None or end is not None:
+        raise ValueError("`start_line` and `end_line` can only be used with read_mode `range`.")
+
+    return mode, limit, start, end
+
+
+def _slice_content(content: str, *, mode: str, limit: int | None, start: int | None, end: int | None) -> str:
+    if mode == "full":
+        return content
+
     lines = content.splitlines()
-    return "\n".join(lines[-limit:])
+    if mode == "head":
+        return "\n".join(lines[: limit or 0])
+    if mode == "tail":
+        return "\n".join(lines[-(limit or 0) :])
+
+    resolved_start = 1 if start is None else start
+    if end is None and limit is not None:
+        resolved_end = resolved_start + limit - 1
+    else:
+        resolved_end = len(lines) if end is None else end
+    return "\n".join(lines[resolved_start - 1 : resolved_end])
 
 
 def _is_hidden_relative(relative_path: Path) -> bool:
@@ -184,7 +229,15 @@ def _list(
     return "\n".join(lines)
 
 
-def _read(workspace: Workspace, paths: list[str], read_line_limit: int | None = None) -> str:
+def _read(
+    workspace: Workspace,
+    paths: list[str],
+    *,
+    mode: str,
+    limit: int | None,
+    start: int | None,
+    end: int | None,
+) -> str:
     results: list[str] = []
     for path in paths:
         target = workspace.resolve(path)
@@ -192,9 +245,8 @@ def _read(workspace: Workspace, paths: list[str], read_line_limit: int | None = 
             results.append(f"{path}: File not found")
             continue
         content = workspace.read_text(path)
-        if read_line_limit is not None:
-            content = _tail_lines(content, read_line_limit)
-        results.append(f"{path}:\n{content}")
+        sliced = _slice_content(content, mode=mode, limit=limit, start=start, end=end)
+        results.append(f"{path}:\n{sliced}")
     return "\n\n".join(results)
 
 
@@ -226,11 +278,79 @@ def _delete_dir(workspace: Workspace, directories: list[str]) -> str:
     return "\n".join(f"Deleted directory: {directory}" for directory in directories)
 
 
-def _move(workspace: Workspace, paths: list[str], destination_dir: str) -> str:
+def _resolve_destinations(args: dict[str, Any], path_count: int) -> tuple[list[str], str]:
+    destination_dir = _normalize_workspace_path(str(args.get("destination_dir", "")).strip())
+    destinations = _normalize_list(args.get("destinations"))
+
+    if destination_dir and destinations:
+        raise ValueError("Use either `destination_dir` or `destinations`, not both.")
+    if destinations is not None:
+        if len(destinations) != path_count:
+            raise ValueError("`destinations` must have the same number of entries as `paths`.")
+        return destinations, "exact"
+    if destination_dir:
+        return [destination_dir] * path_count, "directory"
+    raise ValueError("Missing required arg `destination_dir` or `destinations`.")
+
+
+def _move_or_copy(workspace: Workspace, paths: list[str], args: dict[str, Any], *, action: str) -> str:
+    destinations, mode = _resolve_destinations(args, len(paths))
     results: list[str] = []
+    for index, path in enumerate(paths):
+        destination = destinations[index]
+        if mode == "directory":
+            source_name = Path(path).name
+            destination = str(Path(destination) / source_name)
+        if action == "move":
+            final_path = workspace.move_path(path, destination)
+            results.append(f"Moved {path} to {final_path}.")
+        else:
+            final_path = workspace.copy_path(path, destination)
+            results.append(f"Copied {path} to {final_path}.")
+    return "\n".join(results)
+
+
+def _delete(workspace: Workspace, paths: list[str]) -> str:
     for path in paths:
-        destination = workspace.move_file_to_dir(path, destination_dir)
-        results.append(f"Moved {path} to {destination}.")
+        workspace.delete_path(path)
+    return "\n".join(f"Deleted path: {path}" for path in paths)
+
+
+def _replace_text(workspace: Workspace, paths: list[str], args: dict[str, Any]) -> str:
+    find = str(args.get("find", ""))
+    if not find:
+        return "Missing required arg `find` for action `replace_text`."
+
+    replace = str(args.get("replace", ""))
+    regex = _resolve_bool(args.get("regex", False), field_name="regex")
+    case_sensitive = _resolve_bool(args.get("case_sensitive", True), field_name="case_sensitive")
+    max_replacements = _resolve_non_negative_int(
+        args.get("max_replacements_per_file"),
+        field_name="max_replacements_per_file",
+        default=0,
+    )
+
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern_text = find if regex else re.escape(find)
+    try:
+        matcher = re.compile(pattern_text, flags)
+    except re.error as exc:
+        return f"Invalid pattern: {exc}"
+
+    results: list[str] = []
+    replacement_count = 0 if max_replacements == 0 else max_replacements
+    for path in paths:
+        target = workspace.resolve(path)
+        if not target.exists():
+            results.append(f"{path}: File not found")
+            continue
+        if not target.is_file():
+            results.append(f"{path}: Not a file")
+            continue
+        original = workspace.read_text(path)
+        updated, count = matcher.subn(replace, original, count=replacement_count)
+        workspace.write_text(path, updated)
+        results.append(f"Replaced {count} occurrence(s) in {path}.")
     return "\n".join(results)
 
 
@@ -239,32 +359,40 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     if action_raw is None:
         action_raw = args.get("command", "read")
     action = str(action_raw).strip().lower()
+    if action == "browse":
+        action = "list"
 
     try:
-        if action in {"read", "list", "browse", "write", "append", "move"}:
-            if action in {"list", "browse"}:
-                paths = _resolve_paths(args)
-                return _list(
-                    workspace,
-                    paths,
-                    recursive=_resolve_bool(args.get("recursive", False), field_name="recursive"),
-                    include_hidden=_resolve_bool(args.get("include_hidden", False), field_name="include_hidden"),
-                    max_entries=_resolve_positive_int(args.get("max_entries"), field_name="max_entries", default=200),
-                )
+        if action == "list":
+            paths = _resolve_paths(args)
+            recursive = _resolve_bool(args.get("recursive", False), field_name="recursive")
+            include_hidden = _resolve_bool(args.get("include_hidden", False), field_name="include_hidden")
+            max_entries = _resolve_positive_int(args.get("max_entries", 200), field_name="max_entries")
+            return _list(
+                workspace,
+                paths,
+                recursive=recursive,
+                include_hidden=include_hidden,
+                max_entries=max_entries,
+            )
 
+        if action in {"read", "write", "append", "move", "copy", "delete", "replace_text"}:
             paths = _resolve_paths(args)
             if not paths:
                 return "Missing required arg `paths` (list)."
 
             if action == "read":
-                read_line_limit = _resolve_read_line_limit(args)
-                return _read(workspace, paths, read_line_limit)
+                mode, limit, start, end = _resolve_read_options(args)
+                return _read(workspace, paths, mode=mode, limit=limit, start=start, end=end)
 
-            if action == "move":
-                destination_dir = _normalize_workspace_path(str(args.get("destination_dir", "")).strip())
-                if not destination_dir:
-                    return "Missing required arg `destination_dir` for action `move`."
-                return _move(workspace, paths, destination_dir)
+            if action in {"move", "copy"}:
+                return _move_or_copy(workspace, paths, args, action=action)
+
+            if action == "delete":
+                return _delete(workspace, paths)
+
+            if action == "replace_text":
+                return _replace_text(workspace, paths, args)
 
             contents = _resolve_contents(args, len(paths))
             if contents is None:
@@ -272,8 +400,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
 
             if action == "write":
                 return _write(workspace, paths, contents)
-            if action == "append":
-                return _append(workspace, paths, contents)
+            return _append(workspace, paths, contents)
 
         if action in {"create_dir", "delete_dir"}:
             directories = _normalize_list(args.get("directories"))
@@ -285,7 +412,10 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     except ValueError as exc:
         return str(exc)
 
-    return "Unsupported action. Use one of: read, list, write, append, create_dir, delete_dir, move."
+    return (
+        "Unsupported action. Use one of: read, list, browse, write, append, move, copy, delete, "
+        "replace_text, create_dir, delete_dir."
+    )
 
 
 def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
@@ -293,17 +423,28 @@ def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
     if action_raw is None:
         action_raw = args.get("command", "read")
     action = str(action_raw).strip().lower()
+    if action == "browse":
+        action = "list"
+
     writes: list[str] = []
-    if action in {"write", "append", "move"}:
+    if action in {"write", "append", "delete", "replace_text"}:
         writes = _resolve_paths(args) or []
+    elif action in {"move", "copy"}:
+        writes = _resolve_paths(args) or []
+        destination_dir = _normalize_workspace_path(str(args.get("destination_dir", "")).strip())
+        destinations = _normalize_list(args.get("destinations")) or []
+        if destination_dir:
+            writes.append(destination_dir)
+        writes.extend(destinations)
     elif action in {"create_dir", "delete_dir"}:
         writes = _normalize_list(args.get("directories")) or []
+
     return ActionEnvelope(
         name=f"file.{action}",
         args=args,
         reason=f"Run file skill action `{action}`.",
         writes=writes,
-        requires_approval=action != "read",
+        requires_approval=action != "read" and action != "list",
     )
 
 

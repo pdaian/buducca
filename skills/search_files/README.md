@@ -3,20 +3,25 @@
 ## What it does
 Searches workspace text files with literal matching or regular expressions.
 
-Use it when you know the text pattern you need and want the agent to find the right file paths before opening files.
+Use this skill when you know the text pattern but do not know the exact file path yet. After finding matching paths, switch to the `file` skill to read only the needed lines or perform edits.
 
-## When the agent should use it
-Use this skill before broad file reads when:
-- the filename is unknown
-- the same token may appear in many directories
-- shell search tools like `rg` are unavailable
-- you need a narrow, reproducible search scope inside the workspace
+## Fast decision guide
+| Goal | Recommended args |
+| --- | --- |
+| Search the whole workspace | `pattern` only |
+| Search one directory tree | `pattern`, `path` |
+| Search several roots at once | `pattern`, `paths` |
+| Limit by extension or name | add `file_pattern` |
+| Match exact text literally | keep `regex: false` |
+| Use a regex | set `regex: true` |
+| Case-sensitive search | set `case_sensitive: true` |
+| Show surrounding lines | set `context_lines` |
 
-Preferred workflow:
-1. Start with a scoped search using `path` or `paths` when possible.
-2. Add `file_pattern` to reduce noise by filename or extension.
-3. Add `context_lines` when match lines alone are not enough.
-4. Follow up with the `file` skill to read the exact matching files.
+## Rules the agent should follow
+1. Start narrow when possible by setting `path` or `paths`.
+2. Add `file_pattern` early when you know likely extensions such as `*.py`, `*.md`, or `*.json`.
+3. Use `context_lines` only when the match line is not enough.
+4. After finding matches, use the `file` skill with `read_mode: "range"` or `"head"` instead of opening entire large files.
 
 ## Behavior notes
 - `regex` defaults to `false`, so plain text is treated literally unless regex mode is enabled.
@@ -24,19 +29,17 @@ Preferred workflow:
 - Hidden files and directories are skipped unless `include_hidden` is `true`.
 - Binary or non-UTF-8 files are skipped.
 - Results are returned as `path:line_number:line_text`.
-- When `context_lines` is set, surrounding lines are included as `path-line_number-line_text`.
+- Context lines are returned as `path-line_number-line_text`.
 - Search stops after `max_matches` matching lines.
-- `file_pattern` accepts a single glob like `*.py` or a list like `["*.md","*.txt"]`.
+- `file_pattern` accepts a single glob or a list of globs.
 
 ## Usage
 ```bash
-python3 -m assistant_framework.cli skill search_files --args '{"pattern":"TODO","path":"notes/today.txt"}'
+python3 -m assistant_framework.cli skill search_files --args '{"pattern":"TODO"}'
 python3 -m assistant_framework.cli skill search_files --args '{"pattern":"def register","paths":["skills"],"file_pattern":"*.py","max_matches":20}'
 python3 -m assistant_framework.cli skill search_files --args '{"pattern":"todo: (first|second)","paths":["notes"],"regex":true,"case_sensitive":true}'
 python3 -m assistant_framework.cli skill search_files --args '{"pattern":"ActionEnvelope","path":"assistant_framework","file_pattern":["*.py","*.md"],"context_lines":1}'
 ```
-
-Prefer `path` for one file or directory. Use `paths` for several files and/or directories in one call.
 
 ## Args schema
 ```ts

@@ -66,6 +66,40 @@ class Workspace:
             raise ValueError(f"Not a directory: {relative_path}")
         shutil.rmtree(dir_path)
 
+    def delete_path(self, relative_path: str) -> None:
+        path = self.resolve(relative_path)
+        if not path.exists():
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+            return
+        path.unlink()
+
+    def move_path(self, source_path: str, destination_path: str) -> str:
+        source = self.resolve(source_path)
+        if not source.exists():
+            raise ValueError(f"Path not found: {source_path}")
+
+        destination = self.resolve(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
+        return str(destination.relative_to(self.root))
+
+    def copy_path(self, source_path: str, destination_path: str) -> str:
+        source = self.resolve(source_path)
+        if not source.exists():
+            raise ValueError(f"Path not found: {source_path}")
+
+        destination = self.resolve(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            if destination.exists():
+                raise ValueError(f"Destination already exists: {destination_path}")
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+        return str(destination.relative_to(self.root))
+
     def move_file_to_dir(self, relative_path: str, destination_dir: str) -> str:
         source = self.resolve(relative_path)
         if not source.exists():
@@ -77,5 +111,4 @@ class Workspace:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         destination = target_dir / source.name
-        source.rename(destination)
-        return str(destination.relative_to(self.root))
+        return self.move_path(relative_path, str(destination.relative_to(self.root)))

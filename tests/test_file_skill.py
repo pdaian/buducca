@@ -61,8 +61,7 @@ class FileSkillTests(unittest.TestCase):
             )
             self.assertEqual(read_result, "notes/todo.txt:\nhello!\n\nnotes/next.txt:\ntoday!")
 
-
-    def test_read_with_line_limit(self) -> None:
+    def test_read_supports_head_tail_and_range_modes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             self.module.run(
@@ -74,36 +73,54 @@ class FileSkillTests(unittest.TestCase):
                 },
             )
 
-            result = self.module.run(
+            head_result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/log.txt"], "read_mode": "head", "read_line_limit": 2},
+            )
+            tail_result = self.module.run(
                 workspace,
                 {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": 2},
             )
+            range_result = self.module.run(
+                workspace,
+                {
+                    "action": "read",
+                    "paths": ["notes/log.txt"],
+                    "read_mode": "range",
+                    "start_line": 2,
+                    "end_line": 3,
+                },
+            )
 
-            self.assertEqual(result, "notes/log.txt:\nline3\nline4")
+            self.assertEqual(head_result, "notes/log.txt:\nline1\nline2")
+            self.assertEqual(tail_result, "notes/log.txt:\nline3\nline4")
+            self.assertEqual(range_result, "notes/log.txt:\nline2\nline3")
 
-    def test_read_with_invalid_line_limit(self) -> None:
+    def test_read_validates_range_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             self.module.run(
                 workspace,
+                {"action": "write", "paths": ["notes/log.txt"], "content": "line1\nline2"},
+            )
+
+            missing_limit = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/log.txt"], "read_mode": "head"},
+            )
+            invalid_range = self.module.run(
+                workspace,
                 {
-                    "action": "write",
+                    "action": "read",
                     "paths": ["notes/log.txt"],
-                    "content": "line1\nline2",
+                    "read_mode": "range",
+                    "start_line": 3,
+                    "end_line": 2,
                 },
             )
 
-            zero_result = self.module.run(
-                workspace,
-                {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": 0},
-            )
-            non_int_result = self.module.run(
-                workspace,
-                {"action": "read", "paths": ["notes/log.txt"], "read_line_limit": "abc"},
-            )
-
-            self.assertEqual(zero_result, "`read_line_limit` must be an integer greater than 0.")
-            self.assertEqual(non_int_result, "`read_line_limit` must be an integer greater than 0.")
+            self.assertEqual(missing_limit, "`read_line_limit` is required for read_mode `head`.")
+            self.assertEqual(invalid_range, "`end_line` must be greater than or equal to `start_line`.")
 
     def test_read_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -124,6 +141,15 @@ class FileSkillTests(unittest.TestCase):
                 result,
                 "Browsing docs: showing 2 entrie(s).\ndocs/nested/\ndocs/a.txt",
             )
+
+    def test_list_defaults_to_workspace_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("docs/a.txt", "a")
+
+            result = self.module.run(workspace, {"action": "list"})
+
+            self.assertEqual(result, "Browsing .: showing 1 entrie(s).\ndocs/")
 
     def test_list_supports_recursive_and_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -179,6 +205,93 @@ class FileSkillTests(unittest.TestCase):
                 {"action": "delete_dir", "directories": ["docs"]},
             )
             self.assertEqual(delete_result, "Deleted directory: docs")
+
+    def test_move_copy_delete_and_replace_text_support_bulk_exact_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module.run(
+                workspace,
+                {
+                    "action": "write",
+                    "paths": ["src/a.txt", "src/b.txt"],
+                    "contents": ["TODO one", "TODO two"],
+                },
+            )
+            self.module.run(workspace, {"action": "create_dir", "directories": ["src/nested"]})
+            self.module.run(
+                workspace,
+                {"action": "write", "paths": ["src/nested/c.txt"], "content": "TODO three"},
+            )
+
+            move_result = self.module.run(
+                workspace,
+                {
+                    "action": "move",
+                    "paths": ["src/a.txt", "src/nested"],
+                    "destinations": ["dst/renamed.txt", "dst/tree"],
+                },
+            )
+            copy_result = self.module.run(
+                workspace,
+                {
+                    "action": "copy",
+                    "paths": ["src/b.txt"],
+                    "destinations": ["dst/copied.txt"],
+                },
+            )
+            replace_result = self.module.run(
+                workspace,
+                {
+                    "action": "replace_text",
+                    "paths": ["dst/renamed.txt", "dst/tree/c.txt", "dst/copied.txt"],
+                    "find": "TODO",
+                    "replace": "DONE",
+                },
+            )
+            delete_result = self.module.run(
+                workspace,
+                {"action": "delete", "paths": ["src/b.txt", "dst/tree"]},
+            )
+
+            self.assertEqual(
+                move_result,
+                "Moved src/a.txt to dst/renamed.txt.\nMoved src/nested to dst/tree.",
+            )
+            self.assertEqual(copy_result, "Copied src/b.txt to dst/copied.txt.")
+            self.assertEqual(
+                replace_result,
+                "Replaced 1 occurrence(s) in dst/renamed.txt.\n"
+                "Replaced 1 occurrence(s) in dst/tree/c.txt.\n"
+                "Replaced 1 occurrence(s) in dst/copied.txt.",
+            )
+            self.assertEqual(delete_result, "Deleted path: src/b.txt\nDeleted path: dst/tree")
+            self.assertEqual(workspace.read_text("dst/renamed.txt"), "DONE one")
+            self.assertEqual(workspace.read_text("dst/copied.txt"), "DONE two")
+            self.assertFalse(workspace.resolve("dst/tree").exists())
+
+    def test_replace_text_supports_case_insensitive_regex(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            self.module.run(
+                workspace,
+                {"action": "write", "paths": ["notes/a.txt"], "content": "Old_Value old_value"},
+            )
+
+            result = self.module.run(
+                workspace,
+                {
+                    "action": "replace_text",
+                    "paths": ["notes/a.txt"],
+                    "find": r"old_value",
+                    "replace": "new_value",
+                    "regex": True,
+                    "case_sensitive": False,
+                    "max_replacements_per_file": 1,
+                },
+            )
+
+            self.assertEqual(result, "Replaced 1 occurrence(s) in notes/a.txt.")
+            self.assertEqual(workspace.read_text("notes/a.txt"), "new_value old_value")
 
     def test_workspace_prefix_is_filtered_from_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:

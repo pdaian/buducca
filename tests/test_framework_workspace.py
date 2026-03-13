@@ -48,6 +48,25 @@ class WorkspaceTests(unittest.TestCase):
             ws.delete_dir("dst")
             self.assertFalse(ws.resolve("dst").exists())
 
+    def test_move_copy_and_delete_path_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ws = Workspace(td)
+            ws.write_text("src/a.txt", "hello")
+            ws.write_text("src/nested/b.txt", "world")
+
+            moved_path = ws.move_path("src/a.txt", "renamed/a.txt")
+            copied_path = ws.copy_path("src/nested", "copied/nested")
+
+            self.assertEqual(moved_path, "renamed/a.txt")
+            self.assertEqual(copied_path, "copied/nested")
+            self.assertEqual(ws.read_text("renamed/a.txt"), "hello")
+            self.assertEqual(ws.read_text("copied/nested/b.txt"), "world")
+
+            ws.delete_path("renamed/a.txt")
+            ws.delete_path("copied/nested")
+            self.assertFalse(ws.resolve("renamed/a.txt").exists())
+            self.assertFalse(ws.resolve("copied/nested").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
