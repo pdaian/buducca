@@ -343,13 +343,54 @@ class BotRunner:
         configured_timezone = self.config.llm.system_prompt_timezone
         now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
         sections: list[str] = [
-            f"Current date/time ({configured_timezone}, accurate to the minute): "
-            + now_in_timezone.strftime("%Y-%m-%d %H:%M %Z")
+            "\n".join(
+                [
+                    "[Role]",
+                    self.config.llm.system_prompt.strip(),
+                ]
+            ),
+            "\n".join(
+                [
+                    "[Truthfulness]",
+                    "State what you know, what you inferred, and what is still unknown when that distinction matters.",
+                    "For ambiguous or underspecified requests, first decide whether you can answer now, need one clarifying question, or should inspect workspace evidence.",
+                    "If key information is missing, ask one targeted follow-up instead of guessing.",
+                    f"Current date/time ({configured_timezone}, accurate to the minute): "
+                    + now_in_timezone.strftime("%Y-%m-%d %H:%M %Z"),
+                    "Treat time-sensitive requests such as schedules, deadlines, reminders, and relative dates as needing current context.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "[Planning]",
+                    "Before acting, choose the smallest next step: answer directly, ask one question, or run one or more skills.",
+                    "Prefer short plans and cheap read-first inspection over speculative multi-step tool loops.",
+                    "Stop once the user-facing task is complete or you are blocked on missing information.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "[Source Discipline]",
+                    "Use workspace evidence for claims about files, prior outputs, attachments, collector data, or saved learnings.",
+                    "Quote only when exact wording matters; otherwise summarize the evidence you used.",
+                    "Separate direct evidence from your inferences.",
+                    "Do not mention source paths unless they materially help the answer or you explicitly referenced them.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "[Conflict Resolution]",
+                    "Resolve conflicts in this order: current user instructions, current-turn attachments or quoted workspace evidence, other workspace files and loaded collector outputs, persistent learnings, then general world knowledge.",
+                    "If higher-priority sources conflict internally, surface the conflict and ask a clarifying question or inspect more evidence.",
+                ]
+            ),
         ]
 
         if self._skills:
             skill_intro = [
-                "You can call local skills if a user asks you to run one.",
+                "[Tools]",
+                "You can call local skills for execution tasks when a direct answer is not enough.",
+                "Prefer answering directly when no skill is needed.",
                 "Available skills:",
             ]
             for name in sorted(self._skills):
@@ -363,8 +404,9 @@ class BotRunner:
             sections.append("\n".join(skill_intro))
 
         learnings_lines = [
+            "[Workspace Sources]",
             "Persistent learnings (from workspace/learnings):",
-            "These are long-term learnings for future prompts. Reuse them whenever relevant.",
+            "These are long-term learnings for future prompts. Reuse them whenever relevant and keep learning liberally when you discover durable preferences or reusable facts.",
         ]
         learnings_text = self._workspace.read_text("learnings", default="")
         saved_learnings = [line.strip() for line in learnings_text.splitlines() if line.strip()]
@@ -373,6 +415,9 @@ class BotRunner:
         else:
             learnings_lines.append("- No learnings recorded yet.")
         sections.append("\n".join(learnings_lines))
+        contact_section = self._build_contact_map_prompt_section()
+        if contact_section:
+            sections.append(contact_section)
 
         collector_manifests = CollectorManager(
             self.config.runtime.collectors_dir,
@@ -393,30 +438,35 @@ class BotRunner:
                 description = manifest.description or "No description provided."
                 collector_lines.append(f"- {manifest.name}: {description}")
                 if generated_files:
-                    collector_lines.append("  generated workspace files:")
-                    for item in generated_files:
+                    collector_lines.append(f"  generated workspace files ({len(generated_files)}):")
+                    for item in generated_files[:5]:
                         collector_lines.append(f"    {item}")
+                    if len(generated_files) > 5:
+                        collector_lines.append(f"    ... {len(generated_files) - 5} more")
                 if module_files:
-                    collector_lines.append("  module files:")
-                    for item in module_files:
+                    collector_lines.append(f"  module files ({len(module_files)}):")
+                    for item in module_files[:5]:
                         collector_lines.append(f"    {item}")
+                    if len(module_files) > 5:
+                        collector_lines.append(f"    ... {len(module_files) - 5} more")
             if len(collector_lines) > 2:
                 sections.append("\n".join(collector_lines))
 
         if self._skills:
             skill_rules = [
+                "[Tool Use Policy]",
                 "When you decide to invoke a skill, output ONLY valid JSON with this shape:",
                 '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}, "done": <true|false>}}',
                 "Do not include any extra text before or after JSON.",
-                "Use skill_call only when user explicitly requests a skill run or task execution.",
+                "Use skill_call when the task requires execution, file inspection, retrieval, or other workspace actions beyond a direct answer.",
                 "If done is omitted, it defaults to false.",
                 "If done is false, the tool result will be provided back to you so you can choose the next step.",
                 "If done is true, the tool result is usually sent to the user as the final answer.",
                 "Some skills may require an additional LLM response before replying to the user.",
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
-                "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning.",
-                "When workspace evidence is provided, prefer it over memory guesses and cite the source paths you used.",
-                "Do not mention source paths unless you explicitly referenced them in the answer.",
+                "Inspect obvious workspace evidence before calling broader search or mutation skills when a cheap read can answer the question.",
+                "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning; prefer over-learning to under-learning.",
+                "When a tool call fails, returns malformed output, or comes back empty, say what happened and either retry with a smaller next step or ask for what is missing.",
                 "Incoming attachments are saved under workspace/attachments/YYYY-MM-DD/.",
                 "Saved filenames include the sending platform, sender name, and Unix timestamp; PDFs also get a sibling .ocr.txt file when local extraction or OCR succeeds.",
                 "If attachment paths or OCR text are included in a user turn, use them as first-party workspace context.",
@@ -435,11 +485,55 @@ class BotRunner:
 
             sections.append("\n".join(skill_rules))
 
+        sections.append(
+            "\n".join(
+                [
+                    "[Reply Style]",
+                    "Lead with the answer or next action.",
+                    "Match verbosity to the user's request.",
+                    "Keep action confirmations distinct from analysis and avoid repeating filenames or raw tool output unless useful.",
+                ]
+            )
+        )
+        sections.append(
+            "\n".join(
+                [
+                    "[Examples]",
+                    "- Answer directly: when the user asks for a simple explanation and the required facts are already in context, answer without a skill call.",
+                    "- Ask one question: when a request depends on an unknown file, date range, or recipient, ask for that missing detail before acting.",
+                    '- Use a skill: {"skill_call": {"name": "file", "args": {"action": "read", "path": "assistant/notes/todo.md"}, "done": false}}',
+                ]
+            )
+        )
+
         return sections
 
     def _build_system_prompt(self) -> str:
-        base_prompt = self.config.llm.system_prompt.strip()
-        return f"{base_prompt}\n\n" + "\n\n".join(self._build_agent_context_sections())
+        return "\n\n".join(self._build_agent_context_sections())
+
+    def _build_contact_map_prompt_section(self) -> str:
+        lines = [
+            "Known reply targets from workspace contact maps:",
+            "Use these aliases as workspace evidence for who a known sender maps to on each backend.",
+        ]
+        found = False
+        for platform, relative_path in sorted(WORKSPACE_CONTACT_MAP_FILES.items()):
+            raw = self._workspace.read_text(relative_path, default="").strip()
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for alias in sorted(payload):
+                recipient = payload[alias]
+                if isinstance(recipient, bool) or recipient is None or not isinstance(alias, str):
+                    continue
+                lines.append(f"- {alias} [{platform}] -> {recipient}")
+                found = True
+        return "\n".join(lines) if found else ""
 
     @staticmethod
     def _existing_nonempty_prompt_files(items: list[str], *, base_dir: Path) -> list[str]:
@@ -1137,6 +1231,8 @@ class BotRunner:
             "You are running automatically at the top of the hour.",
             "Read workspace files as needed and take any actions required by the hourly instructions.",
             f"If nothing should happen for this hour, reply with exactly {_HOURLY_NO_ACTION_REPLY}.",
+            "Avoid duplicate side effects for the same hour. If evidence is insufficient for a mutating action, prefer no action or a read-first step over guessing.",
+            "For external messages, reminders, or other visible side effects, require a clear instruction in the hourly file or workspace evidence before acting.",
             "",
             "[Agent context snapshot]",
             "The same skills, learnings, and loaded workspace context available to normal conversations are repeated below for this scheduled run.",

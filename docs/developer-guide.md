@@ -13,7 +13,6 @@
 
 - Prompt assembly lives in `messaging_llm_bot/bot.py` via `_build_system_prompt()` and `_build_agent_context_sections()`.
 - Default base prompt and prompt-related config live in `messaging_llm_bot/config.py`.
-- A focused review of the current prompting strategy and concrete improvement TODOs lives in `docs/agent-prompt-review.md`.
 
 ## Plugin layout
 

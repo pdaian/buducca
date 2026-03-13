@@ -883,6 +883,8 @@ class BotTests(unittest.TestCase):
             self.assertIn("echo: Echoes user text.", hourly_prompt)
             self.assertIn("Persistent learnings (from workspace/learnings)", hourly_prompt)
             self.assertIn("- Remember the hourly summary format.", hourly_prompt)
+            self.assertIn("Avoid duplicate side effects for the same hour.", hourly_prompt)
+            self.assertIn("require a clear instruction in the hourly file or workspace evidence before acting.", hourly_prompt)
 
     def test_missing_action_policy_allows_mutating_skill_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2034,18 +2036,27 @@ class BotTests(unittest.TestCase):
             bot._handle_message(1, "hi")
 
             system_prompt = bot.llm.messages[0]["content"]
+            self.assertIn("[Role]", system_prompt)
+            self.assertIn("Prioritize correctness over fluency", system_prompt)
+            self.assertIn("[Truthfulness]", system_prompt)
+            self.assertIn("[Planning]", system_prompt)
+            self.assertIn("[Source Discipline]", system_prompt)
+            self.assertIn("[Conflict Resolution]", system_prompt)
             self.assertIn("Available skills", system_prompt)
             self.assertIn("echo: Echoes user text.", system_prompt)
             self.assertIn("args schema", system_prompt)
             self.assertIn("{ text: string }", system_prompt)
+            self.assertIn("[Tool Use Policy]", system_prompt)
             self.assertIn('"skill_call"', system_prompt)
             self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
             self.assertIn("These are long-term learnings for future prompts", system_prompt)
             self.assertIn("- User prefers concise responses.", system_prompt)
-            self.assertIn("save them with the learn skill as a concise one-line learning", system_prompt)
+            self.assertIn("prefer over-learning to under-learning", system_prompt)
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
-            self.assertIn("Do not mention source paths unless you explicitly referenced them in the answer.", system_prompt)
+            self.assertIn("Do not mention source paths unless they materially help the answer", system_prompt)
+            self.assertIn("[Reply Style]", system_prompt)
+            self.assertIn("[Examples]", system_prompt)
 
     def test_system_prompt_includes_configured_file_skill_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as td:

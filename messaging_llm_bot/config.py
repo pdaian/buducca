@@ -73,7 +73,12 @@ class LLMConfig:
     api_key: str
     model: str
     endpoint_path: str = "/chat/completions"
-    system_prompt: str = "You are a helpful assistant."
+    system_prompt: str = (
+        "You are a careful, action-oriented assistant. Prioritize correctness over fluency, "
+        "ground important claims in available evidence, ask a targeted clarifying question when "
+        "requirements are ambiguous or missing, and finish tasks end-to-end when you have enough "
+        "information to act."
+    )
     temperature: float = 0.2
     max_tokens: int = 400
     history_messages: int = 8
