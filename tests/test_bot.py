@@ -1641,6 +1641,39 @@ class BotTests(unittest.TestCase):
                 ["2026-03-10T13:23:00+00:00", "2026-03-10T13:24:00+00:00"],
             )
 
+    def test_telegram_recent_sorting_ignores_logged_at_when_sent_at_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._append_sorted_recent_message(
+                "telegram.recent",
+                {
+                    "text": "newer by sent_at",
+                    "sent_at": "2026-03-10T13:24:00+00:00",
+                    "logged_at": "2026-03-10T13:00:00+00:00",
+                    "collected_at": "2026-03-10T13:00:00+00:00",
+                },
+            )
+            bot._append_sorted_recent_message(
+                "telegram.recent",
+                {
+                    "text": "older by sent_at",
+                    "sent_at": "2026-03-10T13:23:00+00:00",
+                    "logged_at": "2026-03-10T14:00:00+00:00",
+                    "collected_at": "2026-03-10T14:00:00+00:00",
+                },
+            )
+
+            recent_lines = (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines()
+            recent = [json.loads(line) for line in recent_lines if line.strip()]
+
+            self.assertEqual([item["text"] for item in recent], ["older by sent_at", "newer by sent_at"])
+
     def test_sender_context_is_added_to_llm_prompt(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()

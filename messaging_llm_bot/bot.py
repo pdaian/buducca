@@ -2028,23 +2028,26 @@ class BotRunner:
             line = line.strip()
             if not line:
                 continue
-            sort_key = self._recent_message_sort_key(line)
+            sort_key = self._recent_message_sort_key(file_path, line)
             entries.append((sort_key, index, line))
 
         payload_line = json.dumps(payload, ensure_ascii=False)
-        entries.append((self._recent_message_sort_key(payload_line), len(entries), payload_line))
+        entries.append((self._recent_message_sort_key(file_path, payload_line), len(entries), payload_line))
         entries.sort(key=lambda item: (item[0] is None, item[0] or datetime.max.replace(tzinfo=timezone.utc), item[1]))
         self._workspace.write_text(file_path, "\n".join(line for _, _, line in entries) + "\n")
 
     @staticmethod
-    def _recent_message_sort_key(line: str) -> datetime | None:
+    def _recent_message_sort_key(file_path: str, line: str) -> datetime | None:
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
             return None
         if not isinstance(payload, dict):
             return None
-        timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
+        if file_path == "telegram.recent":
+            timestamp = payload.get("sent_at")
+        else:
+            timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
         if not isinstance(timestamp, str):
             return None
         try:
