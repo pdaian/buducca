@@ -434,26 +434,9 @@ class BotRunner:
                     ]
                 )
 
-            if "message_send" in self._skills and self.config.contacts:
-                skill_rules.extend(self._build_message_send_contact_prompt_lines())
-
             sections.append("\n".join(skill_rules))
 
         return f"{base_prompt}\n\n" + "\n\n".join(sections)
-
-    def _build_message_send_contact_prompt_lines(self) -> list[str]:
-        lines = [
-            "When using the message_send skill, prefer these configured contacts instead of guessing recipient ids.",
-            "Each contact entry already uses the same recipient format expected by message_send args.recipient or args.recipients.",
-            "Use the exact recipient value for the matching platform. For Telegram use the numeric chat id. For WhatsApp groups use the listed conversation id.",
-            "Configured contacts:",
-        ]
-        for contact in self.config.contacts:
-            summary = f"- {contact.name} [{contact.platform}] -> {contact.recipient}"
-            if contact.description:
-                summary += f" ({contact.description})"
-            lines.append(summary)
-        return lines
 
     @staticmethod
     def _existing_nonempty_prompt_files(items: list[str], *, base_dir: Path) -> list[str]:

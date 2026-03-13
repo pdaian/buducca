@@ -1621,7 +1621,7 @@ class BotTests(unittest.TestCase):
             self.assertLess(user_prompt.index("[Structured memory file previews]"), user_prompt.index("[Sender context]"))
             self.assertTrue(user_prompt.endswith("\n\nhi"))
 
-    def test_system_prompt_includes_message_send_contacts_when_skill_enabled(self) -> None:
+    def test_system_prompt_does_not_include_message_send_contacts(self) -> None:
         runtime = RuntimeConfig(enable_message_send_skill=True)
         cfg = BotConfig(
             telegram=TelegramConfig(bot_token="t"),
@@ -1636,9 +1636,9 @@ class BotTests(unittest.TestCase):
 
         prompt = bot._build_system_prompt()
 
-        self.assertIn("When using the message_send skill", prompt)
-        self.assertIn("- Alice [telegram] -> 123456789", prompt)
-        self.assertIn("- Family [whatsapp] -> group:Family|g1", prompt)
+        self.assertNotIn("When using the message_send skill", prompt)
+        self.assertNotIn("123456789", prompt)
+        self.assertNotIn("group:Family|g1", prompt)
 
     def test_telegram_updates_maintain_top_level_contact_map(self) -> None:
         with tempfile.TemporaryDirectory() as td:
