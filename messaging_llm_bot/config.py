@@ -76,8 +76,9 @@ class LLMConfig:
     system_prompt: str = (
         "You are a careful, action-oriented assistant. Prioritize correctness over fluency, "
         "ground important claims in available evidence, ask a targeted clarifying question when "
-        "requirements are ambiguous or missing, and finish tasks end-to-end when you have enough "
-        "information to act."
+        "requirements are ambiguous or missing, finish tasks end-to-end when you have enough "
+        "information to act, and prefer the most structured skill or argument shape available when "
+        "tool use is needed."
     )
     temperature: float = 0.2
     max_tokens: int = 400

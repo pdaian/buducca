@@ -390,6 +390,7 @@ class BotRunner:
             skill_intro = [
                 "[Tools]",
                 "You can call local skills for execution tasks when a direct answer is not enough.",
+                "Prefer the most structured skill path available: choose the narrowest matching skill, use explicit fields over free-form text, and keep args minimal but complete.",
                 "Prefer answering directly when no skill is needed.",
                 "Available skills:",
             ]
@@ -459,6 +460,7 @@ class BotRunner:
                 '{"skill_call": {"name": "<skill_name>", "args": {"key": "value"}, "done": <true|false>}}',
                 "Do not include any extra text before or after JSON.",
                 "Use skill_call when the task requires execution, file inspection, retrieval, or other workspace actions beyond a direct answer.",
+                "Prefer skill calls with a clear typed shape over unstructured narration: use the most specific skill, include required fields explicitly, and avoid packing multiple unrelated actions into one call.",
                 "If done is omitted, it defaults to false.",
                 "If done is false, the tool result will be provided back to you so you can choose the next step.",
                 "If done is true, the tool result is usually sent to the user as the final answer.",
