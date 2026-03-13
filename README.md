@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/buducca-logo.svg" alt="BUDUCCA logo" width="900"/>
+  <img src="docs/assets/buducca-logo.svg" alt="BUDUCCA logo" width="900"/>
 </p>
 
 # BUDUCCA — Private, local-first personal assistant 🤖
