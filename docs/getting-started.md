@@ -133,6 +133,7 @@ Collector docs:
 
 - Gmail: [`collectors/gmail/README.md`](../collectors/gmail/README.md)
 - Google Calendar: [`collectors/google_calendar/README.md`](../collectors/google_calendar/README.md)
+- Reddit top: [`collectors/reddit_top/README.md`](../collectors/reddit_top/README.md)
 - Slack: [`collectors/slack/README.md`](../collectors/slack/README.md)
 - Twitter recent: [`collectors/twitter_recent/README.md`](../collectors/twitter_recent/README.md)
 
