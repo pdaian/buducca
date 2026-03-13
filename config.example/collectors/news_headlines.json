@@ -1,0 +1,5 @@
+{
+  "interval_seconds": 86400,
+  "target_count": 100,
+  "lookback_hours": 24
+}
