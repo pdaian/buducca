@@ -4,7 +4,7 @@
 
 # BUDUCCA
 
-Cyberpunk control plane for messaging-first assistants.
+Control plane for messaging-first assistants.
 
 BUDUCCA runs one assistant core across Telegram, Signal, WhatsApp, and Google Fi, with local workspace state, pluggable collectors, and OpenAI-compatible model endpoints. It is built for people who want modern open models in chat without a heavy SaaS stack.
 
