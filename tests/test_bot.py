@@ -317,6 +317,30 @@ class BotTests(unittest.TestCase):
             self.assertEqual(history_after, history_before)
             self.assertEqual(log_after, log_before)
 
+    def test_telegram_outgoing_non_echo_message_is_processed(self) -> None:
+        cfg = BotConfig(
+            telegram=TelegramConfig(bot_token="t"),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("heard")
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="telegram",
+                conversation_id="5276971421",
+                sender_id="256131971",
+                text="hello from another chat",
+                is_outgoing=True,
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 1)
+        self.assertEqual(bot.telegram.sent, [(5276971421, "heard")])
+
     def test_frontend_outgoing_self_messages_are_deduped_across_non_telegram_frontends(self) -> None:
         cases = [
             (
