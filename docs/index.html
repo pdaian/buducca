@@ -292,14 +292,16 @@
         <article class="card">
           <h2>Plain-File State</h2>
           <p>
-            Traces, collector outputs, unanswered messages, and learned context stay in a readable workspace. Audit trail included.
+            Traces, collector outputs, unanswered messages, and learned context stay in a readable workspace. That keeps debugging, backup,
+            diffing, and manual inspection straightforward when you need to see exactly what the assistant has stored. Audit trail included.
           </p>
         </article>
 
         <article class="card">
           <h2>Minimal Surface Area</h2>
           <p>
-            Small Python modules, direct config files, and no required hosted backend. Fewer layers. Less drift. Faster edits.
+            Small Python modules, direct config files, and no required hosted backend. The stack is easier to reason about because most changes
+            happen close to the behavior they affect, without hidden orchestration or extra service glue. Fewer layers. Less drift. Faster edits.
           </p>
         </article>
       </section>
@@ -312,7 +314,7 @@ $EDITOR config/llm.json
 $EDITOR config/telegram.json
 python3 run_bot.py --config config</code></pre>
         <p>
-          For open-model serving, start with <a href="https://docs.vllm.ai/" target="_blank" rel="noreferrer noopener">vLLM</a>
+          For open-model serving, start with <a href="https://lmstudio.ai/" target="_blank" rel="noreferrer noopener">LM Studio</a>
           or <a href="https://docs.ollama.com/openai" target="_blank" rel="noreferrer noopener">Ollama's OpenAI-compatible API</a>.
         </p>
       </section>

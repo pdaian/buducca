@@ -25,12 +25,12 @@ The runtime expects an OpenAI-compatible chat-completions endpoint:
 
 Two practical deployment paths:
 
-- `vLLM` if you want a serious OpenAI-compatible serving layer for larger open models
+- `LM Studio` if you want the simplest OpenAI-compatible local model setup
 - `Ollama` if you want the fastest local setup on one machine
 
 Relevant docs:
 
-- <https://docs.vllm.ai/>
+- <https://lmstudio.ai/>
 - <https://docs.ollama.com/openai>
 
 Minimal example for a local OpenAI-compatible server:

@@ -37,13 +37,13 @@ For a fuller boot sequence, collector setup, and command reference, see [docs/ge
 
 The model client speaks the OpenAI chat-completions shape. The simplest production path is:
 
-- local or remote `vLLM` for high-throughput OpenAI-compatible serving
+- local `LM Studio` for the simplest OpenAI-compatible desktop setup
 - local `Ollama` for fast single-node setup
 - recent open instruct/reasoning models exposed behind either server
 
 Relevant docs:
 
-- `vLLM` OpenAI-compatible server: <https://docs.vllm.ai/>
+- `LM Studio`: <https://lmstudio.ai/>
 - `Ollama` OpenAI compatibility: <https://docs.ollama.com/openai>
 
 ## Commands you will actually use
