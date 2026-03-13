@@ -1844,6 +1844,23 @@ class BotTests(unittest.TestCase):
         self.assertIn("updates_handled: 7", sent)
         self.assertIn("collectors: no status data yet", sent)
 
+    def test_plan_command_shows_injected_plan_payload_shapes_without_llm(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = DummyLLM("should-not-be-used")
+
+        bot._handle_message(1, "/plan")
+
+        self.assertEqual(bot.llm.calls, 0)
+        sent = bot.telegram.sent[0][1]
+        self.assertIn("Plan command", sent)
+        self.assertIn("show the plan-mode payload shapes injected into the agent", sent)
+        self.assertIn('"plan": [', sent)
+        self.assertIn('"status": "pending|in_progress|completed"', sent)
+        self.assertIn('"questions": [', sent)
+        self.assertIn('"id": "snake_case"', sent)
+        self.assertIn("not JSON Schema documents", sent)
+
     def test_skill_command_lists_available_skills_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"

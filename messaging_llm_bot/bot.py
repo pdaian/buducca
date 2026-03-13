@@ -55,6 +55,32 @@ _HOURLY_NO_ACTION_REPLY = "NO_ACTION"
 _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 _CONTACT_HANDLE_RE = re.compile(r"@\w[\w.]*")
 _CONTACT_ANGLE_RE = re.compile(r"<([^>]+)>")
+_PLAN_UPDATE_SCHEMA = '\n'.join(
+    [
+        "{",
+        '  "explanation": "optional string",',
+        '  "plan": [',
+        '    {"step": "string", "status": "pending|in_progress|completed"}',
+        "  ]",
+        "}",
+    ]
+)
+_PLAN_REQUEST_USER_INPUT_SCHEMA = '\n'.join(
+    [
+        "{",
+        '  "questions": [',
+        "    {",
+        '      "header": "<=12 chars",',
+        '      "id": "snake_case",',
+        '      "question": "string",',
+        '      "options": [',
+        '        {"label": "1-5 words", "description": "one sentence"}',
+        "      ]",
+        "    }",
+        "  ]",
+        "}",
+    ]
+)
 
 
 @dataclass
@@ -237,6 +263,26 @@ class BotRunner:
         for name in sorted(self._skills):
             description = self._skills[name].description or "No description provided."
             lines.append(f"  - {name}: {description}")
+        return "\n".join(lines)
+
+    def _build_plan_command_overview(self) -> str:
+        lines = [
+            "Plan command",
+            "- usage: /plan",
+            "- purpose: show the plan-mode payload shapes injected into the agent.",
+            "- note: these are concrete payload shapes, not JSON Schema documents.",
+            "- update_plan:",
+        ]
+        lines.extend(f"  {line}" for line in _PLAN_UPDATE_SCHEMA.splitlines())
+        lines.append("- request_user_input:")
+        lines.extend(f"  {line}" for line in _PLAN_REQUEST_USER_INPUT_SCHEMA.splitlines())
+        lines.extend(
+            [
+                "- request_user_input constraints: 1-3 questions.",
+                "- each question must offer 2-3 mutually exclusive options.",
+                '- recommended option should be listed first and end with "(Recommended)".',
+            ]
+        )
         return "\n".join(lines)
 
     def _handle_skill_command(self, text: str) -> str:
@@ -2925,6 +2971,8 @@ class BotRunner:
         self._refresh_skills()
         if command_text.lower() == "/status":
             reply = self._build_status_message()
+        elif command_text.lower() == "/plan":
+            reply = self._build_plan_command_overview()
         elif command_text.lower() == "/skill" or command_text.lower().startswith("/skill "):
             reply = self._handle_skill_command(command_text)
         else:

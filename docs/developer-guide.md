@@ -16,6 +16,34 @@
 - Default prompt inclusion is intentionally narrow: only learn-generated fact records from `assistant/facts/*.json` with `source == "learn"` are auto-included.
 - Other stored workspace memory such as birthdays, contacts, notes, tasks, routines, and collector outputs should be described for discovery, but not expanded by default.
 
+### How skill docs reach the agent prompt
+
+Skill READMEs are not injected wholesale.
+
+The exact flow for `skills/<name>/README.md` is:
+
+1. `assistant_framework/skills.py` loads each skill module and stores `readme_path=file_path.parent / "README.md"` on the `Skill` object.
+2. `SkillManager._resolve_args_schema()` reads `## Args schema` from that README only when the module does not define `ARGS_SCHEMA`.
+3. `messaging_llm_bot/bot.py::_build_agent_context_sections()` builds the `[Tools]` section of the system prompt from loaded skill metadata.
+4. For each skill, the prompt includes:
+   - the registered `description`
+   - the resolved `args_schema` text, if present
+5. The rest of the skill README is not appended to the system prompt.
+
+Concretely, for a skill like `skills/file/README.md`:
+
+- `## Args schema` can affect the system prompt, but only as a fallback source for `skill.args_schema`.
+- `## What it does` does not go into the model prompt.
+- other sections such as examples, notes, or warnings do not go into the model prompt.
+
+`## What it does` is currently used for human-facing `/skill <name>` help, via `messaging_llm_bot/bot.py::_build_skill_command_help()` and `_read_skill_doc_section()`.
+
+If you want to verify what the model actually received, inspect the assembled prompt directly:
+
+```bash
+python3 -m assistant_framework.cli trace last-prompt --workspace workspace
+```
+
 ## Plugin layout
 
 Skills:

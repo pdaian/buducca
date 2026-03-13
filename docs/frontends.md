@@ -136,6 +136,7 @@ Global runtime:
 ## Frontend commands
 
 - `/status` returns bot uptime and collector status without calling the LLM.
+- `/plan` shows the concrete plan-mode payload shapes injected into the agent for `update_plan` and `request_user_input`. These are exact typed payload shapes, not JSON Schema documents.
 - `/skill` lists currently loaded skills.
 - `/skill <skill_name>` shows the skill description, README-backed `What it does` section when available, and args schema.
 - `/skill <skill_name> {"key":"value"}` runs a skill directly from the frontend with JSON object args.
