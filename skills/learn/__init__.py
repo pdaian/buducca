@@ -8,7 +8,7 @@ from assistant_framework.workspace import Workspace
 
 NAME = "learn"
 DESCRIPTION = (
-    "Append a durable one-line learning to workspace/learnings so future prompts can reuse it."
+    "Save a durable one-line fact learning and a structured assistant/facts record so future prompts can reuse learn-generated facts."
 )
 ARGS_SCHEMA = "{ learning: string }"
 
@@ -59,7 +59,7 @@ def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
     return ActionEnvelope(
         name="learn.append",
         args=args,
-        reason="Persist a durable fact for future prompts.",
+        reason="Persist a durable learn-generated fact for future prompts.",
         writes=["learnings", f"assistant/facts/{record_id}.json", "assistant/facts/history.jsonl"],
         requires_approval=True,
     )

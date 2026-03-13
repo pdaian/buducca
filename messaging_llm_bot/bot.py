@@ -404,21 +404,26 @@ class BotRunner:
                         skill_intro.append(f"    {line}")
             sections.append("\n".join(skill_intro))
 
+        learned_fact_records = [
+            record
+            for record in list_records(self._workspace, "facts")
+            if str(record.get("source", "")).strip().lower() == "learn"
+            and str(record.get("statement", "")).strip()
+        ]
         learnings_lines = [
             "[Workspace Sources]",
-            "Persistent learnings (from workspace/learnings):",
-            "These are long-term learnings for future prompts. Reuse them whenever relevant and keep learning liberally when you discover durable preferences or reusable facts.",
+            "Workspace summary of learn-sourced fact records:",
+            "Only concrete fact learnings explicitly saved with the learn skill are auto-included by default.",
+            "Other stored memory such as birthdays, contacts, notes, tasks, and routines is not auto-included; read it from the workspace when needed.",
         ]
-        learnings_text = self._workspace.read_text("learnings", default="")
-        saved_learnings = [line.strip() for line in learnings_text.splitlines() if line.strip()]
-        if saved_learnings:
-            learnings_lines.extend(f"- {line}" for line in saved_learnings)
+        if learned_fact_records:
+            learnings_lines.extend(
+                f"- {str(record.get('statement', '')).strip()}"
+                for record in learned_fact_records
+            )
         else:
-            learnings_lines.append("- No learnings recorded yet.")
+            learnings_lines.append("- No learn-sourced fact records recorded yet.")
         sections.append("\n".join(learnings_lines))
-        contact_section = self._build_contact_map_prompt_section()
-        if contact_section:
-            sections.append(contact_section)
 
         collector_manifests = CollectorManager(
             self.config.runtime.collectors_dir,
@@ -430,6 +435,7 @@ class BotRunner:
             collector_lines = [
                 "Loaded collector outputs available in the workspace:",
                 "Only collectors that are enabled and loaded without errors are listed here.",
+                "Generated workspace files are listed for awareness and file discovery only; they are not expanded in the prompt by default.",
             ]
             for manifest in collector_manifests:
                 generated_files = self._existing_nonempty_prompt_files(manifest.generated_files, base_dir=workspace_root)
@@ -439,7 +445,7 @@ class BotRunner:
                 description = manifest.description or "No description provided."
                 collector_lines.append(f"- {manifest.name}: {description}")
                 if generated_files:
-                    collector_lines.append(f"  generated workspace files ({len(generated_files)}):")
+                    collector_lines.append(f"  generated workspace files ({len(generated_files)}, not expanded by default):")
                     for item in generated_files[:5]:
                         collector_lines.append(f"    {item}")
                     if len(generated_files) > 5:
@@ -512,30 +518,6 @@ class BotRunner:
 
     def _build_system_prompt(self) -> str:
         return "\n\n".join(self._build_agent_context_sections())
-
-    def _build_contact_map_prompt_section(self) -> str:
-        lines = [
-            "Known reply targets from workspace contact maps:",
-            "Use these aliases as workspace evidence for who a known sender maps to on each backend.",
-        ]
-        found = False
-        for platform, relative_path in sorted(WORKSPACE_CONTACT_MAP_FILES.items()):
-            raw = self._workspace.read_text(relative_path, default="").strip()
-            if not raw:
-                continue
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            for alias in sorted(payload):
-                recipient = payload[alias]
-                if isinstance(recipient, bool) or recipient is None or not isinstance(alias, str):
-                    continue
-                lines.append(f"- {alias} [{platform}] -> {recipient}")
-                found = True
-        return "\n".join(lines) if found else ""
 
     @staticmethod
     def _existing_nonempty_prompt_files(items: list[str], *, base_dir: Path) -> list[str]:

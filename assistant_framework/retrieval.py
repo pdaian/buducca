@@ -1,19 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
 from .workspace import Workspace
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
-_STRUCTURED_MEMORY_DIRS = (
-    "assistant/facts",
-    "assistant/people",
-    "assistant/tasks",
-    "assistant/routines",
-)
-
-
 @dataclass
 class Evidence:
     path: str
@@ -32,15 +25,22 @@ def _tail_lines(text: str, limit: int) -> str:
     return "\n".join(lines[-limit:]).strip()
 
 
-def _iter_structured_memory_files(workspace: Workspace) -> list[str]:
+def _iter_learned_fact_files(workspace: Workspace) -> list[str]:
     root = workspace.resolve(".")
     files: list[str] = []
-    for directory in _STRUCTURED_MEMORY_DIRS:
-        base = root / directory
-        if not base.exists():
+    base = root / "assistant" / "facts"
+    if not base.exists():
+        return files
+    for file_path in sorted(path for path in base.rglob("*.json") if path.is_file()):
+        try:
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             continue
-        for file_path in sorted(path for path in base.rglob("*") if path.is_file()):
-            files.append(str(file_path.relative_to(root)))
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("source", "")).strip().lower() != "learn":
+            continue
+        files.append(str(file_path.relative_to(root)))
     return files
 
 
@@ -98,15 +98,15 @@ def format_evidence_context(evidence: list[Evidence]) -> str:
 
 
 def build_structured_memory_context(workspace: Workspace, *, line_limit: int = 50) -> str:
-    files = _iter_structured_memory_files(workspace)
+    files = _iter_learned_fact_files(workspace)
     lines = [
-        "[Structured memory file previews]",
-        "These previews cover every file currently under assistant/facts, assistant/people, assistant/tasks, and assistant/routines.",
+        "[Workspace summary]",
+        "Only concrete fact learnings explicitly saved with the learn skill are auto-included here by default.",
         f"Each preview is a file preview of the last {line_limit} lines of that file.",
-        "If you need more context from any file, use the read skill (the file skill with action `read`) on the relevant path.",
+        "Other stored memory such as birthdays, contacts, notes, tasks, and routines is not auto-included; use the read skill (the file skill with action `read`) when needed.",
     ]
     if not files:
-        lines.append("No structured memory files found.")
+        lines.append("No learn-sourced fact files found.")
         return "\n".join(lines)
 
     for relative_path in files:

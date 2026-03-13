@@ -3,7 +3,10 @@
 ## What it does
 Appends durable, reusable one-line learnings to `workspace/learnings`.
 
-Use it to save things that should help in future prompts (preferences, constraints, recurring facts, workflow notes).
+Use it to save durable facts that should be available in future prompts by default.
+The skill also writes a structured fact record under `workspace/assistant/facts/` with `source: "learn"`.
+Only those learn-generated fact records are auto-included in prompts by default.
+Other stored data such as birthdays, contacts, notes, tasks, and routines is not auto-included.
 
 ## Dependencies
 - Python standard library only.

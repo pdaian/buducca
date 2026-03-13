@@ -849,7 +849,19 @@ class BotTests(unittest.TestCase):
                 'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run, "args_schema": ARGS_SCHEMA}\n',
                 encoding="utf-8",
             )
-            Path(td, "learnings").write_text("Remember the hourly summary format.\n", encoding="utf-8")
+            Path(td, "assistant", "facts").mkdir(parents=True)
+            Path(td, "assistant", "facts", "learn-hourly-format.json").write_text(
+                json.dumps(
+                    {
+                        "id": "learn-hourly-format",
+                        "statement": "Remember the hourly summary format.",
+                        "source": "learn",
+                        "confidence": "user-provided",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             cfg = BotConfig(
                 telegram=TelegramConfig(bot_token="t"),
@@ -876,12 +888,12 @@ class BotTests(unittest.TestCase):
             hourly_prompt = bot.llm.messages[-1]["content"]
             self.assertIn("Available skills", system_prompt)
             self.assertIn("echo: Echoes user text.", system_prompt)
-            self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
+            self.assertIn("Workspace summary of learn-sourced fact records", system_prompt)
             self.assertIn("- Remember the hourly summary format.", system_prompt)
             self.assertIn("[Agent context snapshot]", hourly_prompt)
             self.assertIn("Available skills", hourly_prompt)
             self.assertIn("echo: Echoes user text.", hourly_prompt)
-            self.assertIn("Persistent learnings (from workspace/learnings)", hourly_prompt)
+            self.assertIn("Workspace summary of learn-sourced fact records", hourly_prompt)
             self.assertIn("- Remember the hourly summary format.", hourly_prompt)
             self.assertIn("Avoid duplicate side effects for the same hour.", hourly_prompt)
             self.assertIn("require a clear instruction in the hourly file or workspace evidence before acting.", hourly_prompt)
@@ -1654,19 +1666,23 @@ class BotTests(unittest.TestCase):
             bot.telegram = DummyTelegram()
             bot.llm = DummyLLM("hello")
             Path(td, "assistant", "facts").mkdir(parents=True)
-            Path(td, "assistant", "facts", "timezone.json").write_text('{"statement":"Timezone is America/New_York"}\n', encoding="utf-8")
+            Path(td, "assistant", "facts", "timezone.json").write_text(
+                '{"statement":"Timezone is America/New_York","source":"learn"}\n',
+                encoding="utf-8",
+            )
             Path(td, "assistant", "tasks").mkdir(parents=True)
             Path(td, "assistant", "tasks", "history.jsonl").write_text('{"event":"upsert","id":"task-1"}\n', encoding="utf-8")
 
             bot._handle_message("telegram", "1", "1", "hi", "Alice", "Alice (@alice_tg)")
 
             user_prompt = bot.llm.messages[-1]["content"]
-            self.assertTrue(user_prompt.startswith("[Structured memory file previews]"))
+            self.assertTrue(user_prompt.startswith("[Workspace summary]"))
+            self.assertIn("Only concrete fact learnings explicitly saved with the learn skill are auto-included here by default.", user_prompt)
             self.assertIn("Each preview is a file preview of the last 50 lines of that file.", user_prompt)
-            self.assertIn("If you need more context from any file, use the read skill", user_prompt)
+            self.assertIn("Other stored memory such as birthdays, contacts, notes, tasks, and routines is not auto-included", user_prompt)
             self.assertIn("File: assistant/facts/timezone.json", user_prompt)
-            self.assertIn("File: assistant/tasks/history.jsonl", user_prompt)
-            self.assertLess(user_prompt.index("[Structured memory file previews]"), user_prompt.index("[Sender context]"))
+            self.assertNotIn("File: assistant/tasks/history.jsonl", user_prompt)
+            self.assertLess(user_prompt.index("[Workspace summary]"), user_prompt.index("[Sender context]"))
             self.assertTrue(user_prompt.endswith("\n\nhi"))
 
     def test_system_prompt_does_not_include_message_send_contacts(self) -> None:
@@ -1719,7 +1735,7 @@ class BotTests(unittest.TestCase):
             self.assertEqual(contacts["@alice_tg"], 123)
             self.assertEqual(contacts["Alice"], 123)
             self.assertEqual(contacts["Alice (@alice_tg)"], 123)
-            self.assertIn("- @alice_tg [telegram] -> 123", bot._build_system_prompt())
+            self.assertNotIn("@alice_tg [telegram] -> 123", bot._build_system_prompt())
 
     def test_whatsapp_group_updates_store_group_reply_target(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2023,10 +2039,25 @@ class BotTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            Path(td, "learnings").write_text(
-                "User prefers concise responses.\nRemember to include timezone info.\n",
+            Path(td, "assistant", "facts").mkdir(parents=True)
+            Path(td, "assistant", "facts", "learn-timezone.json").write_text(
+                json.dumps(
+                    {
+                        "id": "learn-timezone",
+                        "statement": "Timezone is America/New_York.",
+                        "source": "learn",
+                        "confidence": "user-provided",
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
+            Path(td, "assistant", "people").mkdir(parents=True)
+            Path(td, "assistant", "people", "alice.json").write_text(
+                json.dumps({"id": "alice", "name": "Alice", "notes": "Birthday on May 5."}) + "\n",
+                encoding="utf-8",
+            )
+            Path(td, "learnings").write_text("Legacy free-form note that should not be auto-included.\n", encoding="utf-8")
 
             runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
             bot = self.make_bot(runtime=runtime)
@@ -2050,9 +2081,11 @@ class BotTests(unittest.TestCase):
             self.assertIn("[Tool Use Policy]", system_prompt)
             self.assertIn('"skill_call"', system_prompt)
             self.assertIn("Prefer skill calls with a clear typed shape over unstructured narration", system_prompt)
-            self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
-            self.assertIn("These are long-term learnings for future prompts", system_prompt)
-            self.assertIn("- User prefers concise responses.", system_prompt)
+            self.assertIn("Workspace summary of learn-sourced fact records", system_prompt)
+            self.assertIn("Only concrete fact learnings explicitly saved with the learn skill are auto-included by default.", system_prompt)
+            self.assertIn("- Timezone is America/New_York.", system_prompt)
+            self.assertNotIn("Legacy free-form note that should not be auto-included.", system_prompt)
+            self.assertNotIn("Birthday on May 5.", system_prompt)
             self.assertIn("prefer over-learning to under-learning", system_prompt)
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
@@ -2176,6 +2209,8 @@ class BotTests(unittest.TestCase):
             system_prompt = bot.llm.messages[0]["content"]
             self.assertIn("Loaded collector outputs available in the workspace", system_prompt)
             self.assertIn("demo: Writes demo files.", system_prompt)
+            self.assertIn("Generated workspace files are listed for awareness and file discovery only; they are not expanded in the prompt by default.", system_prompt)
+            self.assertIn("generated workspace files (2, not expanded by default):", system_prompt)
             self.assertIn("demo.recent", system_prompt)
             self.assertIn("collectors/demo.py", system_prompt)
 
