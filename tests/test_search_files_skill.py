@@ -135,6 +135,18 @@ class SearchFilesSkillTests(unittest.TestCase):
             self.assertIn(".hidden.txt-1-line1", result)
             self.assertIn(".hidden.txt-3-line3", result)
 
+    def test_excludes_attachments_from_workspace_search(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/a.txt", "needle\n")
+            workspace.write_text("attachments/2026-03-10/b.txt", "needle\n")
+
+            result = self.module.run(workspace, {"pattern": "needle"})
+
+            self.assertIn("Found 1 match(es) for `needle` across 1 file(s).", result)
+            self.assertIn("notes/a.txt:1:needle", result)
+            self.assertNotIn("attachments/2026-03-10/b.txt", result)
+
 
 if __name__ == "__main__":
     unittest.main()

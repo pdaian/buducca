@@ -10,6 +10,10 @@ class Workspace:
         self.root = Path(root)
         self._resolved_root = self.root.resolve()
 
+    def data_root(self) -> Path:
+        base_dir = self.root.parent if self.root.name == "workspace" else self.root
+        return (base_dir / "data").resolve()
+
     def resolve(self, relative_path: str) -> Path:
         target = (self._resolved_root / relative_path).resolve()
         try:
@@ -47,7 +51,7 @@ class Workspace:
     def archive_text(self, relative_path: str, content: str, *, reason: str = "") -> str:
         if not content:
             return ""
-        archive_file = (self.root.parent / "data" / "archives" / relative_path).resolve()
+        archive_file = (self.data_root() / "archives" / relative_path).resolve()
         archive_file.parent.mkdir(parents=True, exist_ok=True)
         stamped_reason = f" reason={reason}" if reason else ""
         header = f"# archived_at={datetime.now(timezone.utc).isoformat()}{stamped_reason}\n"

@@ -19,6 +19,12 @@ class WorkspaceTests(unittest.TestCase):
             ws.append_text("notes/a.txt", " world")
             self.assertEqual(ws.read_text("notes/a.txt"), "hello world")
 
+    def test_data_root_points_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "workspace"
+            ws = Workspace(root)
+            self.assertEqual(ws.data_root(), Path(td) / "data")
+
     def test_resolve_blocks_escape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             ws = Workspace(td)

@@ -116,7 +116,7 @@ Useful runtime files:
 
 - `workspace/logs/agenta_queries.history`: handled interactions and replies
 - `workspace/logs/{backend}.history`: outgoing frontend traffic
-- `workspace/logs/traces/*.json`: full request traces
+- `data/traces/*.json`: full request traces
 - `workspace/collector_status.json`: collector state and health
 
 ## 5. Add collectors when you need external context

@@ -24,6 +24,7 @@ ARGS_SCHEMA = (
 )
 
 _DEFAULT_MAX_MATCHES = 50
+_ATTACHMENTS_ROOT = "attachments"
 
 
 def _normalize_workspace_path(path: str) -> str:
@@ -94,6 +95,10 @@ def _is_hidden_relative(relative_path: Path) -> bool:
     return any(part.startswith(".") for part in relative_path.parts if part not in {"."})
 
 
+def _is_attachment_relative(relative_path: Path) -> bool:
+    return relative_path.parts[:1] == (_ATTACHMENTS_ROOT,)
+
+
 def _matches_file_patterns(relative_path: str, file_patterns: list[str] | None) -> bool:
     if not file_patterns:
         return True
@@ -115,6 +120,8 @@ def _iter_files(
             if not path.is_file():
                 continue
             relative = path.relative_to(root)
+            if _is_attachment_relative(relative):
+                continue
             if not include_hidden and _is_hidden_relative(relative):
                 continue
             relative_str = str(relative)
@@ -132,6 +139,8 @@ def _iter_files(
                 if not path.is_file():
                     continue
                 relative = path.relative_to(root)
+                if _is_attachment_relative(relative):
+                    continue
                 if not include_hidden and _is_hidden_relative(relative):
                     continue
                 relative_str = str(relative)
@@ -139,6 +148,8 @@ def _iter_files(
                     results.append(relative_str)
         else:
             relative = target.relative_to(root)
+            if _is_attachment_relative(relative):
+                continue
             if not include_hidden and _is_hidden_relative(relative):
                 continue
             relative_str = str(relative)

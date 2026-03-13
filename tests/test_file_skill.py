@@ -146,10 +146,21 @@ class FileSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
             workspace.write_text("docs/a.txt", "a")
+            workspace.write_text("attachments/2026-03-10/file.pdf", "pdf")
 
             result = self.module.run(workspace, {"action": "list"})
 
             self.assertEqual(result, "Browsing .: showing 1 entrie(s).\ndocs/")
+
+    def test_list_excludes_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("docs/a.txt", "a")
+            workspace.write_text("attachments/2026-03-10/file.pdf", "pdf")
+
+            result = self.module.run(workspace, {"action": "list", "recursive": True})
+
+            self.assertEqual(result, "Browsing .: showing 2 entrie(s).\ndocs/\ndocs/a.txt")
 
     def test_list_supports_recursive_and_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as td:

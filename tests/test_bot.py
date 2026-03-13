@@ -996,7 +996,7 @@ class BotTests(unittest.TestCase):
             bot._handle_message(1, "what is my timezone")
 
             self.assertIn("Sources:\n- assistant/facts/timezone.json", bot.telegram.sent[0][1])
-            trace_dir = Path(td, "logs", "traces")
+            trace_dir = Path(td, "data", "traces")
             traces = list(trace_dir.glob("*.json"))
             self.assertEqual(len(traces), 1)
             trace = json.loads(traces[0].read_text(encoding="utf-8"))

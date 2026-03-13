@@ -25,6 +25,7 @@ ARGS_SCHEMA = (
     '"recursive":false,"include_hidden":false,"max_entries":200,"find":"optional",'
     '"replace":"optional","regex":false,"case_sensitive":true,"max_replacements_per_file":0}'
 )
+_ATTACHMENTS_ROOT = "attachments"
 
 
 def _normalize_workspace_path(path: str) -> str:
@@ -161,6 +162,10 @@ def _is_hidden_relative(relative_path: Path) -> bool:
     return any(part.startswith(".") for part in relative_path.parts if part not in {"."})
 
 
+def _is_attachment_relative(relative_path: Path) -> bool:
+    return relative_path.parts[:1] == (_ATTACHMENTS_ROOT,)
+
+
 def _format_browse_entry(relative_path: Path, *, is_dir: bool) -> str:
     entry = str(relative_path)
     if entry == ".":
@@ -185,6 +190,8 @@ def _iter_browse_entries(
     entries: list[tuple[int, str]] = []
     for entry in sorted(iterator):
         relative = entry.relative_to(root)
+        if _is_attachment_relative(relative):
+            continue
         if not include_hidden and _is_hidden_relative(relative):
             continue
         entries.append((0 if entry.is_dir() else 1, _format_browse_entry(relative, is_dir=entry.is_dir())))
