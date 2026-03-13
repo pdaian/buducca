@@ -6,6 +6,7 @@ import logging
 
 from assistant_framework import CollectorManager, CollectorRunner, SkillManager, Workspace
 from assistant_framework.config_files import load_named_config_map
+from assistant_framework.skills import build_skill_manifest
 from assistant_framework.traces import load_trace, replay_trace
 
 
@@ -36,6 +37,27 @@ def _run_skill(args: argparse.Namespace) -> None:
 
     output = skills[args.skill].run(workspace, skill_args)
     print(output)
+
+
+def _list_skills(args: argparse.Namespace) -> None:
+    skills = SkillManager(args.skills).load()
+    payload = [
+        {
+            "name": skill.name,
+            "description": skill.description,
+            "requires_llm_response": skill.requires_llm_response,
+        }
+        for _, skill in sorted(skills.items())
+    ]
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _inspect_skill(args: argparse.Namespace) -> None:
+    skills = SkillManager(args.skills).load()
+    skill = skills.get(args.skill)
+    if skill is None:
+        raise SystemExit(f"Unknown skill '{args.skill}'. Available: {', '.join(sorted(skills))}")
+    print(json.dumps(build_skill_manifest(skill), ensure_ascii=False, indent=2))
 
 
 def _load_trace_section(args: argparse.Namespace) -> str:
@@ -80,6 +102,21 @@ def build_parser() -> argparse.ArgumentParser:
     skill_parser.add_argument("--skills", default="skills", help="Skills directory")
     skill_parser.add_argument("--args", default="{}", help="JSON dict passed to the skill")
     skill_parser.set_defaults(handler=_run_skill)
+
+    skills_parser = subparsers.add_parser("skills", help="Inspect loaded runtime skill metadata")
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
+
+    skills_list_parser = skills_subparsers.add_parser("list", help="List loaded skills")
+    skills_list_parser.add_argument("--skills", default="skills", help="Skills directory")
+    skills_list_parser.set_defaults(handler=_list_skills)
+
+    skills_inspect_parser = skills_subparsers.add_parser(
+        "inspect",
+        help="Show the exact skill metadata surfaced to prompts and human help",
+    )
+    skills_inspect_parser.add_argument("skill", help="Skill name")
+    skills_inspect_parser.add_argument("--skills", default="skills", help="Skills directory")
+    skills_inspect_parser.set_defaults(handler=_inspect_skill)
 
     trace_parser = subparsers.add_parser("trace", help="Inspect or replay the last saved bot trace")
     trace_subparsers = trace_parser.add_subparsers(dest="trace_command", required=True)

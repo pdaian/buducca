@@ -58,6 +58,10 @@ python3 -m assistant_framework.cli collectors --workspace workspace --collectors
 # Run a skill directly
 python3 -m assistant_framework.cli skill summarize_workspace --workspace workspace --skills skills --args '{"max_items": 20}'
 
+# Inspect the runtime skill surface the model sees
+python3 -m assistant_framework.cli skills list --skills skills
+python3 -m assistant_framework.cli skills inspect summarize_workspace --skills skills
+
 # Inspect the latest trace
 python3 -m assistant_framework.cli trace last-prompt --workspace workspace
 python3 -m assistant_framework.cli trace replay --workspace workspace

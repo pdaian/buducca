@@ -29,6 +29,7 @@ from assistant_framework.retrieval import (
     search_workspace,
 )
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
+from assistant_framework.skills import read_skill_doc_section
 from assistant_framework.traces import write_trace
 
 from .config import BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
@@ -199,37 +200,12 @@ class BotRunner:
     def _refresh_skills(self) -> None:
         self._skills = self._load_runtime_skills()
 
-    @staticmethod
-    def _read_skill_doc_section(readme_path: Path | None, heading: str) -> str:
-        if readme_path is None or not readme_path.exists():
-            return ""
-        readme_text = readme_path.read_text(encoding="utf-8")
-        match = re.search(
-            rf"^##\s+{re.escape(heading)}\s*\n(.*?)(?=^##\s+|\Z)",
-            readme_text,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        if match is None:
-            return ""
-        section = match.group(1).strip()
-        lines: list[str] = []
-        in_code_block = False
-        for raw_line in section.splitlines():
-            stripped = raw_line.strip()
-            if stripped.startswith("```"):
-                in_code_block = not in_code_block
-                continue
-            if in_code_block or not stripped:
-                continue
-            lines.append(stripped)
-        return "\n".join(lines).strip()
-
     def _build_skill_command_help(self, skill_name: str, skill: Any) -> str:
         lines = [
             f"Skill: {skill_name}",
             f"- description: {skill.description or 'No description provided.'}",
         ]
-        what_it_does = self._read_skill_doc_section(skill.readme_path, "What it does")
+        what_it_does = read_skill_doc_section(skill.readme_path, "What it does")
         if what_it_does:
             lines.append("- documentation:")
             lines.extend(f"  {line}" for line in what_it_does.splitlines())

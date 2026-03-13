@@ -44,6 +44,43 @@ If you want to verify what the model actually received, inspect the assembled pr
 python3 -m assistant_framework.cli trace last-prompt --workspace workspace
 ```
 
+If you want to inspect the runtime skill boundary without running the full bot:
+
+```bash
+python3 -m assistant_framework.cli skills list --skills skills
+python3 -m assistant_framework.cli skills inspect file --skills skills
+```
+
+The `inspect` command shows the exact split between:
+
+- prompt-visible metadata: `description` and `args_schema`
+- human-facing help: `## What it does` from the skill README
+- implementation location: source and README paths
+
+## Skills and local models
+
+This matters more with local or weaker OpenAI-compatible models than with frontier hosted models.
+
+Why:
+
+- The runtime does not expose Python callables, full README prose, or hidden implementation details to the model. It exposes a compressed tool catalog.
+- That catalog is mostly the skill `description` plus `args_schema`, injected into the `[Tools]` section of the system prompt.
+- A local model therefore selects tools from a sparse symbolic interface, not from rich latent knowledge of your repo.
+
+Practical consequences:
+
+- Skill descriptions need to be concrete. Vague descriptions increase false negatives, where the model fails to pick a skill that exists.
+- Args schemas need to be narrow and legible. Local models are more likely to hallucinate fields when the schema is missing or loose.
+- README depth still matters, but mainly for operators using `/skill <name>` and for developers reading the repo. It is not a substitute for prompt-facing metadata.
+
+Scientifically, this setup behaves like a lossy interface layer:
+
+- implementation space: Python module, arbitrary logic, filesystem effects
+- documentation space: full README, examples, caveats
+- inference space: short prompt-visible summary consumed by the model
+
+For local models with shorter effective context or weaker tool-use priors, information lost at that boundary is rarely recovered. The reliable path is to keep the prompt surface explicit and minimal, then verify it with `trace last-prompt` or `skills inspect`.
+
 ## Plugin layout
 
 Skills:

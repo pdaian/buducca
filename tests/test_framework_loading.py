@@ -4,11 +4,26 @@ import unittest
 from pathlib import Path
 
 from assistant_framework.collectors import CollectorManager
-from assistant_framework.skills import SkillManager
+from assistant_framework.skills import (
+    SkillManager,
+    build_skill_manifest,
+    parse_args_schema_fields,
+    read_skill_doc_section,
+)
 from assistant_framework.workspace import Workspace
 
 
 class LoadingTests(unittest.TestCase):
+    def test_parse_args_schema_fields_handles_json_style_schema(self) -> None:
+        self.assertEqual(
+            parse_args_schema_fields('{"query":"required","date":"optional/YYYY-MM-DD","max_items":20}'),
+            [
+                {"name": "query", "required": True, "schema": '"required"'},
+                {"name": "date", "required": False, "schema": '"optional/YYYY-MM-DD"'},
+                {"name": "max_items", "required": True, "schema": "20"},
+            ],
+        )
+
     def test_skill_manager_loads_python_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
@@ -158,7 +173,6 @@ class LoadingTests(unittest.TestCase):
             action = skills["demo"].build_action({"a": 1})
             self.assertEqual(action.name, "demo.write")
 
-
     def test_skill_manager_loads_requires_llm_response_flag(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
@@ -182,6 +196,83 @@ class LoadingTests(unittest.TestCase):
             skills = manager.load()
 
             self.assertTrue(skills["demo"].requires_llm_response)
+
+    def test_read_skill_doc_section_ignores_code_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            readme_path = Path(td) / "README.md"
+            readme_path.write_text(
+                textwrap.dedent(
+                    """
+                    # Demo skill
+
+                    ## What it does
+                    Writes files.
+
+                    ```bash
+                    echo hidden
+                    ```
+
+                    Returns a summary.
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                read_skill_doc_section(readme_path, "What it does"),
+                "Writes files.\nReturns a summary.",
+            )
+
+    def test_build_skill_manifest_exposes_prompt_and_help_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            package = skills_dir / "demo_skill"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(
+                textwrap.dedent(
+                    '''
+                    NAME = "demo_skill"
+
+                    def run(workspace, args):
+                        return "ok"
+
+                    def register():
+                        return {
+                            "name": NAME,
+                            "description": "Demo description",
+                            "run": run,
+                            "requires_llm_response": True,
+                            "args_schema": "{ value?: string }",
+                        }
+                    '''
+                ),
+                encoding="utf-8",
+            )
+            (package / "README.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Demo skill
+
+                    ## What it does
+                    Helps a human understand the skill.
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            skill = SkillManager(skills_dir).load()["demo_skill"]
+            manifest = build_skill_manifest(skill)
+
+            self.assertEqual(manifest["prompt_surface"]["description"], "Demo description")
+            self.assertEqual(manifest["prompt_surface"]["args_schema"], "{ value?: string }")
+            self.assertEqual(
+                manifest["prompt_surface"]["args_schema_fields"],
+                [{"name": "value", "required": False, "schema": "string"}],
+            )
+            self.assertEqual(
+                manifest["human_help_surface"]["what_it_does"],
+                "Helps a human understand the skill.",
+            )
 
     def test_skill_manager_reflects_deleted_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
