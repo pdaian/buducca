@@ -57,6 +57,19 @@ class FileDeleteSkillTests(unittest.TestCase):
             self.assertEqual(result, "Deleted file: notes/today.txt")
             self.assertFalse(workspace.resolve("notes/today.txt").exists())
 
+    def test_workspace_segment_inside_a_path_is_not_stripped(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/workspace/today.txt", "today")
+
+            result = self.module.run(
+                workspace,
+                {"paths": ["notes/workspace/today.txt"]},
+            )
+
+            self.assertEqual(result, "Deleted file: notes/workspace/today.txt")
+            self.assertFalse(workspace.resolve("notes/workspace/today.txt").exists())
+
     def test_missing_file_and_directory_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

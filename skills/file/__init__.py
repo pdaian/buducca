@@ -29,10 +29,28 @@ _ATTACHMENTS_ROOT = "attachments"
 
 
 def _normalize_workspace_path(path: str) -> str:
-    normalized = path.strip()
-    while "workspace/" in normalized:
-        normalized = normalized.replace("workspace/", "")
-    return normalized
+    return path.strip()
+
+
+def _strip_workspace_components(path: str) -> str:
+    return "/".join(part for part in path.split("/") if part and part != "workspace")
+
+
+def _resolve_workspace_path(workspace: Workspace, path: str) -> str:
+    normalized = _normalize_workspace_path(path)
+    stripped = _strip_workspace_components(normalized)
+    if not stripped or stripped == normalized:
+        return normalized
+    original_target = workspace.resolve(normalized)
+    if original_target.exists() or original_target.parent.exists():
+        return normalized
+    return stripped
+
+
+def _resolve_workspace_paths(workspace: Workspace, paths: list[str] | None) -> list[str] | None:
+    if paths is None:
+        return None
+    return [_resolve_workspace_path(workspace, path) for path in paths]
 
 
 def _normalize_list(value: Any) -> list[str] | None:
@@ -300,8 +318,17 @@ def _resolve_destinations(args: dict[str, Any], path_count: int) -> tuple[list[s
     raise ValueError("Missing required arg `destination_dir` or `destinations`.")
 
 
+def _resolve_effective_destinations(
+    workspace: Workspace,
+    args: dict[str, Any],
+    path_count: int,
+) -> tuple[list[str], str]:
+    destinations, mode = _resolve_destinations(args, path_count)
+    return _resolve_workspace_paths(workspace, destinations) or [], mode
+
+
 def _move_or_copy(workspace: Workspace, paths: list[str], args: dict[str, Any], *, action: str) -> str:
-    destinations, mode = _resolve_destinations(args, len(paths))
+    destinations, mode = _resolve_effective_destinations(workspace, args, len(paths))
     results: list[str] = []
     for index, path in enumerate(paths):
         destination = destinations[index]
@@ -377,7 +404,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             max_entries = _resolve_positive_int(args.get("max_entries", 200), field_name="max_entries")
             return _list(
                 workspace,
-                paths,
+                _resolve_workspace_paths(workspace, paths),
                 recursive=recursive,
                 include_hidden=include_hidden,
                 max_entries=max_entries,
@@ -387,6 +414,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             paths = _resolve_paths(args)
             if not paths:
                 return "Missing required arg `paths` (list)."
+            paths = _resolve_workspace_paths(workspace, paths) or []
 
             if action == "read":
                 mode, limit, start, end = _resolve_read_options(args)
@@ -413,6 +441,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             directories = _normalize_list(args.get("directories"))
             if not directories:
                 return "Missing required arg `directories` (list)."
+            directories = _resolve_workspace_paths(workspace, directories) or []
             if action == "create_dir":
                 return _create_dir(workspace, directories)
             return _delete_dir(workspace, directories)

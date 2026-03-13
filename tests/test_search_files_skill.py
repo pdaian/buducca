@@ -67,6 +67,16 @@ class SearchFilesSkillTests(unittest.TestCase):
             self.assertIn("notes/a.txt:2:needle", result)
             self.assertNotIn("notes/b.txt", result)
 
+    def test_workspace_segment_inside_a_path_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/workspace/a.txt", "needle\n")
+
+            result = self.module.run(workspace, {"pattern": "needle", "path": "notes/workspace/a.txt"})
+
+            self.assertIn("Found 1 match(es) for `needle` across 1 file(s).", result)
+            self.assertIn("notes/workspace/a.txt:1:needle", result)
+
     def test_searches_directory_path_argument(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

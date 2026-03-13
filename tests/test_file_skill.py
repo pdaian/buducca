@@ -128,6 +128,18 @@ class FileSkillTests(unittest.TestCase):
             result = self.module.run(workspace, {"action": "read", "paths": ["missing.txt"]})
             self.assertEqual(result, "missing.txt: File not found")
 
+    def test_workspace_prefix_is_only_removed_from_the_start_of_a_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/workspace/archive.txt", "kept")
+
+            result = self.module.run(
+                workspace,
+                {"action": "read", "paths": ["notes/workspace/archive.txt"]},
+            )
+
+            self.assertEqual(result, "notes/workspace/archive.txt:\nkept")
+
     def test_list_browses_directory_contents(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

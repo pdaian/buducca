@@ -28,10 +28,22 @@ _ATTACHMENTS_ROOT = "attachments"
 
 
 def _normalize_workspace_path(path: str) -> str:
-    normalized = path.strip()
-    while "workspace/" in normalized:
-        normalized = normalized.replace("workspace/", "")
-    return normalized
+    return path.strip()
+
+
+def _strip_workspace_components(path: str) -> str:
+    return "/".join(part for part in path.split("/") if part and part != "workspace")
+
+
+def _resolve_workspace_path(workspace: Workspace, path: str) -> str:
+    normalized = _normalize_workspace_path(path)
+    stripped = _strip_workspace_components(normalized)
+    if not stripped or stripped == normalized:
+        return normalized
+    original_target = workspace.resolve(normalized)
+    if original_target.exists() or original_target.parent.exists():
+        return normalized
+    return stripped
 
 
 def _resolve_paths(args: dict[str, Any]) -> list[str] | None:
@@ -114,7 +126,8 @@ def _iter_files(
     file_patterns: list[str] | None,
 ) -> list[str]:
     root = workspace.resolve(".")
-    if not paths:
+    resolved_paths = None if paths is None else [_resolve_workspace_path(workspace, path) for path in paths]
+    if not resolved_paths:
         results: list[str] = []
         for path in sorted(root.rglob("*")):
             if not path.is_file():
@@ -130,7 +143,7 @@ def _iter_files(
         return results
 
     results: list[str] = []
-    for relative_path in paths:
+    for relative_path in resolved_paths:
         target = workspace.resolve(relative_path)
         if not target.exists():
             raise ValueError(f"Path not found: {relative_path}")
