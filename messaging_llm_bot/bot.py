@@ -2050,9 +2050,8 @@ class BotRunner:
             timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
         if not isinstance(timestamp, str):
             return None
-        try:
-            parsed = datetime.fromisoformat(timestamp)
-        except ValueError:
+        parsed = BotRunner._parse_sent_at(timestamp)
+        if parsed is None:
             return None
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=timezone.utc)
