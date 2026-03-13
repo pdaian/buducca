@@ -3,18 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Buducca // Cyberpunk Terminal</title>
+  <title>BUDUCCA // Open-Model Messaging Control Plane</title>
   <style>
     :root {
-      --bg: #06080f;
-      --panel: #0b1020;
-      --line: #1ef2ff;
-      --line-dim: rgba(30, 242, 255, 0.35);
-      --accent: #ff4fd8;
-      --text: #bbf7ff;
-      --muted: #7ed6df;
-      --warn: #ffd166;
-      --ok: #72f1b8;
+      --bg: #050816;
+      --bg-2: #0a1024;
+      --panel: rgba(9, 15, 34, 0.78);
+      --panel-strong: rgba(9, 15, 34, 0.94);
+      --line: rgba(79, 227, 255, 0.24);
+      --cyan: #79f7ff;
+      --pink: #ff66d1;
+      --text: #e8f7ff;
+      --muted: #9abccc;
+      --ok: #9fffaf;
+      --warn: #ffd36f;
+      --shadow: rgba(0, 0, 0, 0.35);
     }
 
     * { box-sizing: border-box; }
@@ -22,193 +25,317 @@
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: "Fira Code", "JetBrains Mono", Consolas, monospace;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
       color: var(--text);
       background:
-        radial-gradient(circle at 20% 20%, rgba(30, 242, 255, 0.12), transparent 40%),
-        radial-gradient(circle at 80% 10%, rgba(255, 79, 216, 0.09), transparent 35%),
-        linear-gradient(180deg, #04060c 0%, #070d18 100%);
-      display: grid;
-      place-items: center;
-      padding: 2rem;
+        radial-gradient(circle at top left, rgba(121, 247, 255, 0.14), transparent 34%),
+        radial-gradient(circle at top right, rgba(255, 102, 209, 0.16), transparent 28%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
     }
 
-    .terminal {
-      width: min(960px, 100%);
-      border: 1px solid var(--line-dim);
-      border-radius: 14px;
-      background: linear-gradient(180deg, rgba(11,16,32,0.9), rgba(5,10,20,0.95));
-      box-shadow:
-        0 0 0 1px rgba(255, 79, 216, 0.15) inset,
-        0 0 30px rgba(30, 242, 255, 0.15),
-        0 0 70px rgba(255, 79, 216, 0.08);
+    a {
+      color: var(--ok);
+      text-decoration: none;
+    }
+
+    a:hover {
+      color: #d8ffd4;
+    }
+
+    .shell {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 32px auto;
+      border: 1px solid var(--line);
+      border-radius: 24px;
       overflow: hidden;
+      background: linear-gradient(180deg, rgba(11, 18, 40, 0.92), rgba(4, 8, 21, 0.96));
+      box-shadow:
+        0 30px 100px var(--shadow),
+        0 0 0 1px rgba(255, 102, 209, 0.08) inset,
+        0 0 56px rgba(121, 247, 255, 0.12);
     }
 
-    .terminal-header {
+    .topbar {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      padding: 0.8rem 1rem;
-      border-bottom: 1px solid var(--line-dim);
-      background: rgba(0,0,0,0.25);
-      letter-spacing: 0.04em;
-      font-size: 0.9rem;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.2);
+      font-size: 13px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
 
     .lights {
       display: inline-flex;
-      gap: 0.5rem;
-      align-items: center;
+      gap: 8px;
     }
 
     .dot {
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      opacity: 0.85;
     }
 
-    .dot:nth-child(1) { background: #ff5f56; }
-    .dot:nth-child(2) { background: #ffbd2e; }
-    .dot:nth-child(3) { background: #27c93f; }
+    .dot:nth-child(1) { background: #ff6a6a; }
+    .dot:nth-child(2) { background: #ffd36f; }
+    .dot:nth-child(3) { background: #9fffaf; }
 
-    .terminal-body {
-      padding: 1.4rem;
+    .content {
       display: grid;
-      gap: 1.2rem;
-      line-height: 1.55;
+      gap: 20px;
+      padding: 24px;
     }
 
-    .prompt::before {
-      content: "> ";
-      color: var(--accent);
-      font-weight: 700;
+    .hero {
+      display: grid;
+      gap: 18px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background:
+        linear-gradient(135deg, rgba(121, 247, 255, 0.08), transparent 35%),
+        linear-gradient(180deg, rgba(255, 102, 209, 0.06), transparent 55%),
+        var(--panel-strong);
     }
 
-    h1, h2 {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--line);
+    .eyebrow {
+      color: var(--cyan);
+      font-size: 12px;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
     }
 
-    p {
-      margin: 0.2rem 0 0;
+    h1 {
+      margin: 0;
+      font-size: clamp(2.4rem, 6vw, 4.9rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 1.04rem;
+      line-height: 1.7;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(8, 14, 31, 0.8);
       color: var(--text);
     }
 
+    .button.primary {
+      background: linear-gradient(135deg, rgba(121, 247, 255, 0.16), rgba(255, 102, 209, 0.18));
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      color: var(--cyan);
+      font-size: 0.95rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .card p,
+    .card li,
+    .quickstart p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
     ul {
-      margin: 0.4rem 0 0;
-      padding-left: 1.2rem;
-      color: var(--muted);
+      margin: 0;
+      padding-left: 18px;
     }
 
-    li { margin-bottom: 0.35rem; }
-
-    a {
-      color: var(--ok);
-      text-decoration: none;
-      border-bottom: 1px dotted rgba(114, 241, 184, 0.45);
+    .quickstart {
+      display: grid;
+      gap: 16px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel-strong);
     }
 
-    a:hover {
-      color: #b4ffd9;
-      border-bottom-color: rgba(180, 255, 217, 0.8);
-    }
-
-    .codeblock {
-      margin-top: 0.45rem;
-      padding: 0.75rem 0.9rem;
-      background: rgba(5, 8, 15, 0.7);
-      border: 1px solid rgba(30, 242, 255, 0.3);
-      border-radius: 8px;
-      color: var(--warn);
+    pre {
+      margin: 0;
+      padding: 16px 18px;
       overflow-x: auto;
-      white-space: nowrap;
+      border: 1px solid rgba(121, 247, 255, 0.18);
+      border-radius: 16px;
+      background: rgba(3, 6, 16, 0.9);
+      color: var(--warn);
+      line-height: 1.6;
     }
 
-    .cursor {
-      display: inline-block;
-      width: 0.6ch;
-      margin-left: 0.2ch;
-      background: var(--line);
-      animation: blink 1s steps(2, start) infinite;
-      transform: translateY(2px);
+    .docs {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
     }
 
-    @keyframes blink {
-      to { opacity: 0; }
+    .doc-link {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
     }
 
-    .footer {
-      margin-top: 0.4rem;
+    .doc-link strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    footer {
+      padding: 0 24px 24px;
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 640px) {
+      .shell {
+        width: min(100vw, calc(100vw - 16px));
+        margin: 8px auto;
+        border-radius: 18px;
+      }
+
+      .content,
+      footer {
+        padding: 16px;
+      }
+
+      .hero,
+      .quickstart {
+        padding: 20px;
+      }
+
+      .topbar {
+        flex-wrap: wrap;
+      }
     }
   </style>
 </head>
 <body>
-  <main class="terminal" role="main" aria-label="Buducca cyberpunk info page">
-    <header class="terminal-header">
+  <main class="shell" role="main" aria-label="BUDUCCA landing page">
+    <header class="topbar">
       <span class="lights" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
-      <span>BUDUCCA_TERMINAL_v1.1</span>
-      <span>SECURE_LINK::ONLINE</span>
+      <span>BUDUCCA // OPEN MODEL RELAY</span>
+      <span>CHANNELS LIVE</span>
     </header>
 
-    <section class="terminal-body">
-      <div>
-        <h1 class="prompt">buducca://overview</h1>
-        <p>Buducca is a messaging-native AI framework: one assistant core, many channels, and real-world automation through pluggable collectors and skills.</p>
-      </div>
+    <section class="content">
+      <section class="hero">
+        <div class="eyebrow">Messaging-first assistant runtime</div>
+        <h1>Run open models where your messages already live.</h1>
+        <p>
+          BUDUCCA is a lightweight control plane for Telegram, Signal, WhatsApp, and Google Fi assistants.
+          Plug in a modern OpenAI-compatible model endpoint, wire up skills and collectors, and keep state in plain files instead of black-box cloud machinery.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/pdaian/buducca" target="_blank" rel="noreferrer noopener">GitHub</a>
+          <a class="button" href="https://t.me/buducca" target="_blank" rel="noreferrer noopener">Telegram</a>
+          <a class="button" href="./getting-started.md">Quickstart</a>
+        </div>
+      </section>
 
+      <section class="grid" aria-label="Core advantages">
+        <article class="card">
+          <h2>Why It Hits Different</h2>
+          <ul>
+            <li>Messaging-native architecture, not a browser dashboard in disguise.</li>
+            <li>One assistant core across multiple frontends.</li>
+            <li>Skills plus collectors for actions and live context.</li>
+          </ul>
+        </article>
 
-      <div>
-        <h2 class="prompt">what-is-unique</h2>
-        <ul>
-          <li><strong>Messaging-first by design</strong>: built around Telegram, Signal, and WhatsApp instead of forcing web app patterns into chat.</li>
-          <li><strong>Unified assistant core</strong>: channel adapters share the same orchestration layer, so behavior stays consistent across platforms.</li>
-          <li><strong>Skill + collector architecture</strong>: combine actions (skills) with live context sources (collectors) to keep responses useful and grounded.</li>
-          <li><strong>Operator-ready workflow</strong>: supports both simple bots and autonomous assistants without rewriting the stack.</li>
-        </ul>
-      </div>
+        <article class="card">
+          <h2>Open-Model Ready</h2>
+          <p>
+            The model layer speaks the OpenAI chat-completions protocol, so BUDUCCA fits cleanly behind local or remote open-model serving stacks.
+          </p>
+        </article>
 
-      <div>
-        <h2 class="prompt">capability-flexibility</h2>
-        <ul>
-          <li>Start lean with file/search/task skills, then add domain skills as needs evolve.</li>
-          <li>Swap or extend LLM providers and messaging clients while preserving the assistant logic.</li>
-          <li>Attach collectors for Gmail, Slack, Calendar, Twitter, or custom internal sources.</li>
-          <li>Compose capabilities into custom workflows: summarize, trigger, notify, and learn in one conversational loop.</li>
-        </ul>
-      </div>
-      <div>
-        <h2 class="prompt">network-links</h2>
-        <ul>
-          <li>GitHub: <a href="https://github.com/pdaian/buducca" target="_blank" rel="noreferrer noopener">https://github.com/pdaian/buducca</a></li>
-          <li>Telegram: <a href="https://t.me/buducca" target="_blank" rel="noreferrer noopener">https://t.me/buducca</a></li>
-        </ul>
-      </div>
+        <article class="card">
+          <h2>Plain-File State</h2>
+          <p>
+            Traces, collector outputs, unanswered messages, and learned context stay in a readable workspace. Audit trail included.
+          </p>
+        </article>
 
-      <div>
-        <h2 class="prompt">example-deployments</h2>
-        <ul>
-          <li>Automate daily summaries from Gmail, Slack, and calendar collectors.</li>
-          <li>Run a personal ops assistant via Telegram with command-based skills.</li>
-          <li>Create customer-support copilots that query workspace knowledge.</li>
-          <li>Trigger workflows from chat events and summarize outcomes instantly.</li>
-          <li>Prototype multi-channel AI agents with shared logic and adapters.</li>
-        </ul>
-      </div>
+        <article class="card">
+          <h2>Minimal Surface Area</h2>
+          <p>
+            Small Python modules, direct config files, and no required hosted backend. Fewer layers. Less drift. Faster edits.
+          </p>
+        </article>
+      </section>
 
-      <div>
-        <h2 class="prompt">quickstart</h2>
-        <div class="codeblock">python run_bot.py --config config.json</div>
-        <p class="footer">Initialize your config, connect provider keys, then run the bot command above.<span class="cursor" aria-hidden="true"></span></p>
-      </div>
+      <section class="quickstart" aria-label="Quickstart">
+        <h2>Quickstart</h2>
+        <p>Clone, point `llm.json` at your model endpoint, enable one frontend, then boot the relay.</p>
+        <pre><code>cp -R config.example config
+$EDITOR config/llm.json
+$EDITOR config/telegram.json
+python3 run_bot.py --config config</code></pre>
+        <p>
+          For open-model serving, start with <a href="https://docs.vllm.ai/" target="_blank" rel="noreferrer noopener">vLLM</a>
+          or <a href="https://docs.ollama.com/openai" target="_blank" rel="noreferrer noopener">Ollama's OpenAI-compatible API</a>.
+        </p>
+      </section>
+
+      <section class="docs" aria-label="Documentation links">
+        <a class="doc-link" href="./getting-started.md">
+          <strong>Getting Started</strong>
+          Complete setup, local commands, collector boot, and in-chat commands.
+        </a>
+        <a class="doc-link" href="./frontends.md">
+          <strong>Frontends</strong>
+          Telegram, Signal, WhatsApp, Google Fi, and the built-in slash command surface.
+        </a>
+        <a class="doc-link" href="./developer-guide.md">
+          <strong>Developer Guide</strong>
+          Architecture, plugin layout, config loading, and extension points.
+        </a>
+      </section>
     </section>
+
+    <footer>
+      BUDUCCA keeps the stack simple: open-model endpoint, messaging frontend, plain workspace, custom skills when you need them.
+    </footer>
   </main>
 </body>
 </html>
