@@ -2537,6 +2537,26 @@ class BotTests(unittest.TestCase):
             },
         )
 
+    def test_skill_call_recovers_truncated_json_missing_final_brace(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '{"skill_call": {"name": "file", "args": {"action": "write", "path": "assistant/people/relationship.md", "content": "# Relationship Notes\\n\\n## Topics to Discuss\\n"}}'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "file",
+                "args": {
+                    "action": "write",
+                    "path": "assistant/people/relationship.md",
+                    "content": "# Relationship Notes\n\n## Topics to Discuss\n",
+                },
+                "done": False,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "messaging_llm_bot.bot.json.JSONDecoder.raw_decode"

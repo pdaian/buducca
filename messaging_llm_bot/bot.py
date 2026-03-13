@@ -1388,6 +1388,12 @@ class BotRunner:
         try:
             payload = json.loads(payload_text)
         except json.JSONDecodeError:
+            recovered_payload_text = self._recover_truncated_json_object(payload_text)
+            if recovered_payload_text is not None:
+                try:
+                    payload = json.loads(recovered_payload_text)
+                except json.JSONDecodeError:
+                    payload = None
             if len(payload_text) > _MAX_SKILL_PARSE_CHARS:
                 logging.warning(
                     "Skipping skill call recovery parse for oversized reply (%s chars)",
@@ -1459,6 +1465,37 @@ class BotRunner:
         if not isinstance(done, bool):
             done = False
         return {"name": skill_name, "args": args, "done": done}
+
+    @staticmethod
+    def _recover_truncated_json_object(payload_text: str) -> str | None:
+        if not payload_text.startswith("{"):
+            return None
+
+        in_string = False
+        escaped = False
+        depth = 0
+        for char in payload_text:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth < 0:
+                    return None
+
+        if in_string or escaped or depth <= 0:
+            return None
+        return payload_text + ("}" * depth)
 
 
     def _skill_requires_llm_response(self, skill_name: str) -> bool:
