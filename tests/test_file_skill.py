@@ -111,6 +111,37 @@ class FileSkillTests(unittest.TestCase):
             result = self.module.run(workspace, {"action": "read", "paths": ["missing.txt"]})
             self.assertEqual(result, "missing.txt: File not found")
 
+    def test_list_browses_directory_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("docs/a.txt", "a")
+            workspace.write_text("docs/nested/b.txt", "b")
+            workspace.write_text(".hidden/secret.txt", "secret")
+
+            result = self.module.run(workspace, {"action": "list", "path": "docs"})
+
+            self.assertEqual(
+                result,
+                "Browsing docs: showing 2 entrie(s).\ndocs/nested/\ndocs/a.txt",
+            )
+
+    def test_list_supports_recursive_and_hidden(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("docs/a.txt", "a")
+            workspace.write_text("docs/.private.txt", "p")
+            workspace.write_text("docs/nested/b.txt", "b")
+
+            result = self.module.run(
+                workspace,
+                {"action": "browse", "path": "docs", "recursive": True, "include_hidden": True},
+            )
+
+            self.assertEqual(
+                result,
+                "Browsing docs: showing 4 entrie(s).\ndocs/nested/\ndocs/.private.txt\ndocs/a.txt\ndocs/nested/b.txt",
+            )
+
     def test_directory_and_move_actions(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

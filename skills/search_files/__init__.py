@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fnmatch import fnmatch
+from pathlib import Path
 import re
 from typing import Any
 
@@ -11,11 +13,14 @@ DESCRIPTION = (
     "Search workspace text files with literal or regex matching across a single file, "
     "a list of files, or a directory tree. "
     "Args: pattern (required), path or paths (optional file or directory scope), "
-    "regex (optional bool), case_sensitive (optional bool), max_matches (optional int, default 50)."
+    "regex (optional bool), case_sensitive (optional bool), max_matches (optional int, default 50), "
+    "context_lines (optional int), file_pattern (optional glob or list of globs), "
+    "and include_hidden (optional bool)."
 )
 ARGS_SCHEMA = (
     '{"pattern":"required","path":"optional/file/or/dir","paths":["optional/file/or/dir"],'
-    '"regex":false,"case_sensitive":false,"max_matches":50}'
+    '"regex":false,"case_sensitive":false,"max_matches":50,"context_lines":0,'
+    '"file_pattern":"optional/*.py/or/list","include_hidden":false}'
 )
 
 _DEFAULT_MAX_MATCHES = 50
@@ -63,10 +68,59 @@ def _resolve_max_matches(args: dict[str, Any]) -> int:
     return max_matches
 
 
-def _iter_files(workspace: Workspace, paths: list[str] | None) -> list[str]:
+def _resolve_non_negative_int(value: Any, *, field_name: str, default: int) -> int:
+    raw_value = default if value is None else value
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"`{field_name}` must be an integer greater than or equal to 0.") from exc
+    if resolved < 0:
+        raise ValueError(f"`{field_name}` must be an integer greater than or equal to 0.")
+    return resolved
+
+
+def _resolve_file_patterns(args: dict[str, Any]) -> list[str] | None:
+    raw_value = args.get("file_pattern")
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, list):
+        patterns = [str(item).strip() for item in raw_value if str(item).strip()]
+    else:
+        patterns = [str(raw_value).strip()]
+    return patterns or None
+
+
+def _is_hidden_relative(relative_path: Path) -> bool:
+    return any(part.startswith(".") for part in relative_path.parts if part not in {"."})
+
+
+def _matches_file_patterns(relative_path: str, file_patterns: list[str] | None) -> bool:
+    if not file_patterns:
+        return True
+    path_name = Path(relative_path).name
+    return any(fnmatch(relative_path, pattern) or fnmatch(path_name, pattern) for pattern in file_patterns)
+
+
+def _iter_files(
+    workspace: Workspace,
+    paths: list[str] | None,
+    *,
+    include_hidden: bool,
+    file_patterns: list[str] | None,
+) -> list[str]:
     root = workspace.resolve(".")
     if not paths:
-        return [str(path.relative_to(root)) for path in sorted(root.rglob("*")) if path.is_file()]
+        results: list[str] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            if not include_hidden and _is_hidden_relative(relative):
+                continue
+            relative_str = str(relative)
+            if _matches_file_patterns(relative_str, file_patterns):
+                results.append(relative_str)
+        return results
 
     results: list[str] = []
     for relative_path in paths:
@@ -74,9 +128,22 @@ def _iter_files(workspace: Workspace, paths: list[str] | None) -> list[str]:
         if not target.exists():
             raise ValueError(f"Path not found: {relative_path}")
         if target.is_dir():
-            results.extend(str(path.relative_to(root)) for path in sorted(target.rglob("*")) if path.is_file())
+            for path in sorted(target.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(root)
+                if not include_hidden and _is_hidden_relative(relative):
+                    continue
+                relative_str = str(relative)
+                if _matches_file_patterns(relative_str, file_patterns):
+                    results.append(relative_str)
         else:
-            results.append(str(target.relative_to(root)))
+            relative = target.relative_to(root)
+            if not include_hidden and _is_hidden_relative(relative):
+                continue
+            relative_str = str(relative)
+            if _matches_file_patterns(relative_str, file_patterns):
+                results.append(relative_str)
     return results
 
 
@@ -95,6 +162,9 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         return "Missing required arg `pattern`."
 
     try:
+        include_hidden = _resolve_bool(args.get("include_hidden", False), field_name="include_hidden")
+        context_lines = _resolve_non_negative_int(args.get("context_lines"), field_name="context_lines", default=0)
+        file_patterns = _resolve_file_patterns(args)
         matcher = _build_matcher(
             pattern,
             regex=_resolve_bool(args.get("regex", False), field_name="regex"),
@@ -102,7 +172,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         )
         max_matches = _resolve_max_matches(args)
         paths = _resolve_paths(args)
-        files = _iter_files(workspace, paths)
+        files = _iter_files(workspace, paths, include_hidden=include_hidden, file_patterns=file_patterns)
     except ValueError as exc:
         return str(exc)
 
@@ -114,10 +184,22 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             content = workspace.read_text(relative_path)
         except UnicodeDecodeError:
             continue
-        for line_number, line in enumerate(content.splitlines(), start=1):
+        lines = content.splitlines()
+        for line_number, line in enumerate(lines, start=1):
             if not matcher.search(line):
                 continue
-            matches.append(f"{relative_path}:{line_number}:{line}")
+            if context_lines > 0:
+                start = max(0, line_number - 1 - context_lines)
+                end = min(len(lines), line_number + context_lines)
+                block = [f"{relative_path}:{line_number}:{line}"]
+                for context_index in range(start, end):
+                    current_line_number = context_index + 1
+                    if current_line_number == line_number:
+                        continue
+                    block.append(f"{relative_path}-{current_line_number}-{lines[context_index]}")
+                matches.append("\n".join(block))
+            else:
+                matches.append(f"{relative_path}:{line_number}:{line}")
             if len(matches) >= max_matches:
                 break
         if len(matches) >= max_matches:

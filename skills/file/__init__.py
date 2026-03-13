@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from assistant_framework.action_runtime import ActionEnvelope
@@ -8,12 +9,19 @@ from assistant_framework.workspace import Workspace
 NAME = "file"
 DESCRIPTION = (
     "Manage workspace files and directories in bulk. "
-    "Use args.action (or args.command) with one of: read/write/append/create_dir/delete_dir/move. "
+    "Use args.action (or args.command) with one of: read/list/write/append/create_dir/delete_dir/move. "
     "File actions require args.paths as a list. write/append also require args.contents as a list "
     "(or args.content to apply the same text to every path). "
     "read accepts optional args.read_line_limit to return only the last N lines. "
+    "list browses files/directories and accepts optional args.path/args.paths, args.recursive, "
+    "args.include_hidden, and args.max_entries. "
     "move requires args.paths and args.destination_dir. "
     "Directory actions require args.directories as a list."
+)
+ARGS_SCHEMA = (
+    '{"action":"read|list|write|append|create_dir|delete_dir|move","path":"optional","paths":["optional"],'
+    '"directories":["optional"],"contents":["optional"],"content":"optional","destination_dir":"optional",'
+    '"read_line_limit":25,"recursive":false,"include_hidden":false,"max_entries":200}'
 )
 
 
@@ -77,9 +85,103 @@ def _resolve_read_line_limit(args: dict[str, Any]) -> int | None:
     return limit
 
 
+def _resolve_bool(value: Any, *, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off", ""}:
+        return False
+    raise ValueError(f"`{field_name}` must be a boolean.")
+
+
+def _resolve_positive_int(value: Any, *, field_name: str, default: int) -> int:
+    raw_value = default if value is None else value
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"`{field_name}` must be an integer greater than 0.") from exc
+    if resolved <= 0:
+        raise ValueError(f"`{field_name}` must be an integer greater than 0.")
+    return resolved
+
+
 def _tail_lines(content: str, limit: int) -> str:
     lines = content.splitlines()
     return "\n".join(lines[-limit:])
+
+
+def _is_hidden_relative(relative_path: Path) -> bool:
+    return any(part.startswith(".") for part in relative_path.parts if part not in {"."})
+
+
+def _format_browse_entry(relative_path: Path, *, is_dir: bool) -> str:
+    entry = str(relative_path)
+    if entry == ".":
+        return "./"
+    return f"{entry}/" if is_dir else entry
+
+
+def _iter_browse_entries(
+    target: Path,
+    *,
+    root: Path,
+    recursive: bool,
+    include_hidden: bool,
+) -> list[str]:
+    if target.is_file():
+        relative = target.relative_to(root)
+        if not include_hidden and _is_hidden_relative(relative):
+            return []
+        return [_format_browse_entry(relative, is_dir=False)]
+
+    iterator = target.rglob("*") if recursive else target.iterdir()
+    entries: list[tuple[int, str]] = []
+    for entry in sorted(iterator):
+        relative = entry.relative_to(root)
+        if not include_hidden and _is_hidden_relative(relative):
+            continue
+        entries.append((0 if entry.is_dir() else 1, _format_browse_entry(relative, is_dir=entry.is_dir())))
+    entries.sort(key=lambda item: (item[0], item[1]))
+    return [item[1] for item in entries]
+
+
+def _list(
+    workspace: Workspace,
+    paths: list[str] | None,
+    *,
+    recursive: bool,
+    include_hidden: bool,
+    max_entries: int,
+) -> str:
+    root = workspace.resolve(".")
+    browse_paths = paths or ["."]
+    entries: list[str] = []
+    for raw_path in browse_paths:
+        target = workspace.resolve(raw_path)
+        if not target.exists():
+            raise ValueError(f"Path not found: {raw_path}")
+        entries.extend(
+            _iter_browse_entries(
+                target,
+                root=root,
+                recursive=recursive,
+                include_hidden=include_hidden,
+            )
+        )
+        if len(entries) >= max_entries:
+            break
+
+    displayed_entries = entries[:max_entries]
+    scope = ", ".join(browse_paths)
+    if not displayed_entries:
+        return f"No entries found in {scope}."
+
+    lines = [f"Browsing {scope}: showing {len(displayed_entries)} entrie(s).", *displayed_entries]
+    if len(entries) > max_entries:
+        lines.append(f"Stopped after reaching max_entries={max_entries}.")
+    return "\n".join(lines)
 
 
 def _read(workspace: Workspace, paths: list[str], read_line_limit: int | None = None) -> str:
@@ -139,7 +241,17 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     action = str(action_raw).strip().lower()
 
     try:
-        if action in {"read", "write", "append", "move"}:
+        if action in {"read", "list", "browse", "write", "append", "move"}:
+            if action in {"list", "browse"}:
+                paths = _resolve_paths(args)
+                return _list(
+                    workspace,
+                    paths,
+                    recursive=_resolve_bool(args.get("recursive", False), field_name="recursive"),
+                    include_hidden=_resolve_bool(args.get("include_hidden", False), field_name="include_hidden"),
+                    max_entries=_resolve_positive_int(args.get("max_entries"), field_name="max_entries", default=200),
+                )
+
             paths = _resolve_paths(args)
             if not paths:
                 return "Missing required arg `paths` (list)."
@@ -173,7 +285,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     except ValueError as exc:
         return str(exc)
 
-    return "Unsupported action. Use one of: read, write, append, create_dir, delete_dir, move."
+    return "Unsupported action. Use one of: read, list, write, append, create_dir, delete_dir, move."
 
 
 def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
@@ -200,5 +312,6 @@ def register() -> dict[str, Any]:
         "name": NAME,
         "description": DESCRIPTION,
         "run": run,
+        "args_schema": ARGS_SCHEMA,
         "build_action": build_action,
     }

@@ -102,6 +102,39 @@ class SearchFilesSkillTests(unittest.TestCase):
 
             self.assertIn("notes/a.txt:1:Needle", result)
 
+    def test_filters_by_file_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text("notes/a.txt", "needle\n")
+            workspace.write_text("notes/b.md", "needle\n")
+
+            result = self.module.run(
+                workspace,
+                {"pattern": "needle", "path": "notes", "file_pattern": "*.md"},
+            )
+
+            self.assertIn("Found 1 match(es) for `needle` across 1 file(s).", result)
+            self.assertIn("notes/b.md:1:needle", result)
+            self.assertNotIn("notes/a.txt", result)
+
+    def test_can_include_context_and_hidden_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            workspace.write_text(".hidden.txt", "line1\nneedle\nline3\n")
+
+            hidden_result = self.module.run(workspace, {"pattern": "needle"})
+            self.assertEqual(hidden_result, "No matches for `needle` in workspace.")
+
+            result = self.module.run(
+                workspace,
+                {"pattern": "needle", "include_hidden": True, "context_lines": 1},
+            )
+
+            self.assertIn("Found 1 match(es) for `needle` across 1 file(s).", result)
+            self.assertIn(".hidden.txt:2:needle", result)
+            self.assertIn(".hidden.txt-1-line1", result)
+            self.assertIn(".hidden.txt-3-line3", result)
+
 
 if __name__ == "__main__":
     unittest.main()
