@@ -338,9 +338,8 @@ class BotRunner:
         except json.JSONDecodeError:
             return value_text
 
-    def _build_system_prompt(self) -> str:
+    def _build_agent_context_sections(self) -> list[str]:
         self._refresh_skills()
-        base_prompt = self.config.llm.system_prompt.strip()
         configured_timezone = self.config.llm.system_prompt_timezone
         now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
         sections: list[str] = [
@@ -436,7 +435,11 @@ class BotRunner:
 
             sections.append("\n".join(skill_rules))
 
-        return f"{base_prompt}\n\n" + "\n\n".join(sections)
+        return sections
+
+    def _build_system_prompt(self) -> str:
+        base_prompt = self.config.llm.system_prompt.strip()
+        return f"{base_prompt}\n\n" + "\n\n".join(self._build_agent_context_sections())
 
     @staticmethod
     def _existing_nonempty_prompt_files(items: list[str], *, base_dir: Path) -> list[str]:
@@ -1124,6 +1127,7 @@ class BotRunner:
 
     def _build_hourly_prompt(self, hourly_text: str, slot: datetime) -> str:
         timezone_name = self.config.llm.system_prompt_timezone
+        agent_context = "\n\n".join(self._build_agent_context_sections())
         lines = [
             "[Hourly routine]",
             f"- scheduled_for_local: {slot.isoformat()}",
@@ -1133,6 +1137,11 @@ class BotRunner:
             "You are running automatically at the top of the hour.",
             "Read workspace files as needed and take any actions required by the hourly instructions.",
             f"If nothing should happen for this hour, reply with exactly {_HOURLY_NO_ACTION_REPLY}.",
+            "",
+            "[Agent context snapshot]",
+            "The same skills, learnings, and loaded workspace context available to normal conversations are repeated below for this scheduled run.",
+            "",
+            agent_context,
             "",
             f"Instructions from workspace/{self.config.runtime.hourly_file}:",
             hourly_text,

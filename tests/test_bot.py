@@ -838,6 +838,52 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [])
             self.assertEqual(bot.llm.calls, 1)
 
+    def test_hourly_task_prompt_repeats_agent_context_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n'
+                'ARGS_SCHEMA = "{ text: string }"\n\n'
+                'def run(workspace, args):\n    return args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run, "args_schema": ARGS_SCHEMA}\n',
+                encoding="utf-8",
+            )
+            Path(td, "learnings").write_text("Remember the hourly summary format.\n", encoding="utf-8")
+
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir)),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("NO_ACTION")
+            bot._append_frontend_log(
+                backend="telegram",
+                direction="incoming",
+                conversation_id="123",
+                sender_id="123",
+                text="hi",
+                logged_at="2026-03-10T13:05:00+00:00",
+            )
+            Path(td, "hourly").write_text("send a short summary if needed", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+
+            system_prompt = bot.llm.messages[0]["content"]
+            hourly_prompt = bot.llm.messages[-1]["content"]
+            self.assertIn("Available skills", system_prompt)
+            self.assertIn("echo: Echoes user text.", system_prompt)
+            self.assertIn("Persistent learnings (from workspace/learnings)", system_prompt)
+            self.assertIn("- Remember the hourly summary format.", system_prompt)
+            self.assertIn("[Agent context snapshot]", hourly_prompt)
+            self.assertIn("Available skills", hourly_prompt)
+            self.assertIn("echo: Echoes user text.", hourly_prompt)
+            self.assertIn("Persistent learnings (from workspace/learnings)", hourly_prompt)
+            self.assertIn("- Remember the hourly summary format.", hourly_prompt)
+
     def test_missing_action_policy_allows_mutating_skill_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
