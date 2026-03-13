@@ -90,6 +90,26 @@
       padding: 24px;
     }
 
+    .warning-banner {
+      margin: 24px 24px 0;
+      padding: 14px 18px;
+      border: 1px solid rgba(255, 211, 111, 0.35);
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(255, 211, 111, 0.16), rgba(255, 102, 209, 0.08));
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .warning-banner strong {
+      color: var(--warn);
+    }
+
+    .warning-banner a {
+      color: var(--text);
+      text-decoration: underline;
+      text-underline-offset: 0.18em;
+    }
+
     .hero {
       display: grid;
       gap: 18px;
@@ -256,6 +276,13 @@
       <span>BUDUCCA // OPEN MODEL RELAY</span>
       <span>CHANNELS LIVE</span>
     </header>
+
+    <section class="warning-banner" aria-label="Prerelease warning">
+      <strong>Prerelease software:</strong> expect rough edges. If you hit a problem, join the
+      <a href="https://t.me/buducca" target="_blank" rel="noreferrer noopener">Telegram</a>
+      or file a
+      <a href="https://github.com/pdaian/buducca/issues" target="_blank" rel="noreferrer noopener">GitHub issue</a>.
+    </section>
 
     <section class="content">
       <section class="hero">
