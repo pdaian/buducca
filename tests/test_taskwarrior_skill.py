@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -40,24 +41,57 @@ class TaskwarriorSkillTests(unittest.TestCase):
     def test_list_calls_task_list(self) -> None:
         with patch.object(self.module.subprocess, "run") as run_mock:
             run_mock.return_value.returncode = 0
-            run_mock.return_value.stdout = "1 Buy milk"
+            run_mock.return_value.stdout = '[{"description":"Buy milk","id":1,"status":"pending","uuid":"abc"}]'
             run_mock.return_value.stderr = ""
 
             result = self.module.run(self.workspace, {"action": "list"})
 
-            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "list"], capture_output=True, text=True, check=False, timeout=30)
-            self.assertEqual(result, "1 Buy milk")
+            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "export"], capture_output=True, text=True, check=False, timeout=30)
+            self.assertEqual(
+                json.loads(result),
+                {"tasks": [{"description": "Buy milk", "id": 1, "status": "pending", "uuid": "abc"}]},
+            )
 
     def test_list_accepts_command_alias(self) -> None:
         with patch.object(self.module.subprocess, "run") as run_mock:
             run_mock.return_value.returncode = 0
-            run_mock.return_value.stdout = "1 Buy milk"
+            run_mock.return_value.stdout = '[{"description":"Buy milk","id":1,"status":"pending","uuid":"abc"}]'
             run_mock.return_value.stderr = ""
 
             result = self.module.run(self.workspace, {"command": "list"})
 
-            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "list"], capture_output=True, text=True, check=False, timeout=30)
-            self.assertEqual(result, "1 Buy milk")
+            run_mock.assert_called_once_with(["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "export"], capture_output=True, text=True, check=False, timeout=30)
+            self.assertEqual(
+                json.loads(result),
+                {"tasks": [{"description": "Buy milk", "id": 1, "status": "pending", "uuid": "abc"}]},
+            )
+
+    def test_list_places_filter_before_export(self) -> None:
+        with patch.object(self.module.subprocess, "run") as run_mock:
+            run_mock.return_value.returncode = 0
+            run_mock.return_value.stdout = "[]"
+            run_mock.return_value.stderr = ""
+
+            result = self.module.run(self.workspace, {"action": "list", "filter": ["project:Home", "+PENDING"]})
+
+            run_mock.assert_called_once_with(
+                ["task", "rc.confirmation=off", "rc.bulk=1000", "rc.recurrence.confirmation=off", "rc.dependency.confirmation=off", "project:Home", "+PENDING", "export"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(json.loads(result), {"tasks": []})
+
+    def test_list_reports_invalid_json(self) -> None:
+        with patch.object(self.module.subprocess, "run") as run_mock:
+            run_mock.return_value.returncode = 0
+            run_mock.return_value.stdout = "not json"
+            run_mock.return_value.stderr = ""
+
+            result = self.module.run(self.workspace, {"action": "list"})
+
+            self.assertEqual(result, "Taskwarrior command returned invalid JSON.")
 
     def test_add_calls_task_add(self) -> None:
         with patch.object(self.module.subprocess, "run") as run_mock:

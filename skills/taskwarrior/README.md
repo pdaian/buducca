@@ -2,6 +2,7 @@
 
 ## What it does
 Runs Taskwarrior workflows from the assistant (`list`, `add`, `modify`, `done`).
+`list` returns JSON in the shape `{"tasks":[...]}` so task IDs remain unambiguous.
 
 ## Dependencies
 - `task` CLI installed and available on `PATH`.
@@ -18,10 +19,10 @@ python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"add","de
 ```ts
 {
   action: "list" | "add" | "modify" | "done";
-  id?: number;
   description?: string;
+  filter?: string | string[];
   project?: string;
-  priority?: "H" | "M" | "L";
   due?: string;
+  tasks?: Array<string | number>;
 }
 ```

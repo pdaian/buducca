@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from typing import Any
 
@@ -19,7 +20,7 @@ DESCRIPTION = (
     "Use args.action (or args.command) with one of: list/add/done/modify. "
     "add needs args.description and accepts optional args.project/args.due. "
     "modify needs args.tasks (list of IDs) and supports args.project/args.due updates. "
-    "done needs args.tasks (list of IDs), list accepts optional args.filter."
+    "done needs args.tasks (list of IDs), list accepts optional args.filter and returns JSON."
 )
 
 
@@ -67,6 +68,14 @@ def _build_optional_fields(args: dict[str, Any]) -> list[str]:
     return fields
 
 
+def _build_filter_terms(raw_filter: Any) -> list[str]:
+    if isinstance(raw_filter, str) and raw_filter.strip():
+        return raw_filter.split()
+    if isinstance(raw_filter, list):
+        return [str(part).strip() for part in raw_filter if str(part).strip()]
+    return []
+
+
 def _parse_task_ids(args: dict[str, Any], action: str) -> tuple[list[str], str | None]:
     raw_tasks = args.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
@@ -92,13 +101,18 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     action = str(action_raw).strip().lower()
 
     if action == "list":
-        command = ["task", "list"]
-        raw_filter = args.get("filter")
-        if isinstance(raw_filter, str) and raw_filter.strip():
-            command.extend(raw_filter.split())
-        elif isinstance(raw_filter, list):
-            command.extend(str(part) for part in raw_filter)
-        return _run_task_command(command)
+        command = ["task", *_build_filter_terms(args.get("filter")), "export"]
+        output = _run_task_command(command)
+        if output.startswith("Taskwarrior command ") or output in {
+            "Taskwarrior CLI not found. Please install `task` and ensure it is in PATH.",
+            "Command completed successfully.",
+        }:
+            return output
+        try:
+            tasks = json.loads(output)
+        except json.JSONDecodeError:
+            return "Taskwarrior command returned invalid JSON."
+        return json.dumps({"tasks": tasks}, sort_keys=True)
 
     if action == "add":
         description = str(args.get("description", "")).strip()
