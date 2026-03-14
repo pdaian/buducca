@@ -13,7 +13,7 @@ BUDUCCA runs one assistant core across Telegram, Signal, WhatsApp, and Google Fi
 > [!IMPORTANT]
 > BUDUCCA is pre-release software.
 >
-> BUDUCCA is not associated with any tokens, token sales, cryptocurrencies, investment vehicles, or other financial products.
+> **BUDUCCA is not associated with any tokens, token sales, cryptocurrencies, investment vehicles, or other financial products.**
 
 ## Why it is different
 
