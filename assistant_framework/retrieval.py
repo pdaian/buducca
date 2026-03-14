@@ -99,12 +99,7 @@ def format_evidence_context(evidence: list[Evidence]) -> str:
 
 def build_structured_memory_context(workspace: Workspace, *, line_limit: int = 50) -> str:
     files = _iter_learned_fact_files(workspace)
-    lines = [
-        "[Workspace summary]",
-        "Only concrete fact learnings explicitly saved with the learn skill are auto-included here by default.",
-        f"Each preview is a file preview of the last {line_limit} lines of that file.",
-        "Other stored memory such as birthdays, contacts, notes, tasks, and routines is not auto-included; use the read skill (the file skill with action `read`) when needed.",
-    ]
+    lines = ["[Workspace summary]", f"Each preview is a file preview of the last {line_limit} lines of that file."]
     if not files:
         lines.append("No learn-sourced fact files found.")
         return "\n".join(lines)

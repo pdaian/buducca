@@ -13,8 +13,8 @@
 
 - Prompt assembly lives in `messaging_llm_bot/bot.py` via `_build_system_prompt()` and `_build_agent_context_sections()`.
 - Default base prompt and prompt-related config live in `messaging_llm_bot/config.py`.
-- Default prompt inclusion is intentionally narrow: only learn-generated fact records from `assistant/facts/*.json` with `source == "learn"` are auto-included.
-- Other stored workspace memory such as birthdays, contacts, notes, tasks, routines, and collector outputs should be described for discovery, but not expanded by default.
+- Default prompt inclusion is intentionally narrow: only general learnings from `workspace/learnings` are auto-included.
+- Other stored workspace memory such as birthdays, contacts, notes, tasks, routines, structured facts, and collector outputs should be described for discovery, but not expanded by default.
 
 ### How skill docs reach the agent prompt
 
@@ -131,7 +131,7 @@ For agent-facing skills, keep the README explicit:
 3. Keep interactive setup out of the runtime loop; use a separate signup/setup command when needed.
 4. Add `collectors/<name>/README.md`.
 5. If the collector generates workspace files, describe them in `GENERATED_FILES`. Only enabled collectors that load successfully are exposed to the agent prompt.
-6. When documenting generated files or prompt-visible workspace data, make it explicit whether content is auto-included or only listed for discovery. The default is listed-only unless the data is a learn-generated fact record.
+6. When documenting generated files or prompt-visible workspace data, make it explicit whether content is auto-included or only listed for discovery. The default is listed-only unless the data is written to `workspace/learnings`.
 
 ## Style goals for contributions
 

@@ -3,12 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from assistant_framework.action_runtime import ActionEnvelope
-from assistant_framework.memory import read_record, write_record
 from assistant_framework.workspace import Workspace
 
 NAME = "learn"
 DESCRIPTION = (
-    "Save a durable one-line fact learning and a structured assistant/facts record so future prompts can reuse learn-generated facts."
+    "Save a durable one-line general learning to the workspace learnings file so future prompts can reuse it."
 )
 ARGS_SCHEMA = "{ learning: string }"
 
@@ -26,27 +25,11 @@ def _extract_learning(args: dict[str, Any]) -> str:
     return ""
 
 
-def _learning_id(learning: str) -> str:
-    token = "".join(ch.lower() if ch.isalnum() else "-" for ch in learning).strip("-")
-    token = "-".join(part for part in token.split("-") if part)
-    return f"learn-{token[:48] or 'entry'}"
-
-
 def run(workspace: Workspace, args: dict[str, Any]) -> str:
     learning = _extract_learning(args)
     if not learning:
         return "Missing required arg `learning` (string)."
 
-    record_id = _learning_id(learning)
-    existing = read_record(workspace, "facts", record_id)
-    record = {
-        "id": record_id,
-        "statement": learning,
-        "source": "learn",
-        "confidence": "user-provided",
-    }
-    if not existing:
-        write_record(workspace, "facts", record)
     workspace.append_text(_LEARNINGS_FILE, f"{learning}\n")
     return f"Learned: {learning}"
 
@@ -55,12 +38,11 @@ def build_action(args: dict[str, Any]) -> ActionEnvelope | None:
     learning = _extract_learning(args)
     if not learning:
         return None
-    record_id = _learning_id(learning)
     return ActionEnvelope(
         name="learn.append",
         args=args,
-        reason="Persist a durable learn-generated fact for future prompts.",
-        writes=["learnings", f"assistant/facts/{record_id}.json", "assistant/facts/history.jsonl"],
+        reason="Persist a durable general learning for future prompts.",
+        writes=["learnings"],
         requires_approval=True,
     )
 

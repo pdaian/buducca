@@ -426,25 +426,22 @@ class BotRunner:
                         skill_intro.append(f"    {line}")
             sections.append("\n".join(skill_intro))
 
-        learned_fact_records = [
-            record
-            for record in list_records(self._workspace, "facts")
-            if str(record.get("source", "")).strip().lower() == "learn"
-            and str(record.get("statement", "")).strip()
+        learnings = [
+            line.strip()
+            for line in self._workspace.read_text("learnings", default="").splitlines()
+            if line.strip()
         ]
         learnings_lines = [
             "[Workspace Sources]",
-            "Workspace summary of learn-sourced fact records:",
-            "Only concrete fact learnings explicitly saved with the learn skill are auto-included by default.",
-            "Other stored memory such as birthdays, contacts, notes, tasks, and routines is not auto-included; read it from the workspace when needed.",
+            "Workspace summary of general learnings:",
         ]
-        if learned_fact_records:
+        if learnings:
             learnings_lines.extend(
-                f"- {str(record.get('statement', '')).strip()}"
-                for record in learned_fact_records
+                f"- {learning}"
+                for learning in learnings
             )
         else:
-            learnings_lines.append("- No learn-sourced fact records recorded yet.")
+            learnings_lines.append("- No general learnings recorded yet.")
         sections.append("\n".join(learnings_lines))
 
         collector_manifests = CollectorManager(
