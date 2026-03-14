@@ -21,6 +21,7 @@ from assistant_framework import CollectorManager, SkillManager, Workspace
 from assistant_framework.action_runtime import append_action_audit, decide_action, load_action_policy
 from assistant_framework.config_files import load_named_config_map
 from assistant_framework.ingestion import ingest_attachment
+from assistant_framework.main_group import read_main_group
 from assistant_framework.memory import list_records, mark_routine_run, mark_task_notified
 from assistant_framework.retrieval import (
     append_sources,
@@ -1266,6 +1267,10 @@ class BotRunner:
         return value.strip() if isinstance(value, str) else ""
 
     def _resolve_hourly_target(self) -> tuple[str, str] | None:
+        saved_target = self._saved_main_group_target()
+        if saved_target:
+            return saved_target
+
         latest_target = self._latest_logged_conversation_target()
         if latest_target:
             return latest_target
@@ -1279,6 +1284,27 @@ class BotRunner:
         if self.config.google_fi and len(self.config.google_fi.allowed_sender_ids) == 1:
             return "google_fi", self.config.google_fi.allowed_sender_ids[0]
         return None
+
+    def _saved_main_group_target(self) -> tuple[str, str] | None:
+        record = read_main_group(self._workspace)
+        if not record:
+            return None
+        backend = record["backend"]
+        if not self._hourly_backend_is_configured(backend):
+            logging.warning("Ignoring saved main group for unconfigured backend=%s", backend)
+            return None
+        return backend, record["conversation_id"]
+
+    def _hourly_backend_is_configured(self, backend: str) -> bool:
+        if backend == "telegram":
+            return self.config.telegram is not None
+        if backend == "signal":
+            return self.config.signal is not None
+        if backend == "whatsapp":
+            return self.config.whatsapp is not None
+        if backend == "google_fi":
+            return self.config.google_fi is not None
+        return False
 
     def _latest_logged_conversation_target(self) -> tuple[str, str] | None:
         candidates: list[tuple[datetime, str, str]] = []
