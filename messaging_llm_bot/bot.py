@@ -179,6 +179,7 @@ class BotRunner:
             "google_fi.messages.recent": set(),
             "google_fi.calls.recent": set(),
         }
+        self._normalize_recent_message_files()
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = self._load_runtime_skills()
@@ -2062,6 +2063,34 @@ class BotRunner:
         return "default"
 
     def _append_sorted_recent_message(self, file_path: str, payload: dict[str, Any]) -> None:
+        payload_line = json.dumps(payload, ensure_ascii=False)
+        lines = self._normalized_recent_message_lines(file_path, extra_line=payload_line)
+        self._workspace.write_text(file_path, "\n".join(lines) + "\n")
+        for load_path in self._recent_workspace_load_paths(file_path):
+            if load_path != file_path:
+                self._workspace.delete_path(load_path)
+
+    def _normalize_recent_message_files(self) -> None:
+        for file_path in self._recent_unanswered_keys:
+            self._normalize_recent_message_file(file_path)
+
+    def _normalize_recent_message_file(self, file_path: str) -> None:
+        lines = self._normalized_recent_message_lines(file_path)
+        canonical_text = self._workspace.read_text(file_path, default="")
+        normalized_text = ("\n".join(lines) + "\n") if lines else ""
+        load_paths = self._recent_workspace_load_paths(file_path)
+        if canonical_text != normalized_text or any(
+            load_path != file_path and self._workspace.resolve(load_path).exists() for load_path in load_paths
+        ):
+            if normalized_text:
+                self._workspace.write_text(file_path, normalized_text)
+            elif canonical_text:
+                self._workspace.delete_path(file_path)
+            for load_path in load_paths:
+                if load_path != file_path:
+                    self._workspace.delete_path(load_path)
+
+    def _normalized_recent_message_lines(self, file_path: str, *, extra_line: str | None = None) -> list[str]:
         entries: list[tuple[datetime | None, int, str]] = []
         seen_lines: set[str] = set()
         for load_path in self._recent_workspace_load_paths(file_path):
@@ -2073,33 +2102,35 @@ class BotRunner:
                 seen_lines.add(line)
                 sort_key = self._recent_message_sort_key(file_path, line)
                 entries.append((sort_key, len(entries), line))
-
-        payload_line = json.dumps(payload, ensure_ascii=False)
-        if payload_line not in seen_lines:
-            entries.append((self._recent_message_sort_key(file_path, payload_line), len(entries), payload_line))
+        if extra_line and extra_line not in seen_lines:
+            entries.append((self._recent_message_sort_key(file_path, extra_line), len(entries), extra_line))
         entries.sort(key=lambda item: (item[0] is None, item[0] or datetime.max.replace(tzinfo=timezone.utc), item[1]))
-        self._workspace.write_text(file_path, "\n".join(line for _, _, line in entries) + "\n")
-        for load_path in self._recent_workspace_load_paths(file_path):
-            if load_path != file_path:
-                self._workspace.delete_path(load_path)
+        return [line for _, _, line in entries]
 
     @staticmethod
     def _recent_message_sort_key(file_path: str, line: str) -> datetime | None:
+        _ = file_path
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
             return None
+        return BotRunner._recent_message_timestamp(payload)
+
+    @staticmethod
+    def _recent_message_timestamp(payload: Any) -> datetime | None:
         if not isinstance(payload, dict):
             return None
-        timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
-        if not isinstance(timestamp, str):
-            return None
-        parsed = BotRunner._parse_sent_at(timestamp)
-        if parsed is None:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+        for field in ("sent_at", "logged_at", "collected_at"):
+            value = payload.get(field)
+            if not isinstance(value, str):
+                continue
+            parsed = BotRunner._parse_sent_at(value)
+            if parsed is None:
+                continue
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        return None
 
     def _load_unanswered_recent_keys(self) -> None:
         for file_path in self._recent_unanswered_keys:
@@ -2125,11 +2156,15 @@ class BotRunner:
                         event_id = self._coerce_event_id(payload.get("update_id"))
                     if not isinstance(text, str) or not isinstance(conversation_id, str) or not isinstance(sender_id, str):
                         continue
-                    sent_at = payload.get("sent_at")
-                    if not isinstance(sent_at, str):
-                        sent_at = payload.get("logged_at")
-                    if not isinstance(sent_at, str):
-                        sent_at = payload.get("collected_at")
+                    sent_at = None
+                    for field in ("sent_at", "logged_at", "collected_at"):
+                        value = payload.get(field)
+                        if not isinstance(value, str):
+                            continue
+                        if self._parse_sent_at(value) is None:
+                            continue
+                        sent_at = value
+                        break
                     self._recent_unanswered_keys[file_path].update(
                         self._unanswered_message_keys(
                             file_path,
@@ -3250,10 +3285,20 @@ class BotRunner:
     def _parse_sent_at(value: str | None) -> datetime | None:
         if not value:
             return None
+        normalized = value.strip()
+        if not normalized:
+            return None
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        try:
+            timestamp = float(normalized)
         except ValueError:
             return None
+        if timestamp > 1_000_000_000_000:
+            timestamp /= 1000
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
     @staticmethod
     def _should_persist_attachment(*, sent_at: datetime, sent_at_raw: str | None) -> bool:
