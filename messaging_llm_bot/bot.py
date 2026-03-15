@@ -186,7 +186,7 @@ class BotRunner:
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = self._load_runtime_skills()
         self._current_evidence = []
-        self._recent_handled_queries: dict[tuple[str, str, str], str] = {}
+        self._recent_handled_queries: dict[tuple[str, str, str], tuple[str | None, str]] = {}
         self._processing_lock = threading.RLock()
         self._frontend_state_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -2239,10 +2239,20 @@ class BotRunner:
                         )
                     )
 
-    @staticmethod
-    def _unanswered_message_key(conversation_id: str, sender_id: str, text: str, event_id: str | None = None) -> str:
+    @classmethod
+    def _unanswered_message_key(
+        cls,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        event_id: str | None = None,
+        sent_at: str | None = None,
+    ) -> str:
         if event_id:
             return f"event:{event_id}"
+        normalized_sent_at = cls._normalize_recent_message_identity_timestamp(sent_at)
+        if normalized_sent_at:
+            return f"{conversation_id}\n{sender_id}\n{normalized_sent_at}\n{text}"
         return f"{conversation_id}\n{sender_id}\n{text}"
 
     @classmethod
@@ -2256,7 +2266,15 @@ class BotRunner:
         event_id: str | None = None,
         sent_at: str | None = None,
     ) -> set[str]:
-        keys = {cls._unanswered_message_key(conversation_id, sender_id, text, event_id=event_id)}
+        keys = {
+            cls._unanswered_message_key(
+                conversation_id,
+                sender_id,
+                text,
+                event_id=event_id,
+                sent_at=sent_at,
+            )
+        }
         if file_path == "google_fi.calls.recent":
             keys.add(f"call:{conversation_id}\n{sender_id}\n{sent_at or ''}\n{text}")
         return keys
@@ -2312,7 +2330,7 @@ class BotRunner:
     ) -> None:
         normalized_query = text.strip()
         if normalized_query:
-            self._recent_handled_queries[(backend, conversation_id, sender_id)] = normalized_query
+            self._recent_handled_queries[(backend, conversation_id, sender_id)] = (event_id, normalized_query)
         payload = {
             "logged_at": datetime.now(timezone.utc).isoformat(),
             "backend": backend,
@@ -2344,11 +2362,18 @@ class BotRunner:
         return payloads
 
     def _query_log_contains_query(self, backend: str, conversation_id: str, sender_id: str, text: str, event_id: str | None) -> bool:
-        _ = event_id
         normalized_text = text.strip()
         if not normalized_text:
             return False
-        return self._recent_handled_queries.get((backend, conversation_id, sender_id)) == normalized_text
+        cached = self._recent_handled_queries.get((backend, conversation_id, sender_id))
+        if cached is None:
+            return False
+        cached_event_id, cached_text = cached
+        if event_id and cached_event_id:
+            return cached_event_id == event_id
+        if event_id:
+            return False
+        return cached_text == normalized_text
 
     def _query_log_contains_reply_chunk(self, backend: str, conversation_id: str, text: str) -> bool:
         normalized_text = text.strip()
@@ -3366,6 +3391,17 @@ class BotRunner:
         if timestamp > 1_000_000_000_000:
             timestamp /= 1000
         return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+    @classmethod
+    def _normalize_recent_message_identity_timestamp(cls, value: str | None) -> str | None:
+        parsed = cls._parse_sent_at(value)
+        if parsed is None:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.isoformat()
 
     @staticmethod
     def _should_persist_attachment(*, sent_at: datetime, sent_at_raw: str | None) -> bool:

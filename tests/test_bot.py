@@ -2055,6 +2055,73 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual([item["text"] for item in recent], ["older message", "newer message"])
 
+    def test_telegram_recent_keeps_same_text_messages_without_event_ids_when_sent_at_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._append_recent_frontend_message(
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+                sent_at="2026-03-10T13:23:00+00:00",
+            )
+            bot._append_recent_frontend_message(
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+                sent_at="2026-03-10T13:24:00+00:00",
+            )
+
+            recent_lines = (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines()
+            recent = [json.loads(line) for line in recent_lines if line.strip()]
+
+            self.assertEqual(len(recent), 2)
+            self.assertEqual(
+                [item["sent_at"] for item in recent],
+                ["2026-03-10T13:23:00+00:00", "2026-03-10T13:24:00+00:00"],
+            )
+
+    def test_telegram_recent_does_not_drop_new_event_with_same_text_as_recent_handled_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("hello")
+
+            bot._append_agenta_query_log(
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+                reply="handled already",
+                event_id="41",
+            )
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=42,
+                    backend="telegram",
+                    conversation_id="1",
+                    sender_id="1",
+                    text="same text",
+                    sent_at="2026-03-10T13:24:00+00:00",
+                )
+            )
+
+            recent_lines = [line for line in (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(recent_lines), 1)
+
     def test_sender_context_is_added_to_llm_prompt(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()
