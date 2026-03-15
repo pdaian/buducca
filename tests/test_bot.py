@@ -1803,6 +1803,84 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual([item["text"] for item in recent], ["older zulu", "newer zulu"])
 
+    def test_telegram_recent_sorting_falls_back_to_logged_at_when_sent_at_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._append_sorted_recent_message(
+                "telegram.recent",
+                {
+                    "text": "newer by logged_at",
+                    "logged_at": "2026-03-10T13:24:00+00:00",
+                    "collected_at": "2026-03-10T13:24:30+00:00",
+                },
+            )
+            bot._append_sorted_recent_message(
+                "telegram.recent",
+                {
+                    "text": "older by logged_at",
+                    "logged_at": "2026-03-10T13:23:00+00:00",
+                    "collected_at": "2026-03-10T13:23:30+00:00",
+                },
+            )
+
+            recent_lines = (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines()
+            recent = [json.loads(line) for line in recent_lines if line.strip()]
+
+            self.assertEqual([item["text"] for item in recent], ["older by logged_at", "newer by logged_at"])
+
+    def test_telegram_recent_sorting_merges_legacy_file_before_sorting(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            legacy_entries = [
+                {
+                    "text": "older legacy",
+                    "sent_at": "2023-02-05T14:00:06+00:00",
+                    "logged_at": "2023-02-05T14:00:06+00:00",
+                    "collected_at": "2026-03-15T14:05:35.548716+00:00",
+                },
+                {
+                    "text": "middle legacy",
+                    "sent_at": "2026-03-15T13:00:00+00:00",
+                    "logged_at": "2026-03-15T13:00:00+00:00",
+                    "collected_at": "2026-03-15T13:00:30+00:00",
+                },
+            ]
+            (Path(td) / "telegram.messages.recent").write_text(
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in legacy_entries) + "\n",
+                encoding="utf-8",
+            )
+
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t", read_only=True, store_unanswered_messages=True),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._append_sorted_recent_message(
+                "telegram.recent",
+                {
+                    "text": "newer canonical",
+                    "sent_at": "2026-03-15T13:33:04+00:00",
+                    "logged_at": "2026-03-15T13:33:04+00:00",
+                    "collected_at": "2026-03-15T13:33:45.173510+00:00",
+                },
+            )
+
+            recent_lines = (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines()
+            recent = [json.loads(line) for line in recent_lines if line.strip()]
+
+            self.assertEqual(
+                [item["text"] for item in recent],
+                ["older legacy", "middle legacy", "newer canonical"],
+            )
+            self.assertFalse((Path(td) / "telegram.messages.recent").exists())
+
     def test_sender_context_is_added_to_llm_prompt(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()

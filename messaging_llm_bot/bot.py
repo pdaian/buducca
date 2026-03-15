@@ -2068,18 +2068,25 @@ class BotRunner:
 
     def _append_sorted_recent_message(self, file_path: str, payload: dict[str, Any]) -> None:
         entries: list[tuple[datetime | None, int, str]] = []
-        existing = self._workspace.read_text(file_path, default="")
-        for index, line in enumerate(existing.splitlines()):
-            line = line.strip()
-            if not line:
-                continue
-            sort_key = self._recent_message_sort_key(file_path, line)
-            entries.append((sort_key, index, line))
+        seen_lines: set[str] = set()
+        for load_path in self._recent_workspace_load_paths(file_path):
+            existing = self._workspace.read_text(load_path, default="")
+            for line in existing.splitlines():
+                line = line.strip()
+                if not line or line in seen_lines:
+                    continue
+                seen_lines.add(line)
+                sort_key = self._recent_message_sort_key(file_path, line)
+                entries.append((sort_key, len(entries), line))
 
         payload_line = json.dumps(payload, ensure_ascii=False)
-        entries.append((self._recent_message_sort_key(file_path, payload_line), len(entries), payload_line))
+        if payload_line not in seen_lines:
+            entries.append((self._recent_message_sort_key(file_path, payload_line), len(entries), payload_line))
         entries.sort(key=lambda item: (item[0] is None, item[0] or datetime.max.replace(tzinfo=timezone.utc), item[1]))
         self._workspace.write_text(file_path, "\n".join(line for _, _, line in entries) + "\n")
+        for load_path in self._recent_workspace_load_paths(file_path):
+            if load_path != file_path:
+                self._workspace.delete_path(load_path)
 
     @staticmethod
     def _recent_message_sort_key(file_path: str, line: str) -> datetime | None:
@@ -2089,10 +2096,7 @@ class BotRunner:
             return None
         if not isinstance(payload, dict):
             return None
-        if file_path == "telegram.recent":
-            timestamp = payload.get("sent_at")
-        else:
-            timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
+        timestamp = payload.get("sent_at") or payload.get("logged_at") or payload.get("collected_at")
         if not isinstance(timestamp, str):
             return None
         parsed = BotRunner._parse_sent_at(timestamp)
