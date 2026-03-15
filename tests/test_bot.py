@@ -1973,6 +1973,32 @@ class BotTests(unittest.TestCase):
         self.assertIn('"id": "snake_case"', sent)
         self.assertIn("not JSON Schema documents", sent)
 
+    def test_clear_command_resets_conversation_history_before_next_llm_call(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = SequentialLLM(["first", "second"])
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(list(bot._history[1]), [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "first"},
+        ])
+
+        bot._handle_message(1, "/clear")
+
+        self.assertEqual(bot.telegram.sent[1], (1, "Chat context cleared."))
+        self.assertEqual(bot.llm.calls, 1)
+        self.assertEqual(list(bot._history[1]), [])
+
+        bot._handle_message(1, "again")
+
+        self.assertEqual(bot.llm.calls, 2)
+        self.assertEqual(len(bot.llm.messages), 2)
+        self.assertEqual(bot.llm.messages[0]["role"], "system")
+        self.assertEqual(bot.llm.messages[1]["role"], "user")
+        self.assertNotIn("hi", bot.llm.messages[1]["content"])
+
     def test_skill_command_lists_available_skills_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"

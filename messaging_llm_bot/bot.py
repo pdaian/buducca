@@ -993,6 +993,9 @@ class BotRunner:
             return int(conversation_id)
         return f"{backend}:{conversation_id}"
 
+    def _clear_conversation_history(self, conversation_key: Any) -> None:
+        self._history.pop(conversation_key, None)
+
     def _poll_due_reminders_once(self) -> None:
         reminders_text = self._workspace.read_text(REMINDERS_FILE, default="")
         if not reminders_text.strip():
@@ -3005,6 +3008,9 @@ class BotRunner:
         self._refresh_skills()
         if command_text.lower() == "/status":
             reply = self._build_status_message()
+        elif command_text.lower() == "/clear":
+            self._clear_conversation_history(conversation_key)
+            reply = "Chat context cleared."
         elif command_text.lower() == "/plan":
             reply = self._build_plan_command_overview()
         elif command_text.lower() == "/skill" or command_text.lower().startswith("/skill "):
