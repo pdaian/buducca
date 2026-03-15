@@ -988,6 +988,29 @@ class BotTests(unittest.TestCase):
             self.assertIn("Avoid duplicate side effects for the same hour.", hourly_prompt)
             self.assertIn("require a clear instruction in the hourly file or workspace evidence before acting.", hourly_prompt)
 
+    def test_hourly_task_uses_isolated_context_and_does_not_mutate_chat_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("NO_ACTION")
+
+            bot._handle_message(1, "hi")
+            self.assertEqual(len(bot._history[1]), 2)
+
+            Path(td, "hourly").write_text("only act at six", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+
+            self.assertEqual([message["role"] for message in bot.llm.messages], ["system", "user"])
+            self.assertEqual(len(bot._history[1]), 2)
+            self.assertNotIn("hourly:2026-03-10T13:00:00-04:00", bot._history)
+
     def test_missing_action_policy_allows_mutating_skill_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(

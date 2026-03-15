@@ -1160,16 +1160,16 @@ class BotRunner:
         sender_name = "Hourly Scheduler"
         sender_contact = self.config.runtime.hourly_file
         hourly_prompt = self._build_hourly_prompt(hourly_text, slot)
-        conversation_key = self._history_key(backend, conversation_id)
+        scheduler_conversation_key = self._history_key("hourly", slot.isoformat())
 
         logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
         try:
             with self._typing_indicator(backend, conversation_id):
                 prompt = self._build_messages(
-                    conversation_key,
+                    scheduler_conversation_key,
                     hourly_prompt,
-                    backend=backend,
-                    conversation_id=conversation_id,
+                    backend="hourly",
+                    conversation_id=slot.isoformat(),
                     sender_id=sender_id,
                     sender_name=sender_name,
                     sender_contact=sender_contact,
@@ -1181,18 +1181,13 @@ class BotRunner:
                 )
         except RequestTimeoutError:
             logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
+            self._clear_conversation_history(scheduler_conversation_key)
             return False
         except Exception:
             logging.exception("Hourly routine failed slot=%s", slot.isoformat())
+            self._clear_conversation_history(scheduler_conversation_key)
             return False
-
-        self._history[conversation_key].append({"role": "user", "content": hourly_prompt})
-        self._history[conversation_key].append(
-            {
-                "role": "assistant",
-                "content": self._summarize_skill_result_for_context("web_search", reply),
-            }
-        )
+        self._clear_conversation_history(scheduler_conversation_key)
 
         normalized_reply = reply.strip()
         if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY and target:
