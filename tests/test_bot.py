@@ -2015,8 +2015,10 @@ class BotTests(unittest.TestCase):
         prompt = llm.messages
         self.assertEqual(prompt[-1]["role"], "user")
         self.assertIn("[Sender context]", prompt[-1]["content"])
+        self.assertIn("[Main prompt]", prompt[-1]["content"])
+        self.assertIn("<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<", prompt[-1]["content"])
         self.assertIn("telegram_account: Alice (@alice_tg)", prompt[-1]["content"])
-        self.assertTrue(prompt[-1]["content"].endswith("\n\nhi"))
+        self.assertTrue(prompt[-1]["content"].endswith("<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<\nhi"))
 
     def test_structured_memory_previews_are_added_at_start_of_user_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2044,7 +2046,8 @@ class BotTests(unittest.TestCase):
             self.assertIn("File: assistant/facts/timezone.json", user_prompt)
             self.assertNotIn("File: assistant/tasks/history.jsonl", user_prompt)
             self.assertLess(user_prompt.index("[Workspace summary]"), user_prompt.index("[Sender context]"))
-            self.assertTrue(user_prompt.endswith("\n\nhi"))
+            self.assertLess(user_prompt.index("[Sender context]"), user_prompt.index("[Main prompt]"))
+            self.assertTrue(user_prompt.endswith("<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<\nhi"))
 
     def test_system_prompt_does_not_include_message_send_contacts(self) -> None:
         runtime = RuntimeConfig(enable_message_send_skill=True)

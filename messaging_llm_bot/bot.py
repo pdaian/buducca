@@ -58,6 +58,7 @@ _EMPTY_REPLY_FALLBACK = "I couldn't produce a usable reply for that request. Ple
 _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 _CONTACT_HANDLE_RE = re.compile(r"@\w[\w.]*")
 _CONTACT_ANGLE_RE = re.compile(r"<([^>]+)>")
+_MAIN_PROMPT_MARKER = "<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<"
 _PLAN_UPDATE_SCHEMA = '\n'.join(
     [
         "{",
@@ -918,7 +919,14 @@ class BotRunner:
                 f"- sender: {sender_identity}"
             )
 
-        user_parts = [structured_memory_context, sender_context, text]
+        main_prompt_context = "\n".join(
+            [
+                "[Main prompt]",
+                _MAIN_PROMPT_MARKER,
+                text,
+            ]
+        )
+        user_parts = [structured_memory_context, sender_context, main_prompt_context]
         evidence_context = format_evidence_context(self._current_evidence)
         if evidence_context:
             user_parts.append(evidence_context)
