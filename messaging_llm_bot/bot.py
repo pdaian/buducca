@@ -44,6 +44,7 @@ from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 from .google_fi_client import GoogleFiClient, GoogleFiFrontendUnavailableError
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 _MAX_SKILL_CHAIN_STEPS = 12
@@ -1065,7 +1066,7 @@ class BotRunner:
         sender_id = str(record.get("sender_id", conversation_id)).strip() or conversation_id
         sender_name = "Scheduled Reminder"
         sender_contact = f"scheduled-reminder:{record.get('id', '')}"
-        reminder_text = self._build_due_reminder_text(record)
+        reminder_text, disable_thinking = self._extract_nothink_directive(self._build_due_reminder_text(record))
         conversation_key = self._history_key(backend, conversation_id)
 
         logging.info(
@@ -1085,9 +1086,12 @@ class BotRunner:
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                 )
-                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                model_reply = self._strip_think_blocks(
+                    self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                    source="llm",
+                )
                 reply = self._coerce_reply_text(
-                    self._resolve_llm_reply(prompt, model_reply),
+                    self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                     context=f"scheduled reminder id={record.get('id', '')}",
                 )
         except RequestTimeoutError:
@@ -1168,7 +1172,8 @@ class BotRunner:
         sender_id = "hourly-scheduler"
         sender_name = "Hourly Scheduler"
         sender_contact = self.config.runtime.hourly_file
-        hourly_prompt = self._build_hourly_prompt(hourly_text, slot)
+        normalized_hourly_text, disable_thinking = self._extract_nothink_directive(hourly_text)
+        hourly_prompt = self._build_hourly_prompt(normalized_hourly_text, slot)
         scheduler_conversation_key = self._history_key("hourly", slot.isoformat())
 
         logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
@@ -1183,9 +1188,12 @@ class BotRunner:
                     sender_name=sender_name,
                     sender_contact=sender_contact,
                 )
-                model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                model_reply = self._strip_think_blocks(
+                    self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                    source="llm",
+                )
                 reply = self._coerce_reply_text(
-                    self._resolve_llm_reply(prompt, model_reply),
+                    self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                     context=f"hourly slot={slot.isoformat()}",
                 )
         except RequestTimeoutError:
@@ -1541,7 +1549,21 @@ class BotRunner:
             return False
         return skill.requires_llm_response
 
-    def _continue_skill_chain_prompt(self, skill_name: str, skill_result: str, *, allow_follow_up_skill: bool) -> str:
+    @staticmethod
+    def _extract_main_prompt_block(prompt_content: str) -> str:
+        marker_index = prompt_content.find("[Main prompt]")
+        if marker_index < 0:
+            return ""
+        return prompt_content[marker_index:].strip()
+
+    def _continue_skill_chain_prompt(
+        self,
+        skill_name: str,
+        skill_result: str,
+        *,
+        allow_follow_up_skill: bool,
+        main_prompt_block: str = "",
+    ) -> str:
         if allow_follow_up_skill:
             guidance = (
                 "If you need another skill call, respond with valid JSON skill_call and done=false. "
@@ -1549,7 +1571,12 @@ class BotRunner:
             )
         else:
             guidance = "Now reply to the user directly using this result. Do not return raw tool output or skill_call JSON."
-        return f"Skill `{skill_name}` returned:\n{skill_result}\n\n{guidance}"
+        parts = []
+        if main_prompt_block:
+            parts.append(main_prompt_block)
+        parts.append(f"Skill `{skill_name}` returned:\n{skill_result}")
+        parts.append(guidance)
+        return "\n\n".join(parts)
 
     def _summarize_skill_result_for_context(self, skill_name: str, skill_result: str) -> str:
         if skill_name != "web_search" or "DuckDuckGo results for:" not in skill_result:
@@ -1581,9 +1608,28 @@ class BotRunner:
     def _done_flag_was_explicit(self, model_reply: str) -> bool:
         return bool(re.search(r'"done"\s*:', model_reply))
 
-    def _resolve_llm_reply(self, prompt: list[dict[str, str]], initial_model_reply: str) -> str:
+    @staticmethod
+    def _extract_nothink_directive(text: str) -> tuple[str, bool]:
+        disable_thinking = bool(_NOTHINK_RE.search(text))
+        if not disable_thinking:
+            return text, False
+        normalized = _NOTHINK_RE.sub("", text)
+        normalized = re.sub(r"[ \t]+", " ", normalized)
+        normalized = re.sub(r" *\n *", "\n", normalized)
+        return normalized.strip(), True
+
+    def _resolve_llm_reply(
+        self,
+        prompt: list[dict[str, str]],
+        initial_model_reply: str,
+        *,
+        disable_thinking: bool = False,
+    ) -> str:
         model_reply = initial_model_reply
         self._last_trace_steps: list[dict[str, Any]] = []
+        main_prompt_block = ""
+        if prompt and prompt[-1].get("role") == "user":
+            main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
         for step_index in range(_MAX_SKILL_CHAIN_STEPS):
             skill_call = self._try_parse_skill_call(model_reply)
             if not skill_call:
@@ -1618,6 +1664,7 @@ class BotRunner:
                         skill_call["name"],
                         raw_skill_result,
                         allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
+                        main_prompt_block=main_prompt_block,
                     ),
                 }
             )
@@ -1628,12 +1675,16 @@ class BotRunner:
                     _MAX_SKILL_CHAIN_STEPS,
                     prompt,
                 )
-            model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+            model_reply = self._strip_think_blocks(
+                self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                source="llm",
+            )
             if summarized_skill_result != raw_skill_result:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
                     summarized_skill_result,
                     allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
+                    main_prompt_block=main_prompt_block,
                 )
             if self._debug_enabled:
                 logging.debug(
@@ -2087,6 +2138,10 @@ class BotRunner:
         canonical_text = self._workspace.read_text(file_path, default="")
         normalized_text = ("\n".join(lines) + "\n") if lines else ""
         load_paths = self._recent_workspace_load_paths(file_path)
+        if not canonical_text and any(
+            load_path != file_path and self._workspace.resolve(load_path).exists() for load_path in load_paths
+        ):
+            return
         if canonical_text != normalized_text or any(
             load_path != file_path and self._workspace.resolve(load_path).exists() for load_path in load_paths
         ):
@@ -3105,6 +3160,7 @@ class BotRunner:
         }
         self._current_evidence = []
         self._last_trace_steps = []
+        text, disable_thinking = self._extract_nothink_directive(text)
         command_text = text.strip()
         self._refresh_skills()
         if command_text.lower() == "/status":
@@ -3133,10 +3189,13 @@ class BotRunner:
                     for item in self._current_evidence
                 ]
                 try:
-                    model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
+                    model_reply = self._strip_think_blocks(
+                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                        source="llm",
+                    )
                     trace_payload["initial_model_reply"] = model_reply
                     reply = self._coerce_reply_text(
-                        self._resolve_llm_reply(prompt, model_reply),
+                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"{backend} conversation={conversation_id}",
                     )
                     trace_payload["steps"] = getattr(self, "_last_trace_steps", [])

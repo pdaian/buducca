@@ -45,6 +45,24 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(reply, "first\nsecond")
 
+    def test_generate_reply_disables_thinking_when_requested(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        client.generate_reply([{"role": "user", "content": "hi"}], disable_thinking=True)
+
+        self.assertEqual(http.calls[-1][1]["chat_template_kwargs"], {"enable_thinking": False})
+
+    def test_generate_reply_disables_thinking_when_nothink_marker_is_present(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        client.generate_reply([{"role": "user", "content": "/nothink hi"}])
+
+        self.assertEqual(http.calls[-1][1]["chat_template_kwargs"], {"enable_thinking": False})
+
 
 if __name__ == "__main__":
     unittest.main()

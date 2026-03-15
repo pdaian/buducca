@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Iterable
 
 from .config import LLMConfig
 from .http import HttpClient
+
+_NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 
 
 class OpenAICompatibleClient:
@@ -14,13 +17,16 @@ class OpenAICompatibleClient:
         self.http_client = http_client
         self.debug = debug
 
-    def generate_reply(self, messages: Iterable[dict[str, str]]) -> str:
+    def generate_reply(self, messages: Iterable[dict[str, str]], *, disable_thinking: bool = False) -> str:
+        materialized_messages = list(messages)
         payload = {
             "model": self.config.model,
-            "messages": list(messages),
+            "messages": materialized_messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
+        if disable_thinking or self._messages_request_no_think(materialized_messages):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         endpoint = self.config.endpoint_path
         if not endpoint.startswith("/"):
@@ -60,3 +66,11 @@ class OpenAICompatibleClient:
         if isinstance(refusal, str):
             return refusal.strip()
         return ""
+
+    @staticmethod
+    def _messages_request_no_think(messages: Iterable[dict[str, str]]) -> bool:
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) and _NOTHINK_RE.search(content):
+                return True
+        return False

@@ -81,7 +81,7 @@ class DummyLLM:
         self.calls = 0
         self.messages = None
 
-    def generate_reply(self, messages):
+    def generate_reply(self, messages, *, disable_thinking=False):
         self.calls += 1
         self.messages = messages
         return self.reply
@@ -93,7 +93,7 @@ class SequentialLLM:
         self.calls = 0
         self.messages = None
 
-    def generate_reply(self, messages):
+    def generate_reply(self, messages, *, disable_thinking=False):
         self.calls += 1
         self.messages = messages
         if not self.replies:
@@ -102,12 +102,12 @@ class SequentialLLM:
 
 
 class BrokenLLM:
-    def generate_reply(self, messages):
+    def generate_reply(self, messages, *, disable_thinking=False):
         raise RuntimeError("llm parse failed")
 
 
 class TimeoutLLM:
-    def generate_reply(self, messages):
+    def generate_reply(self, messages, *, disable_thinking=False):
         raise RequestTimeoutError("timed out")
 
 
@@ -1010,6 +1010,57 @@ class BotTests(unittest.TestCase):
             self.assertEqual([message["role"] for message in bot.llm.messages], ["system", "user"])
             self.assertEqual(len(bot._history[1]), 2)
             self.assertNotIn("hourly:2026-03-10T13:00:00-04:00", bot._history)
+
+    def test_frontend_nothink_disables_backend_thinking_and_strips_marker(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+
+        class InspectingLLM:
+            def __init__(self) -> None:
+                self.disable_thinking = []
+                self.messages = None
+
+            def generate_reply(self, messages, *, disable_thinking=False):
+                self.disable_thinking.append(disable_thinking)
+                self.messages = messages
+                return "ok"
+
+        bot.llm = InspectingLLM()
+
+        bot._handle_message(1, "/nothink summarize this")
+
+        self.assertEqual(bot.llm.disable_thinking, [True])
+        self.assertNotIn("/nothink", bot.llm.messages[-1]["content"])
+        self.assertEqual(bot._history[1][0]["content"], "summarize this")
+
+    def test_hourly_nothink_disables_backend_thinking_and_strips_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+
+            class InspectingLLM:
+                def __init__(self) -> None:
+                    self.disable_thinking = []
+                    self.messages = None
+
+                def generate_reply(self, messages, *, disable_thinking=False):
+                    self.disable_thinking.append(disable_thinking)
+                    self.messages = messages
+                    return "NO_ACTION"
+
+            bot.llm = InspectingLLM()
+            Path(td, "hourly").write_text("/nothink send a short summary if needed", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+
+            self.assertEqual(bot.llm.disable_thinking, [True])
+            self.assertNotIn("/nothink", bot.llm.messages[-1]["content"])
 
     def test_missing_action_policy_allows_mutating_skill_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2702,6 +2753,30 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.llm.calls, 2)
             self.assertIn("Skill `echo` returned:\necho:step1", bot.llm.messages[-1]["content"])
 
+    def test_skill_call_chain_preserves_main_prompt_block_in_follow_up_prompt(self) -> None:
+        bot = self.make_bot()
+        bot.llm = SequentialLLM(
+            [
+                '{"skill_call": {"name": "web_search", "args": {"query": "x"}, "done": false}}',
+                "final",
+            ]
+        )
+        bot._run_skill_call = lambda *_args, **_kwargs: "result"
+
+        prompt = [
+            {"role": "system", "content": "sys"},
+            {
+                "role": "user",
+                "content": "[Sender context]\n- frontend: telegram\n\n[Main prompt]\n<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<\nfind x",
+            },
+        ]
+        reply = bot._resolve_llm_reply(prompt, bot.llm.generate_reply(prompt))
+
+        self.assertEqual(reply, "final")
+        self.assertIn("[Main prompt]", bot.llm.messages[-1]["content"])
+        self.assertIn("<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<\nfind x", bot.llm.messages[-1]["content"])
+        self.assertIn("Skill `web_search` returned:\nresult", bot.llm.messages[-1]["content"])
+
     def test_web_search_chain_uses_full_html_once_then_summarizes_in_prompt_buffer(self) -> None:
         bot = self.make_bot()
 
@@ -2709,7 +2784,7 @@ class BotTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls = []
 
-            def generate_reply(self, messages):
+            def generate_reply(self, messages, *, disable_thinking=False):
                 self.calls.append([m.copy() for m in messages])
                 if len(self.calls) == 1:
                     return '{"skill_call": {"name": "web_search", "args": {"query": "x"}, "done": false}}'
