@@ -267,18 +267,69 @@ class BotRunner:
         return "\n".join(lines)
 
     def _build_now_command_overview(self) -> str:
-        lines = [
-            "Now command",
-            "- usage: /now",
-            "- purpose: show the 10 most recent non-empty lines from each frontend recent file without calling the LLM.",
-        ]
+        rows: list[dict[str, str]] = []
         for file_path in self._recent_unanswered_keys:
             recent_lines = [line for line in self._workspace.read_text(file_path, default="").splitlines() if line.strip()]
-            lines.append(f"- {file_path}:")
-            if recent_lines:
-                lines.extend(recent_lines[-10:])
-            else:
-                lines.append("(no data)")
+            for line in recent_lines[-10:]:
+                row = self._now_command_row(file_path, line)
+                if row is not None:
+                    rows.append(row)
+        rows.sort(key=lambda row: (row["platform"], row["sender"], row["text"]))
+        return self._render_now_command_table(rows)
+
+    @staticmethod
+    def _now_command_row(file_path: str, line: str) -> dict[str, str] | None:
+        platform = BotRunner._platform_name_for_recent_file(file_path)
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            text = line.strip()
+            if not text:
+                return None
+            return {"platform": platform, "sender": "", "text": BotRunner._now_command_cell(text)}
+
+        if not isinstance(payload, dict):
+            return None
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return None
+        sender = (
+            str(payload.get("sender_contact") or "").strip()
+            or str(payload.get("sender_name") or "").strip()
+            or str(payload.get("sender_id") or "").strip()
+        )
+        backend = str(payload.get("backend") or "").strip()
+        return {
+            "platform": BotRunner._now_command_cell(backend or platform),
+            "sender": BotRunner._now_command_cell(sender),
+            "text": BotRunner._now_command_cell(text),
+        }
+
+    @staticmethod
+    def _platform_name_for_recent_file(file_path: str) -> str:
+        if file_path == "signal.messages.recent":
+            return "signal"
+        if file_path == "whatsapp.messages.recent":
+            return "whatsapp"
+        if file_path == "google_fi.messages.recent":
+            return "google_fi"
+        if file_path == "google_fi.calls.recent":
+            return "google_fi"
+        return "telegram"
+
+    @staticmethod
+    def _now_command_cell(value: str) -> str:
+        collapsed = " ".join(value.split())
+        return collapsed.replace("|", "\\|")
+
+    @staticmethod
+    def _render_now_command_table(rows: list[dict[str, str]]) -> str:
+        lines = [
+            "| platform | sender | text |",
+            "| --- | --- | --- |",
+        ]
+        for row in rows:
+            lines.append(f"| {row['platform']} | {row['sender']} | {row['text']} |")
         return "\n".join(lines)
 
     def _handle_skill_command(self, text: str) -> str:

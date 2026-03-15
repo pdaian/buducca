@@ -2346,7 +2346,18 @@ class BotTests(unittest.TestCase):
     def test_now_command_shows_recent_lines_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             recent_path = Path(td) / "telegram.recent"
-            recent_path.write_text("line-1\n\nline-2\nline-3\n", encoding="utf-8")
+            recent_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"backend": "telegram", "sender_contact": "Alice", "text": "line-1"}),
+                        "",
+                        json.dumps({"backend": "telegram", "sender_contact": "Bob", "text": "line-2"}),
+                        json.dumps({"backend": "telegram", "sender_contact": "Cara", "text": "line-3"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             runtime = RuntimeConfig(workspace_dir=td)
             bot = self.make_bot(runtime=runtime)
             bot.telegram = DummyTelegram()
@@ -2356,16 +2367,19 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.llm.calls, 0)
             sent = bot.telegram.sent[0][1]
-            self.assertIn("Now command", sent)
-            self.assertIn("- telegram.recent:", sent)
-            self.assertIn("line-2", sent)
-            self.assertIn("line-3", sent)
-            self.assertIn("- signal.messages.recent:", sent)
-            self.assertIn("(no data)", sent)
+            self.assertEqual(sent.splitlines()[0], "| platform | sender | text |")
+            self.assertEqual(sent.splitlines()[1], "| --- | --- | --- |")
+            self.assertIn("| telegram | Bob | line-2 |", sent)
+            self.assertIn("| telegram | Cara | line-3 |", sent)
+            self.assertNotIn("signal.messages.recent", sent)
+            self.assertNotIn("(no data)", sent)
 
     def test_now_command_limits_each_recent_file_to_10_lines(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            recent_lines = [f"line-{index}" for index in range(12)]
+            recent_lines = [
+                json.dumps({"backend": "telegram", "sender_contact": f"sender-{index}", "text": f"line-{index}"})
+                for index in range(12)
+            ]
             (Path(td) / "telegram.recent").write_text("\n".join(recent_lines) + "\n", encoding="utf-8")
             runtime = RuntimeConfig(workspace_dir=td)
             bot = self.make_bot(runtime=runtime)
@@ -2375,8 +2389,43 @@ class BotTests(unittest.TestCase):
             bot._handle_message(1, "/now")
 
             sent = bot.telegram.sent[0][1]
-            telegram_section = sent.split("- telegram.recent:\n", 1)[1].split("\n- signal.messages.recent:", 1)[0]
-            self.assertEqual(telegram_section.splitlines(), recent_lines[-10:])
+            data_rows = sent.splitlines()[2:]
+            self.assertEqual(len(data_rows), 10)
+            self.assertNotIn("| telegram | sender-0 | line-0 |", sent)
+            self.assertNotIn("| telegram | sender-1 | line-1 |", sent)
+            self.assertIn("| telegram | sender-10 | line-10 |", sent)
+            self.assertIn("| telegram | sender-11 | line-11 |", sent)
+
+    def test_now_command_consolidates_rows_sorted_by_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "whatsapp.messages.recent").write_text(
+                json.dumps({"backend": "whatsapp", "sender_contact": "Wally", "text": "from whatsapp"}) + "\n",
+                encoding="utf-8",
+            )
+            (Path(td) / "telegram.recent").write_text(
+                json.dumps({"backend": "telegram", "sender_contact": "Tina", "text": "from telegram"}) + "\n",
+                encoding="utf-8",
+            )
+            (Path(td) / "signal.messages.recent").write_text(
+                json.dumps({"backend": "signal", "sender_contact": "Sam", "text": "from signal"}) + "\n",
+                encoding="utf-8",
+            )
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/now")
+
+            sent = bot.telegram.sent[0][1]
+            self.assertEqual(
+                sent.splitlines()[2:],
+                [
+                    "| signal | Sam | from signal |",
+                    "| telegram | Tina | from telegram |",
+                    "| whatsapp | Wally | from whatsapp |",
+                ],
+            )
 
     def test_clear_command_resets_conversation_history_before_next_llm_call(self) -> None:
         bot = self.make_bot()

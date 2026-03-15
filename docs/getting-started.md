@@ -168,7 +168,7 @@ python3 reset_workspace.py --yes
 ### In-chat commands
 
 - `/status` shows bot uptime and collector status
-- `/now` shows the latest 10 lines from each frontend `.recent` file
+- `/now` shows one consolidated table with `platform`, `sender`, and `text` from the latest 10 entries in each frontend `.recent` file
 - `/skill` lists loaded skills
 - `/skill <skill_name>` shows skill docs and args
 - `/skill <skill_name> {"key":"value"}` runs a skill directly
