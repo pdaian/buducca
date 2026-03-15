@@ -15,6 +15,13 @@ User-mode note:
 - This repo keeps a persistent Telethon session now to reduce that overhead.
 - If you need even lower latency or heavier full-account workloads, TDLib is the usual next step. Pyrogram is also viable, but it is still an MTProto wrapper in the same general class as Telethon.
 
+Resetting Telegram user-mode sync:
+
+- BUDUCCA stores the last seen Telegram message id per chat in a state file next to `telegram.session_path`.
+- If `session_path` is `data/telegram_user`, the sync cursor is stored in `data/telegram_user.updates.json`.
+- Delete only the `*.updates.json` file to force BUDUCCA to rescan and resync messages while keeping the existing Telegram login session.
+- Delete the session file (`data/telegram_user.session`, or the exact file for your configured `session_path`) only if you also want to re-authenticate the Telegram account.
+
 ## Signal
 
 Configure `signal` in `config/signal.json` and point BUDUCCA to your `signal-cli` setup.

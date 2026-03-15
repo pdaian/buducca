@@ -67,6 +67,7 @@ If you want full-account Telegram access instead of a bot:
 - set `mode` to `"user"`
 - set `api_id` and `api_hash`
 - install `telethon`
+- if you need to force a message resync later, delete the `*.updates.json` file next to `telegram.session_path` and keep the session file unless you also want to log in again
 
 ```bash
 pip install telethon
