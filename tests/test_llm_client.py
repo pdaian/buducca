@@ -36,6 +36,15 @@ class LLMClientTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             client.generate_reply([{"role": "user", "content": "hi"}])
 
+    def test_generate_reply_supports_content_parts(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]}}]})
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "first\nsecond")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,17 @@ class DummySignal:
         self.sent.append((recipient, text))
 
 
+class FlakySignal:
+    def __init__(self, max_len: int) -> None:
+        self.max_len = max_len
+        self.sent = []
+
+    def send_message(self, recipient: str, text: str) -> None:
+        if len(text) > self.max_len:
+            raise RuntimeError("message too long")
+        self.sent.append((recipient, text))
+
+
 class DummyGoogleFi:
     def __init__(self) -> None:
         self.sent = []
@@ -453,6 +464,37 @@ class BotTests(unittest.TestCase):
             self.assertIn("remember milk", recent)
             self.assertFalse((Path(td) / "logs" / "signal.history").exists())
             self.assertFalse((Path(td) / "logs" / "agenta_queries.history").exists())
+
+    def test_signal_empty_model_reply_uses_fallback_message(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15550001", allowed_sender_ids=["+15550002"]),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = DummySignal()
+        bot.llm = DummyLLM("   ")
+
+        handled = bot._handle_message("signal", "+15550002", "+15550002", "hi")
+
+        self.assertTrue(handled)
+        self.assertEqual(
+            bot.signal.sent,
+            [("+15550002", "I couldn't produce a usable reply for that request. Please try again.")],
+        )
+
+    def test_signal_send_retries_with_smaller_chunks_when_chunk_is_too_large(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15550001"),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = FlakySignal(max_len=5)
+
+        bot._send_message("signal", "+15550002", "hello world")
+
+        self.assertEqual(bot.signal.sent, [("+15550002", "hello"), ("+15550002", "world")])
 
     def test_signal_outgoing_self_group_message_is_processed_when_group_is_allowed(self) -> None:
         cfg = BotConfig(
@@ -1594,8 +1636,14 @@ class BotTests(unittest.TestCase):
         handled = bot._handle_message("signal", "+15551230000", "+15551230000", "hi")
 
         self.assertTrue(handled)
-        self.assertEqual(bot.signal.sent, [])
-        self.assertEqual(bot._history["signal:+15551230000"][1]["content"], "")
+        self.assertEqual(
+            bot.signal.sent,
+            [("+15551230000", "I couldn't produce a usable reply for that request. Please try again.")],
+        )
+        self.assertEqual(
+            bot._history["signal:+15551230000"][1]["content"],
+            "I couldn't produce a usable reply for that request. Please try again.",
+        )
 
 
     def test_frontend_history_files_created_and_written(self) -> None:

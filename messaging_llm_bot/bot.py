@@ -54,6 +54,7 @@ _TELEGRAM_CONFLICT_MAX_BACKOFF_SECONDS = 60.0
 _MAX_REMINDER_FILE_CHARS = 4_000
 _MAX_REMINDER_TOTAL_FILE_CHARS = 12_000
 _HOURLY_NO_ACTION_REPLY = "NO_ACTION"
+_EMPTY_REPLY_FALLBACK = "I couldn't produce a usable reply for that request. Please try again."
 _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 _CONTACT_HANDLE_RE = re.compile(r"@\w[\w.]*")
 _CONTACT_ANGLE_RE = re.compile(r"<([^>]+)>")
@@ -1076,7 +1077,10 @@ class BotRunner:
                     sender_contact=sender_contact,
                 )
                 model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
-                reply = self._resolve_llm_reply(prompt, model_reply)
+                reply = self._coerce_reply_text(
+                    self._resolve_llm_reply(prompt, model_reply),
+                    context=f"scheduled reminder id={record.get('id', '')}",
+                )
         except RequestTimeoutError:
             logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
             return False
@@ -1171,7 +1175,10 @@ class BotRunner:
                     sender_contact=sender_contact,
                 )
                 model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
-                reply = self._resolve_llm_reply(prompt, model_reply)
+                reply = self._coerce_reply_text(
+                    self._resolve_llm_reply(prompt, model_reply),
+                    context=f"hourly slot={slot.isoformat()}",
+                )
         except RequestTimeoutError:
             logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
             return False
@@ -1688,6 +1695,18 @@ class BotRunner:
         if _THINK_BLOCK_RE.search(text):
             logging.debug("Filtered <think> block(s) from %s output", source)
         return _THINK_BLOCK_RE.sub("", text).strip()
+
+    def _coerce_reply_text(self, reply: Any, *, context: str) -> str:
+        if isinstance(reply, str):
+            normalized = reply.strip()
+            if normalized:
+                return normalized
+        elif reply is not None:
+            normalized = str(reply).strip()
+            if normalized:
+                return normalized
+        logging.warning("Empty reply produced in %s; using fallback message", context)
+        return _EMPTY_REPLY_FALLBACK
 
     def _read_collector_status(self) -> dict:
         status_path = Path(self.config.runtime.workspace_dir) / self.config.runtime.collector_status_file
@@ -2358,14 +2377,7 @@ class BotRunner:
         if backend == "signal":
             if not self.signal:
                 raise RuntimeError("Signal frontend is not configured")
-            self.signal.send_message(conversation_id, text)
-            self._append_frontend_log(
-                backend="signal",
-                direction="outgoing",
-                conversation_id=conversation_id,
-                sender_id="bot",
-                text=text,
-            )
+            self._send_signal_message(conversation_id, text)
             return
         if backend == "whatsapp":
             if not self.whatsapp:
@@ -2392,6 +2404,53 @@ class BotRunner:
             )
             return
         raise RuntimeError(f"Unsupported backend: {backend}")
+
+    def _send_signal_message(self, conversation_id: str, text: str) -> None:
+        assert self.signal is not None
+        pending_chunks = [text]
+        while pending_chunks:
+            chunk = pending_chunks.pop(0)
+            try:
+                self.signal.send_message(conversation_id, chunk)
+            except RuntimeError:
+                retry_chunks = self._split_failed_signal_chunk(chunk)
+                if len(retry_chunks) == 1:
+                    raise
+                logging.warning(
+                    "Signal send failed for conversation=%s chunk_len=%s; retrying with %s smaller chunks",
+                    conversation_id,
+                    len(chunk),
+                    len(retry_chunks),
+                )
+                pending_chunks = retry_chunks + pending_chunks
+                continue
+            self._append_frontend_log(
+                backend="signal",
+                direction="outgoing",
+                conversation_id=conversation_id,
+                sender_id="bot",
+                text=chunk,
+            )
+
+    @staticmethod
+    def _split_failed_signal_chunk(text: str) -> list[str]:
+        if len(text) < 2:
+            return [text]
+        midpoint = len(text) // 2
+        split_at = midpoint
+        for delimiter in ("\n\n", "\n", " "):
+            candidate = text.rfind(delimiter, 0, midpoint + 1)
+            if candidate > 0:
+                split_at = candidate + len(delimiter)
+                break
+        left = text[:split_at].strip()
+        right = text[split_at:].strip()
+        if not left or not right:
+            left = text[:midpoint].strip()
+            right = text[midpoint:].strip()
+        if not left or not right:
+            return [text]
+        return [left, right]
 
     def _append_frontend_log(
         self,
@@ -3034,7 +3093,10 @@ class BotRunner:
                 try:
                     model_reply = self._strip_think_blocks(self.llm.generate_reply(prompt), source="llm")
                     trace_payload["initial_model_reply"] = model_reply
-                    reply = self._resolve_llm_reply(prompt, model_reply)
+                    reply = self._coerce_reply_text(
+                        self._resolve_llm_reply(prompt, model_reply),
+                        context=f"{backend} conversation={conversation_id}",
+                    )
                     trace_payload["steps"] = getattr(self, "_last_trace_steps", [])
                     if trace_payload["steps"]:
                         trace_payload["last_action"] = trace_payload["steps"][-1].get("skill_call")

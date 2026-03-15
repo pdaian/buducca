@@ -39,6 +39,24 @@ class OpenAICompatibleClient:
             logging.debug("LLM request completed in %.2fms", duration_ms)
 
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            message = data["choices"][0]["message"]
         except (KeyError, IndexError, AttributeError) as err:
             raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "text":
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+            return "\n".join(parts).strip()
+        refusal = message.get("refusal")
+        if isinstance(refusal, str):
+            return refusal.strip()
+        return ""
