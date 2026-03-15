@@ -253,6 +253,48 @@ class MessageSendSkillTests(unittest.TestCase):
         self.assertEqual(action.name, "message_send.send")
         self.assertTrue(action.requires_approval)
 
+    def test_defaults_to_repo_config_directory(self) -> None:
+        sent: list[tuple[int, str]] = []
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, http_client) -> None:
+                self.bot_token = bot_token
+                self.http_client = http_client
+
+            def send_message(self, chat_id: int, text: str) -> None:
+                sent.append((chat_id, text))
+
+        class FakeHttpClient:
+            def __init__(self, timeout_seconds: float) -> None:
+                self.timeout_seconds = timeout_seconds
+
+        self.module.TelegramClient = FakeTelegramClient
+        self.module.HttpClient = FakeHttpClient
+
+        with tempfile.TemporaryDirectory() as td:
+            config = base_config()
+            config["telegram"] = {
+                "bot_token": "123:test",
+                "mode": "bot",
+                "allowed_chat_ids": [],
+            }
+            workspace = Workspace(Path(td) / "workspace")
+            write_config(Path(td) / "config" / "llm.json", config["llm"])
+            write_config(Path(td) / "config" / "runtime.json", config["runtime"])
+            write_config(Path(td) / "config" / "telegram.json", config["telegram"])
+
+            result = self.module.run(
+                workspace,
+                {
+                    "backend": "telegram",
+                    "recipient": 123456789,
+                    "message": "hello",
+                },
+            )
+
+            self.assertEqual(result, "telegram: sent to 123456789.")
+            self.assertEqual(sent, [(123456789, "hello")])
+
 
 if __name__ == "__main__":
     unittest.main()

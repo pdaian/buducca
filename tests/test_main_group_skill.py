@@ -87,6 +87,33 @@ class MainGroupSkillTests(unittest.TestCase):
             payload = json.loads(workspace.read_text("assistant/main_group.json"))
             self.assertEqual(payload["conversation_id"], "-100222333444")
 
+    def test_defaults_to_repo_config_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(Path(td) / "workspace")
+            Path(td, "workspace").mkdir(parents=True, exist_ok=True)
+            config = base_config()
+            config["telegram"] = {
+                "bot_token": "123:test",
+                "mode": "bot",
+                "allowed_chat_ids": [],
+            }
+            (Path(td) / "workspace" / "telegram.contacts").write_text(
+                json.dumps({"aaa group": -100222333444}),
+                encoding="utf-8",
+            )
+            write_config(Path(td) / "config" / "llm.json", config["llm"])
+            write_config(Path(td) / "config" / "runtime.json", config["runtime"])
+            write_config(Path(td) / "config" / "telegram.json", config["telegram"])
+
+            result = self.module.run(
+                workspace,
+                {
+                    "group": "aaa group",
+                },
+            )
+
+            self.assertEqual(result, "Saved main group (aaa group): telegram:-100222333444")
+
 
 if __name__ == "__main__":
     unittest.main()

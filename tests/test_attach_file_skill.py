@@ -118,3 +118,43 @@ class AttachFileSkillTests(unittest.TestCase):
             )
 
             self.assertEqual(result, "Path escapes workspace: ../config.json")
+
+    def test_defaults_to_repo_config_directory(self) -> None:
+        sent: list[tuple[int, str, str]] = []
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, http_client) -> None:
+                self.bot_token = bot_token
+                self.http_client = http_client
+
+            def send_file(self, chat_id: int, file_path: str, caption: str | None = None) -> None:
+                sent.append((chat_id, file_path, caption or ""))
+
+        class FakeHttpClient:
+            def __init__(self, timeout_seconds: float) -> None:
+                self.timeout_seconds = timeout_seconds
+
+        self.module.TelegramClient = FakeTelegramClient
+        self.module.HttpClient = FakeHttpClient
+
+        with tempfile.TemporaryDirectory() as td:
+            config = base_config()
+            config["telegram"] = {"bot_token": "123:test", "mode": "bot"}
+            workspace = Workspace(Path(td) / "workspace")
+            write_config(Path(td) / "config" / "llm.json", config["llm"])
+            write_config(Path(td) / "config" / "runtime.json", config["runtime"])
+            write_config(Path(td) / "config" / "telegram.json", config["telegram"])
+            workspace.write_text("reports/latest.txt", "hello")
+
+            result = self.module.run(
+                workspace,
+                {
+                    "backend": "telegram",
+                    "recipient": 123456789,
+                    "path": "reports/latest.txt",
+                    "caption": "Latest",
+                },
+            )
+
+            self.assertEqual(result, "telegram: attached reports/latest.txt to 123456789.")
+            self.assertEqual(sent, [(123456789, str(workspace.resolve("reports/latest.txt")), "Latest")])

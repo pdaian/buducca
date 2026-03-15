@@ -42,8 +42,16 @@ _BACKEND_ORDER = ["telegram", "signal", "whatsapp", "google_fi"]
 
 
 def _resolve_config_path(workspace: Workspace, raw_path: Any) -> Path:
-    config_path = str(raw_path or "config.json").strip() or "config.json"
-    return workspace.resolve(config_path)
+    config_path = str(raw_path or "").strip()
+    if config_path:
+        return workspace.resolve(config_path)
+
+    workspace_root = workspace.root.resolve()
+    repo_root = workspace_root.parent if workspace_root.name == "workspace" else workspace_root
+    for candidate in (repo_root / "config", repo_root / "config.json", workspace_root / "config.json"):
+        if candidate.exists():
+            return candidate
+    return repo_root / "config"
 
 
 def _normalize_backend_name(value: Any) -> str:
