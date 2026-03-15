@@ -266,6 +266,21 @@ class BotRunner:
         )
         return "\n".join(lines)
 
+    def _build_now_command_overview(self) -> str:
+        lines = [
+            "Now command",
+            "- usage: /now",
+            "- purpose: show the 10 most recent non-empty lines from each frontend recent file without calling the LLM.",
+        ]
+        for file_path in self._recent_unanswered_keys:
+            recent_lines = [line for line in self._workspace.read_text(file_path, default="").splitlines() if line.strip()]
+            lines.append(f"- {file_path}:")
+            if recent_lines:
+                lines.extend(recent_lines[-10:])
+            else:
+                lines.append("(no data)")
+        return "\n".join(lines)
+
     def _handle_skill_command(self, text: str) -> str:
         self._refresh_skills()
         payload = text.strip()[len("/skill"):].strip()
@@ -3193,6 +3208,8 @@ class BotRunner:
         elif command_text.lower() == "/clear":
             self._clear_conversation_history(conversation_key)
             reply = "Chat context cleared."
+        elif command_text.lower() == "/now":
+            reply = self._build_now_command_overview()
         elif command_text.lower() == "/plan":
             reply = self._build_plan_command_overview()
         elif command_text.lower() == "/skill" or command_text.lower().startswith("/skill "):

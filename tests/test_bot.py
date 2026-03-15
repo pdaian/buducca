@@ -2343,6 +2343,41 @@ class BotTests(unittest.TestCase):
         self.assertIn('"id": "snake_case"', sent)
         self.assertIn("not JSON Schema documents", sent)
 
+    def test_now_command_shows_recent_lines_without_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            recent_path = Path(td) / "telegram.recent"
+            recent_path.write_text("line-1\n\nline-2\nline-3\n", encoding="utf-8")
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/now")
+
+            self.assertEqual(bot.llm.calls, 0)
+            sent = bot.telegram.sent[0][1]
+            self.assertIn("Now command", sent)
+            self.assertIn("- telegram.recent:", sent)
+            self.assertIn("line-2", sent)
+            self.assertIn("line-3", sent)
+            self.assertIn("- signal.messages.recent:", sent)
+            self.assertIn("(no data)", sent)
+
+    def test_now_command_limits_each_recent_file_to_10_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            recent_lines = [f"line-{index}" for index in range(12)]
+            (Path(td) / "telegram.recent").write_text("\n".join(recent_lines) + "\n", encoding="utf-8")
+            runtime = RuntimeConfig(workspace_dir=td)
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = DummyLLM("should-not-be-used")
+
+            bot._handle_message(1, "/now")
+
+            sent = bot.telegram.sent[0][1]
+            telegram_section = sent.split("- telegram.recent:\n", 1)[1].split("\n- signal.messages.recent:", 1)[0]
+            self.assertEqual(telegram_section.splitlines(), recent_lines[-10:])
+
     def test_clear_command_resets_conversation_history_before_next_llm_call(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()
