@@ -155,6 +155,19 @@ class PollingSignal:
         return result
 
 
+class RetryableGoogleFi:
+    def __init__(self, stop_event: threading.Event) -> None:
+        self.calls = 0
+        self.stop_event = stop_event
+
+    def get_updates(self):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("Google Fi receive command failed: login required")
+        self.stop_event.set()
+        return []
+
+
 class BlockingTelegram:
     def __init__(self, started: threading.Event, release: threading.Event) -> None:
         self.started = started
@@ -3509,6 +3522,30 @@ class BotTests(unittest.TestCase):
         runner_thread.join(timeout=1.0)
 
         self.assertGreaterEqual(bot.signal.calls, 1)
+
+    def test_frontend_worker_writes_error_file_and_retries_after_runtime_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"], poll_interval_seconds=0.01),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=str(Path(td) / "workspace")),
+            )
+            bot = BotRunner(cfg)
+            bot.google_fi = RetryableGoogleFi(bot._stop_event)
+
+            worker = threading.Thread(target=bot._run_frontend_worker, args=("google_fi",))
+            worker.start()
+            worker.join(timeout=1.0)
+
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(bot.google_fi.calls, 2)
+            self.assertIsNone(bot._frontend_workers["google_fi"].fatal_exception)
+            error_path = Path(td) / "google_fi.error"
+            self.assertTrue(error_path.exists())
+            error_text = error_path.read_text(encoding="utf-8")
+            self.assertIn("frontend: google_fi", error_text)
+            self.assertIn("RuntimeError", error_text)
+            self.assertIn("login required", error_text)
 
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(

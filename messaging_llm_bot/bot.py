@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -738,6 +739,15 @@ class BotRunner:
                     state.last_error_at = datetime.now(timezone.utc).isoformat()
                     state.last_error = "request timeout"
                 logging.debug("Long-poll request timed out; retrying")
+            except Exception as exc:
+                error_at = datetime.now(timezone.utc).isoformat()
+                with self._frontend_state_lock:
+                    state.last_error_at = error_at
+                    state.last_error = str(exc) or exc.__class__.__name__
+                self._write_frontend_error_file(frontend, exc, error_at=error_at)
+                logging.exception("Frontend polling failed: frontend=%s; will retry", frontend)
+                if self._stop_event.wait(state.poll_interval_seconds):
+                    return
             except BaseException as exc:
                 with self._frontend_state_lock:
                     state.last_error_at = datetime.now(timezone.utc).isoformat()
@@ -755,6 +765,26 @@ class BotRunner:
                     state.last_error = None
                 if self._stop_event.wait(state.poll_interval_seconds):
                     return
+
+    def _write_frontend_error_file(self, frontend: str, exc: Exception, *, error_at: str | None = None) -> None:
+        root_dir = Path(self.config.runtime.workspace_dir)
+        if root_dir.name == "workspace":
+            root_dir = root_dir.parent
+        error_path = root_dir.resolve() / f"{frontend}.error"
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = error_at or datetime.now(timezone.utc).isoformat()
+        error_path.write_text(
+            "".join(
+                [
+                    f"timestamp: {timestamp}\n",
+                    f"frontend: {frontend}\n",
+                    f"error_type: {exc.__class__.__name__}\n",
+                    f"error: {str(exc) or exc.__class__.__name__}\n\n",
+                    "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                ]
+            ),
+            encoding="utf-8",
+        )
 
     def _poll_single_frontend(self, frontend: str) -> int:
         if frontend == "telegram":
