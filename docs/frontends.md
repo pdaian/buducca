@@ -2,6 +2,62 @@
 
 BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel. Google Fi additionally emits call events that are logged.
 
+## Android
+
+Android support is command-driven like Signal and WhatsApp, but the recommended device-side path is:
+
+- `Termux` for the local Python runtime.
+- `Termux:API` for SMS sending via `termux-sms-send`.
+- Any visible notification/SMS automation on the device that appends JSON lines into `data/android-events.jsonl`.
+
+The in-repo bridge is `python3 -m messaging_llm_bot.android_client`. It reads new JSONL events and sends SMS replies.
+
+Example config:
+
+```json
+{
+  "account": "android",
+  "poll_interval_seconds": 1.0,
+  "allowed_sender_ids": ["+15551234567"],
+  "receive_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "receive",
+    "--inbox",
+    "data/android-events.jsonl",
+    "--state-file",
+    "data/android-bridge-state.json"
+  ],
+  "send_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "send",
+    "--recipient",
+    "{recipient}",
+    "--message",
+    "{message}"
+  ],
+  "read_only": false,
+  "store_unanswered_messages": true
+}
+```
+
+Recommended event shapes written by the Android side:
+
+```json
+{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
+{"type":"notification","package_name":"org.thoughtcrime.securesms","app_name":"Signal","title":"Alice","body":"Are you free?","timestamp":"2026-03-18T09:01:00-04:00"}
+```
+
+Operational notes:
+
+- Set `android.allowed_sender_ids` to the SMS numbers that may trigger agent replies.
+- Leave `store_unanswered_messages` enabled if you want all notification traffic persisted to `workspace/android.messages.recent`.
+- Notifications from non-allowlisted senders are still collected into the recent file, but they are not allowed to trigger replies.
+- SMS replies use `termux-sms-send`, so the device must grant the required SMS permission to `Termux:API`.
+
 ## Telegram
 
 Set `telegram.mode` in `config/telegram.json`:
@@ -122,7 +178,7 @@ Recipient notes:
 
 ## Common behavior flags
 
-Per frontend (`telegram`, `signal`, `whatsapp`):
+Per frontend (`telegram`, `signal`, `whatsapp`, `google_fi`, `android`):
 
 - `read_only: true` → receive-only mode, no outgoing replies.
 - `store_unanswered_messages: true` → persist non-agent/unanswered messages into workspace files.
@@ -135,6 +191,7 @@ Unread-storage files by frontend:
 - Unanswered incoming Signal messages are stored in `workspace/signal.messages.recent`.
 - Unanswered incoming WhatsApp messages are stored in `workspace/whatsapp.messages.recent`.
 - Unanswered incoming Google Fi messages are stored in `workspace/google_fi.messages.recent`. Google Fi call events are stored once in `workspace/google_fi.calls.recent`.
+- Unanswered incoming Android events are stored in `workspace/android.messages.recent`.
 
 Global runtime:
 
@@ -158,6 +215,7 @@ Global runtime:
 - Telegram chat allowlist: `telegram.allowed_chat_ids`
 - Signal sender allowlist: `signal.allowed_sender_ids`
 - Signal group allowlist override: `signal.allowed_group_ids_when_sender_not_allowed`
+- Android sender allowlist: `android.allowed_sender_ids`
 
 ## Voice notes
 

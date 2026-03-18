@@ -6,7 +6,7 @@
 
 Control plane for messaging-first assistants.
 
-BUDUCCA runs one assistant core across Telegram, Signal, WhatsApp, and Google Fi, with local workspace state, pluggable collectors, and OpenAI-compatible model endpoints. It is built for people who want modern open models in chat without a heavy SaaS stack.
+BUDUCCA runs one assistant core across Telegram, Signal, WhatsApp, Google Fi, and Android command bridges, with local workspace state, pluggable collectors, and OpenAI-compatible model endpoints. It is built for people who want modern open models in chat without a heavy SaaS stack.
 
 [![Join the BUDUCCA Telegram](https://img.shields.io/badge/Join%20our%20Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/buducca)
 

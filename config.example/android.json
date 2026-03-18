@@ -1,0 +1,29 @@
+{
+  "account": "android",
+  "poll_interval_seconds": 1.0,
+  "allowed_sender_ids": [
+    "+15551234567"
+  ],
+  "receive_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "receive",
+    "--inbox",
+    "data/android-events.jsonl",
+    "--state-file",
+    "data/android-bridge-state.json"
+  ],
+  "send_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "send",
+    "--recipient",
+    "{recipient}",
+    "--message",
+    "{message}"
+  ],
+  "read_only": false,
+  "store_unanswered_messages": true
+}

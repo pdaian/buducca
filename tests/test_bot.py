@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.config import BotConfig, ContactConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
+from messaging_llm_bot.config import AndroidConfig, BotConfig, ContactConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
 from messaging_llm_bot.interfaces import IncomingAttachment
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
@@ -69,6 +69,14 @@ class FlakySignal:
 
 
 class DummyGoogleFi:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_message(self, recipient: str, text: str) -> None:
+        self.sent.append((recipient, text))
+
+
+class DummyAndroid:
     def __init__(self) -> None:
         self.sent = []
 
@@ -246,6 +254,28 @@ class BotTests(unittest.TestCase):
             recent = (Path(td) / "telegram.recent").read_text(encoding="utf-8")
             self.assertIn('"text": "collect me"', recent)
             self.assertFalse((Path(td) / "logs" / "agenta_queries.history").exists())
+
+    def test_android_authorized_message_replies_over_android_frontend(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                android=AndroidConfig(
+                    account="android",
+                    allowed_sender_ids=["+15550001"],
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.android = DummyAndroid()
+            bot.llm = DummyLLM("hello from android")
+
+            bot._handle_update(
+                IncomingMessage(update_id=1, backend="android", conversation_id="+15550001", sender_id="+15550001", text="collect me")
+            )
+
+            self.assertEqual(bot.android.sent, [("+15550001", "hello from android")])
 
     def test_replied_message_logs_agenta_query(self) -> None:
         with tempfile.TemporaryDirectory() as td:

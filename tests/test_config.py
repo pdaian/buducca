@@ -53,6 +53,22 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNotNone(config.signal)
             self.assertIsNone(config.telegram)
 
+    def test_android_only_config_is_valid(self) -> None:
+        data = {
+            "android": {
+                "account": "phone",
+                "receive_command": ["python3", "-m", "messaging_llm_bot.android_client", "receive"],
+                "send_command": ["python3", "-m", "messaging_llm_bot.android_client", "send", "--recipient", "{recipient}", "--message", "{message}"],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertIsNotNone(config.android)
+            self.assertIsNone(config.telegram)
+
     def test_invalid_missing_token(self) -> None:
         data = {
             "telegram": {"bot_token": "", "long_poll_timeout_seconds": 10},
@@ -215,6 +231,22 @@ class ConfigTests(unittest.TestCase):
                 "poll_interval_seconds": -1,
                 "receive_command": ["python3", "recv.py"],
                 "send_command": ["python3", "send.py", "{recipient}", "{message}"],
+            },
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_android_poll_interval_must_be_non_negative(self) -> None:
+        data = {
+            "android": {
+                "account": "phone",
+                "poll_interval_seconds": -1,
+                "receive_command": ["python3", "-m", "messaging_llm_bot.android_client", "receive"],
+                "send_command": ["python3", "-m", "messaging_llm_bot.android_client", "send", "--recipient", "{recipient}", "--message", "{message}"],
             },
             "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
         }
