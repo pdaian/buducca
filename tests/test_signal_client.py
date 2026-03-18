@@ -1,4 +1,5 @@
 import unittest
+import subprocess
 from unittest.mock import Mock, patch
 
 from messaging_llm_bot.signal_client import SignalClient, SignalFrontendUnavailableError
@@ -347,6 +348,7 @@ class SignalClientTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
 
     def test_send_message_supports_group_conversation_id(self) -> None:
@@ -362,6 +364,7 @@ class SignalClientTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
 
     def test_send_message_still_supports_raw_group_conversation_id(self) -> None:
@@ -377,6 +380,7 @@ class SignalClientTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
 
     def test_send_message_skips_blank_text(self) -> None:
@@ -400,6 +404,7 @@ class SignalClientTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
 
     def test_send_file_reuses_custom_send_command_prefix(self) -> None:
@@ -419,7 +424,32 @@ class SignalClientTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
+
+    def test_receive_timeout_raises_runtime_error(self) -> None:
+        client = SignalClient(account="+15551230000", command_timeout_seconds=7)
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = subprocess.TimeoutExpired(cmd=client.receive_command, timeout=7)
+            with patch("messaging_llm_bot.signal_client.which", return_value="/usr/bin/signal-cli"):
+                with self.assertRaises(RuntimeError) as exc:
+                    client.get_updates()
+
+        self.assertIn("Signal receive command timed out after 7s", str(exc.exception))
+
+    def test_send_timeout_raises_runtime_error(self) -> None:
+        client = SignalClient(account="+15551230000", command_timeout_seconds=7)
+
+        with patch("messaging_llm_bot.signal_client.subprocess.run") as run:
+            run.side_effect = subprocess.TimeoutExpired(
+                cmd=["signal-cli", "-a", "+15551230000", "send"],
+                timeout=7,
+            )
+            with self.assertRaises(RuntimeError) as exc:
+                client.send_message("+15551230000", "note")
+
+        self.assertIn("Signal send command timed out after 7s", str(exc.exception))
 
     def test_raises_when_signal_cli_missing(self) -> None:
         client = SignalClient(account="+15551230000")

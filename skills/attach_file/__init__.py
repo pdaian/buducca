@@ -143,6 +143,7 @@ def _build_clients(config: BotConfig) -> dict[str, tuple[Any, bool]]:
                 account=config.signal.account,
                 receive_command=config.signal.receive_command,
                 send_command=config.signal.send_command,
+                command_timeout_seconds=config.runtime.request_timeout_seconds,
                 debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
             ),
             bool(config.signal.read_only),

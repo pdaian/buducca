@@ -43,7 +43,6 @@ from .telegram_client import TelegramClient
 from .telegram_user_client import TelegramUserClient
 from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 from .google_fi_client import GoogleFiClient, GoogleFiFrontendUnavailableError
-from .android_client import AndroidClient, AndroidFrontendUnavailableError
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
@@ -126,6 +125,7 @@ class BotRunner:
             account=config.signal.account,
             receive_command=config.signal.receive_command,
             send_command=config.signal.send_command,
+            command_timeout_seconds=config.runtime.request_timeout_seconds,
             debug=config.runtime.debug or config.runtime.log_level.upper() == "DEBUG",
         ) if config.signal else None
         self.whatsapp = WhatsAppClient(
@@ -136,10 +136,6 @@ class BotRunner:
             receive_command=config.google_fi.receive_command,
             send_command=config.google_fi.send_command,
         ) if config.google_fi else None
-        self.android = AndroidClient(
-            receive_command=config.android.receive_command,
-            send_command=config.android.send_command,
-        ) if config.android else None
         self.llm = OpenAICompatibleClient(
             config=config.llm,
             http_client=http_client,
@@ -166,12 +162,6 @@ class BotRunner:
             for sender_id in self._allowed_google_fi_sender_ids
             if self._normalize_signal_identifier(sender_id)
         }
-        self._allowed_android_sender_ids = set(config.android.allowed_sender_ids) if config.android else set()
-        self._allowed_android_sender_ids_normalized = {
-            self._normalize_signal_identifier(sender_id)
-            for sender_id in self._allowed_android_sender_ids
-            if self._normalize_signal_identifier(sender_id)
-        }
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
@@ -180,7 +170,6 @@ class BotRunner:
         self._signal_frontend_disabled = False
         self._whatsapp_frontend_disabled = False
         self._google_fi_frontend_disabled = False
-        self._android_frontend_disabled = False
         self._started_at = datetime.now(timezone.utc)
         self._handled_messages_count = 0
         self._history: dict[Any, Deque[dict[str, str]]] = defaultdict(
@@ -193,7 +182,6 @@ class BotRunner:
             "whatsapp.messages.recent": set(),
             "google_fi.messages.recent": set(),
             "google_fi.calls.recent": set(),
-            "android.messages.recent": set(),
         }
         self._normalize_recent_message_files()
         self._load_unanswered_recent_keys()
@@ -329,8 +317,6 @@ class BotRunner:
             return "google_fi"
         if file_path == "google_fi.calls.recent":
             return "google_fi"
-        if file_path == "android.messages.recent":
-            return "android"
         return "telegram"
 
     @staticmethod
@@ -698,8 +684,6 @@ class BotRunner:
             workers["whatsapp"] = FrontendWorkerState(name="whatsapp", poll_interval_seconds=self.config.whatsapp.poll_interval_seconds)
         if self.google_fi and self.config.google_fi:
             workers["google_fi"] = FrontendWorkerState(name="google_fi", poll_interval_seconds=self.config.google_fi.poll_interval_seconds)
-        if self.android and self.config.android:
-            workers["android"] = FrontendWorkerState(name="android", poll_interval_seconds=self.config.android.poll_interval_seconds)
         return workers
 
     def _scheduler_poll_interval_seconds(self) -> float:
@@ -812,8 +796,6 @@ class BotRunner:
             return self._poll_whatsapp_once()
         if frontend == "google_fi":
             return self._poll_google_fi_once()
-        if frontend == "android":
-            return self._poll_android_once()
         raise ValueError(f"Unknown frontend: {frontend}")
 
     def _handle_updates_with_lock(self, updates: list[IncomingMessage]) -> None:
@@ -871,7 +853,6 @@ class BotRunner:
             self._poll_signal_once()
             self._poll_whatsapp_once()
             self._poll_google_fi_once()
-            self._poll_android_once()
 
     def _poll_telegram_once(self) -> int:
         if not self.telegram or not self.config.telegram:
@@ -988,19 +969,6 @@ class BotRunner:
             self._google_fi_frontend_disabled = True
             self._set_frontend_disabled("google_fi", error=str(exc))
             logging.warning("%s; continuing without google_fi frontend", exc)
-            return 0
-        self._handle_updates_with_lock(updates)
-        return len(updates)
-
-    def _poll_android_once(self) -> int:
-        if not self.android or self._android_frontend_disabled:
-            return 0
-        try:
-            updates = self.android.get_updates()
-        except AndroidFrontendUnavailableError as exc:
-            self._android_frontend_disabled = True
-            self._set_frontend_disabled("android", error=str(exc))
-            logging.warning("%s; continuing without android frontend", exc)
             return 0
         self._handle_updates_with_lock(updates)
         return len(updates)
@@ -1434,8 +1402,6 @@ class BotRunner:
             return "whatsapp", self.config.whatsapp.allowed_sender_ids[0]
         if self.config.google_fi and len(self.config.google_fi.allowed_sender_ids) == 1:
             return "google_fi", self.config.google_fi.allowed_sender_ids[0]
-        if self.config.android and len(self.config.android.allowed_sender_ids) == 1:
-            return "android", self.config.android.allowed_sender_ids[0]
         return None
 
     def _saved_main_group_target(self) -> tuple[str, str] | None:
@@ -1457,13 +1423,11 @@ class BotRunner:
             return self.config.whatsapp is not None
         if backend == "google_fi":
             return self.config.google_fi is not None
-        if backend == "android":
-            return self.config.android is not None
         return False
 
     def _latest_logged_conversation_target(self) -> tuple[str, str] | None:
         candidates: list[tuple[datetime, str, str]] = []
-        for backend in ("telegram", "signal", "whatsapp", "google_fi", "android"):
+        for backend in ("telegram", "signal", "whatsapp", "google_fi"):
             file_text = self._workspace.read_text(f"logs/{backend}.history", default="")
             if not file_text.strip():
                 continue
@@ -2131,8 +2095,6 @@ class BotRunner:
             return bool(self.config.whatsapp.read_only)
         if backend == "google_fi" and self.config.google_fi:
             return bool(self.config.google_fi.read_only)
-        if backend == "android" and self.config.android:
-            return bool(self.config.android.read_only)
         return False
 
     def _backend_stores_unanswered_messages(self, backend: str) -> bool:
@@ -2144,8 +2106,6 @@ class BotRunner:
             return bool(self.config.whatsapp.store_unanswered_messages)
         if backend == "google_fi" and self.config.google_fi:
             return bool(self.config.google_fi.store_unanswered_messages)
-        if backend == "android" and self.config.android:
-            return bool(self.config.android.store_unanswered_messages)
         return False
 
     def _append_unanswered_collector_log(
@@ -2187,8 +2147,6 @@ class BotRunner:
             return ("whatsapp.messages.recent",)
         if backend == "google_fi":
             return ("google_fi.messages.recent",)
-        if backend == "android":
-            return ("android.messages.recent",)
         return ()
 
     @staticmethod
@@ -2258,8 +2216,6 @@ class BotRunner:
             return self.config.whatsapp.account
         if backend == "google_fi" and self.config.google_fi:
             return self.config.google_fi.account
-        if backend == "android" and self.config.android:
-            return self.config.android.account
         return "default"
 
     def _append_sorted_recent_message(self, file_path: str, payload: dict[str, Any]) -> None:
@@ -2607,12 +2563,6 @@ class BotRunner:
         account = self.config.google_fi.account
         return bool(account and sender_id.strip() == account.strip())
 
-    def _is_android_self_sender(self, sender_id: str) -> bool:
-        if not self.config.android:
-            return False
-        account = self.config.android.account
-        return bool(account and sender_id.strip() == account.strip())
-
     def _is_frontend_outgoing_update(self, update: IncomingMessage, backend: str, sender_id: str) -> bool:
         if getattr(update, "is_outgoing", False):
             return True
@@ -2622,8 +2572,6 @@ class BotRunner:
             return self._is_whatsapp_self_sender(sender_id)
         if backend == "google_fi":
             return self._is_google_fi_self_sender(sender_id)
-        if backend == "android":
-            return self._is_android_self_sender(sender_id)
         return False
 
     def _send_message(self, backend: str, conversation_id: str, text: str) -> None:
@@ -2668,18 +2616,6 @@ class BotRunner:
             self.google_fi.send_message(conversation_id, text)
             self._append_frontend_log(
                 backend="google_fi",
-                direction="outgoing",
-                conversation_id=conversation_id,
-                sender_id="bot",
-                text=text,
-            )
-            return
-        if backend == "android":
-            if not self.android:
-                raise RuntimeError("Android frontend is not configured")
-            self.android.send_message(conversation_id, text)
-            self._append_frontend_log(
-                backend="android",
                 direction="outgoing",
                 conversation_id=conversation_id,
                 sender_id="bot",
@@ -2883,21 +2819,6 @@ class BotRunner:
                 conversation_id,
             )
             return False
-
-        if backend == "android" and self.config.android:
-            if not self._allowed_android_sender_ids:
-                return True
-            normalized_sender_id = self._normalize_signal_identifier(sender_id)
-            if sender_id in self._allowed_android_sender_ids or (
-                bool(normalized_sender_id) and normalized_sender_id in self._allowed_android_sender_ids_normalized
-            ):
-                return True
-            logging.warning(
-                "Blocked message from unauthorized android sender_id=%s conversation_id=%s",
-                sender_id,
-                conversation_id,
-            )
-            return False
         return True
 
     def _is_signal_self_sender(self, sender_id: str) -> bool:
@@ -2990,8 +2911,6 @@ class BotRunner:
             return conversation_id or sender_id
         if backend == "google_fi":
             return sender_id or conversation_id
-        if backend == "android":
-            return sender_id or conversation_id
         return None
 
     def _contact_aliases_for_update(
@@ -3023,7 +2942,7 @@ class BotRunner:
             if "|" in payload:
                 add(payload.rsplit("|", 1)[0].strip())
 
-        is_direct_conversation = backend in {"google_fi", "android"} or conversation_id == sender_id
+        is_direct_conversation = backend == "google_fi" or conversation_id == sender_id
         if is_direct_conversation:
             add(sender_id)
             add(sender_name)

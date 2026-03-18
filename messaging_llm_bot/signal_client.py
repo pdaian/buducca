@@ -30,6 +30,7 @@ class SignalClient:
         groups_command: list[str] | None = None,
         contacts_cache_ttl_seconds: int = 300,
         poll_timeout_seconds: int = 1,
+        command_timeout_seconds: float = 30.0,
         debug: bool = False,
     ) -> None:
         self.account = account
@@ -45,6 +46,7 @@ class SignalClient:
         self.contacts_command = contacts_command or ["signal-cli", "-o", "json", "-a", account, "listContacts"]
         self.groups_command = groups_command or ["signal-cli", "-o", "json", "-a", account, "listGroups"]
         self.contacts_cache_ttl_seconds = max(0, contacts_cache_ttl_seconds)
+        self.command_timeout_seconds = max(0.1, float(command_timeout_seconds))
         self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
         self._contact_names: dict[str, str] = {}
@@ -72,7 +74,7 @@ class SignalClient:
             )
         self._validate_receive_command()
         try:
-            proc = subprocess.run(self.receive_command, capture_output=True, text=True, check=False)
+            proc = self._run_command(self.receive_command, context="receive")
         except FileNotFoundError as exc:
             raise SignalFrontendUnavailableError(
                 f"Signal frontend disabled: executable {exc.filename!r} was not found"
@@ -308,7 +310,7 @@ class SignalClient:
             return
 
         try:
-            proc = subprocess.run(self.contacts_command, capture_output=True, text=True, check=False)
+            proc = self._run_command(self.contacts_command, context="listContacts")
         except OSError:
             logging.debug("Unable to refresh signal contacts cache", exc_info=True)
             return
@@ -452,7 +454,7 @@ class SignalClient:
             return
 
         try:
-            proc = subprocess.run(self.groups_command, capture_output=True, text=True, check=False)
+            proc = self._run_command(self.groups_command, context="listGroups")
         except OSError:
             logging.debug("Unable to refresh signal groups cache", exc_info=True)
             return
@@ -700,7 +702,7 @@ class SignalClient:
             part.replace("{recipient}", recipient).replace("{message}", text).replace("{group_id}", group_id)
             for part in template
         ]
-        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        proc = self._run_command(command, context="send")
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"Signal send command failed: {stderr}")
@@ -718,7 +720,21 @@ class SignalClient:
         else:
             command.append(recipient)
 
-        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        proc = self._run_command(command, context="send attachment")
         if proc.returncode != 0:
             stderr = proc.stderr.strip() or "no stderr"
             raise RuntimeError(f"Signal send attachment command failed: {stderr}")
+
+    def _run_command(self, command: list[str], *, context: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self.command_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Signal {context} command timed out after {self.command_timeout_seconds:g}s"
+            ) from exc
