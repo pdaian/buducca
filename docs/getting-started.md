@@ -95,6 +95,26 @@ python3 -m messaging_llm_bot.whatsapp_signup --config config
 
 More detail: [`docs/frontends.md`](./frontends.md)
 
+### Android via Termux
+
+On the Android device:
+
+```bash
+pkg update
+pkg install python termux-api
+mkdir -p data
+: > data/android-events.jsonl
+```
+
+Then configure `config/android.json`, set up device-side automation rules that trigger on incoming SMS and selected notifications and append one JSON line per event into `data/android-events.jsonl`, grant SMS permission to `Termux:API`, and verify both bridge commands:
+
+```bash
+python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
+python3 -m messaging_llm_bot.android_client send --recipient +15551234567 --message "bridge test"
+```
+
+More detail: [`docs/frontends.md`](./frontends.md)
+
 ### Google Fi
 
 Google Fi also uses Playwright:
