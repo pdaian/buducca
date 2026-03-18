@@ -106,12 +106,77 @@ mkdir -p data
 : > data/android-events.jsonl
 ```
 
-Then configure `config/android.json`, set up device-side automation rules that trigger on incoming SMS and selected notifications and append one JSON line per event into `data/android-events.jsonl`, grant SMS permission to `Termux:API`, and verify both bridge commands:
+Create `config/android.json` from the example and set the exact SMS numbers that may trigger replies:
+
+```json
+{
+  "account": "android",
+  "poll_interval_seconds": 1.0,
+  "allowed_sender_ids": [
+    "+15551234567"
+  ],
+  "receive_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "receive",
+    "--inbox",
+    "data/android-events.jsonl",
+    "--state-file",
+    "data/android-bridge-state.json"
+  ],
+  "send_command": [
+    "python3",
+    "-m",
+    "messaging_llm_bot.android_client",
+    "send",
+    "--recipient",
+    "{recipient}",
+    "--message",
+    "{message}"
+  ],
+  "read_only": false,
+  "store_unanswered_messages": true
+}
+```
+
+Then add two phone-side automation rules. Each rule must append exactly one JSON object plus a trailing newline to `data/android-events.jsonl`.
+
+For an incoming SMS event, append a line shaped like:
+
+```json
+{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
+```
+
+For a selected notification event, append a line shaped like:
+
+```json
+{"type":"notification","package_name":"org.thoughtcrime.securesms","app_name":"Signal","title":"Alice","body":"Are you free?","timestamp":"2026-03-18T09:01:00-04:00"}
+```
+
+If your automation tool can run a shell command in Termux, use one of these append commands from the repo root:
 
 ```bash
+python3 -c 'import json,sys; print(json.dumps({"type":"sms","sender_id":sys.argv[1],"body":sys.argv[2],"timestamp":sys.argv[3]}, ensure_ascii=False))' "+15551234567" "Ping" "2026-03-18T09:00:00-04:00" >> data/android-events.jsonl
+python3 -c 'import json,sys; print(json.dumps({"type":"notification","package_name":sys.argv[1],"app_name":sys.argv[2],"title":sys.argv[3],"body":sys.argv[4],"timestamp":sys.argv[5]}, ensure_ascii=False))' "org.thoughtcrime.securesms" "Signal" "Alice" "Are you free?" "2026-03-18T09:01:00-04:00" >> data/android-events.jsonl
+```
+
+Grant SMS permission to `Termux:API` before testing send. On the phone, open Android Settings, find Apps, open `Termux:API`, open Permissions, and set SMS to Allow. Android labels vary slightly by version, but the permission must be granted to `Termux:API`, not only to `Termux`.
+
+Verify the receive bridge by appending one test event and reading it:
+
+```bash
+printf '%s\n' '{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}' >> data/android-events.jsonl
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
+```
+
+The command should print JSON with one message under `"messages"`. Then verify the send bridge:
+
+```bash
 python3 -m messaging_llm_bot.android_client send --recipient +15551234567 --message "bridge test"
 ```
+
+If send fails, fix the `Termux:API` SMS permission before starting the bot.
 
 More detail: [`docs/frontends.md`](./frontends.md)
 

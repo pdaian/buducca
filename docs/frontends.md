@@ -22,39 +22,14 @@ pkg update
 pkg install python termux-api
 ```
 
-3. Grant SMS permission to `Termux:API` in Android system settings. Without that, `termux-sms-send` cannot send replies.
-4. From the repository root in Termux, create the inbox directory and file used by the bridge:
+3. From the repository root in Termux, create the inbox directory and file used by the bridge:
 
 ```bash
 mkdir -p data
 : > data/android-events.jsonl
 ```
 
-5. Configure `config/android.json` with the example below and set `allowed_sender_ids` to the exact phone numbers that are allowed to trigger replies.
-6. Set up a device-side automation rule for incoming SMS and any notifications you want to ingest. Each rule should run on the phone when the event arrives and append exactly one JSON object plus a trailing newline to `data/android-events.jsonl`. Use the repository root as the working directory or write to the file with an absolute path.
-7. Verify the receive side by appending one test SMS event, then reading it through the bridge:
-
-```bash
-printf '%s\n' '{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}' >> data/android-events.jsonl
-python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
-```
-
-The command should print JSON with one message under `"messages"`.
-
-8. Verify the send side:
-
-```bash
-python3 -m messaging_llm_bot.android_client send --recipient +15551234567 --message "BUDUCCA Android bridge test"
-```
-
-If this fails, fix `Termux:API` permissions before running the bot.
-9. Start BUDUCCA:
-
-```bash
-python3 run_bot.py --config config
-```
-
-Example config:
+4. Create `config/android.json` and set `allowed_sender_ids` to the exact phone numbers that may trigger replies:
 
 ```json
 {
@@ -86,11 +61,53 @@ Example config:
 }
 ```
 
-Recommended event shapes written by the Android side:
+5. Set up two device-side automation rules:
+
+- One rule triggered by incoming SMS.
+- One rule triggered by notifications from only the packages you want to ingest.
+
+Each rule must append exactly one JSON object plus a trailing newline to `data/android-events.jsonl`. Use the repository root as the working directory or write to the file with an absolute path.
+
+Recommended appended event shapes:
 
 ```json
 {"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
 {"type":"notification","package_name":"org.thoughtcrime.securesms","app_name":"Signal","title":"Alice","body":"Are you free?","timestamp":"2026-03-18T09:01:00-04:00"}
+```
+
+If your automation tool can execute a Termux shell command, use one of these exact append patterns:
+
+```bash
+python3 -c 'import json,sys; print(json.dumps({"type":"sms","sender_id":sys.argv[1],"body":sys.argv[2],"timestamp":sys.argv[3]}, ensure_ascii=False))' "+15551234567" "Ping" "2026-03-18T09:00:00-04:00" >> data/android-events.jsonl
+python3 -c 'import json,sys; print(json.dumps({"type":"notification","package_name":sys.argv[1],"app_name":sys.argv[2],"title":sys.argv[3],"body":sys.argv[4],"timestamp":sys.argv[5]}, ensure_ascii=False))' "org.thoughtcrime.securesms" "Signal" "Alice" "Are you free?" "2026-03-18T09:01:00-04:00" >> data/android-events.jsonl
+```
+
+Map the values from your automation tool into the arguments:
+
+- SMS rule: sender phone number, SMS body, ISO-8601 timestamp.
+- Notification rule: Android package name, app label, notification title, notification body, ISO-8601 timestamp.
+
+6. Grant SMS permission to `Termux:API` in Android system settings. Open Android Settings, find Apps, open `Termux:API`, open Permissions, and allow SMS. `termux-sms-send` will fail until this is granted.
+7. Verify the receive side by appending one test SMS event, then reading it through the bridge:
+
+```bash
+printf '%s\n' '{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}' >> data/android-events.jsonl
+python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
+```
+
+The command should print JSON with one message under `"messages"`.
+
+8. Verify the send side:
+
+```bash
+python3 -m messaging_llm_bot.android_client send --recipient +15551234567 --message "BUDUCCA Android bridge test"
+```
+
+If this fails, fix `Termux:API` permissions before running the bot.
+9. Start BUDUCCA:
+
+```bash
+python3 run_bot.py --config config
 ```
 
 Minimum requirements for appended events:
