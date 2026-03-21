@@ -12,7 +12,7 @@ from messaging_llm_bot.android_client import (
     generate_ssh_key,
     main,
 )
-from messaging_llm_bot.termux_notification_collector import collect_once
+from messaging_llm_bot.termux_notification_collector import _normalize_include_packages, collect_once
 
 
 class AndroidClientTests(unittest.TestCase):
@@ -256,6 +256,11 @@ class AndroidClientTests(unittest.TestCase):
             written = [json.loads(line) for line in inbox.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(written), 1)
             self.assertEqual(written[0]["package_name"], "org.keep")
+
+    def test_termux_notification_collector_uses_all_packages_when_filter_is_unspecified(self) -> None:
+        self.assertIsNone(_normalize_include_packages(None))
+        self.assertIsNone(_normalize_include_packages([]))
+        self.assertIsNone(_normalize_include_packages({"", "   "}))
 
 
 if __name__ == "__main__":

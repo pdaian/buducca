@@ -113,6 +113,13 @@ def _fetch_notifications(command: str) -> list[dict[str, Any]]:
     return _notification_payloads(proc.stdout)
 
 
+def _normalize_include_packages(values: list[str] | set[str] | tuple[str, ...] | None) -> set[str] | None:
+    if values is None:
+        return None
+    normalized = {value.strip() for value in values if isinstance(value, str) and value.strip()}
+    return normalized or None
+
+
 def collect_once(
     *,
     inbox_path: Path,
@@ -120,13 +127,14 @@ def collect_once(
     notification_command: str,
     include_packages: set[str] | None = None,
 ) -> int:
+    include_packages = _normalize_include_packages(include_packages)
     previous_keys = _load_seen_keys(state_path)
     current_keys: set[str] = set()
     events: list[dict[str, Any]] = []
 
     for item in _fetch_notifications(notification_command):
         package_name = _first_text(item.get("packageName"), item.get("package"))
-        if include_packages and package_name not in include_packages:
+        if include_packages is not None and package_name not in include_packages:
             continue
         key = _notification_key(item)
         if not key:
@@ -168,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    include_packages = {value.strip() for value in args.include_package if value and value.strip()} or None
+    include_packages = _normalize_include_packages(args.include_package)
     try:
         if args.command == "once":
             collect_once(
