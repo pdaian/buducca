@@ -6,7 +6,7 @@ It uses Reddit's public JSON endpoint with the Python standard library. No accou
 
 ## Setup
 1. Add `collectors.reddit_top.subreddits` in your collector config.
-2. Optionally set `timeout_seconds`, `interval_seconds`, or `user_agent`.
+2. Optionally set `timeout_seconds`, `interval_seconds`, `retry_backoff_seconds`, or `user_agent`.
 3. Run `python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config config/collectors`.
 
 Example:
@@ -21,7 +21,7 @@ Generated workspace files:
 - `workspace/collectors/reddit_top/status/<subreddit>.json`
 - `workspace/collected/normalized/reddit_top.jsonl`
 
-Each subreddit keeps its own status file. A subreddit is only fetched again after 24 hours have passed since its last successful crawl.
+Each subreddit keeps its own status file. A subreddit is only fetched again after 24 hours have passed since its last successful crawl. Failed attempts are also backed off before retrying, which prevents repeated 5-minute retries from hammering Reddit and triggering blocks.
 
 ## File structure
 - `collectors/reddit_top/__init__.py`

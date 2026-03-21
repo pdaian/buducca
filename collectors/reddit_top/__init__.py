@@ -12,8 +12,9 @@ from assistant_framework.workspace import Workspace
 
 NAME = "reddit_top"
 DESCRIPTION = "Collects each configured subreddit's public top 100 posts from the last 24 hours."
-INTERVAL_SECONDS = 300
+INTERVAL_SECONDS = 3600
 CRAWL_INTERVAL = timedelta(hours=24)
+RETRY_BACKOFF = timedelta(hours=6)
 OUTPUT_DIR = "reddit"
 STATUS_DIR = "collectors/reddit_top/status"
 FILE_STRUCTURE = ["collectors/reddit_top/__init__.py", "collectors/reddit_top/README.md"]
@@ -24,6 +25,7 @@ SUBREDDIT_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
 def register_collector(config: dict[str, Any]):
     interval = float(config.get("interval_seconds", INTERVAL_SECONDS))
+    retry_backoff = timedelta(seconds=float(config.get("retry_backoff_seconds", RETRY_BACKOFF.total_seconds())))
     timeout = float(config.get("timeout_seconds", 30))
     user_agent = str(config.get("user_agent") or USER_AGENT)
     subreddits = _normalize_subreddits(config.get("subreddits", []))
@@ -35,7 +37,7 @@ def register_collector(config: dict[str, Any]):
         successes = 0
 
         for subreddit in subreddits:
-            if not _is_due(workspace, subreddit, now):
+            if not _is_due(workspace, subreddit, now, retry_backoff=retry_backoff):
                 continue
             status = _load_status(workspace, subreddit)
             status.update({"subreddit": subreddit, "last_attempt_at": now.isoformat()})
@@ -132,11 +134,20 @@ def _output_path(subreddit: str) -> str:
     return f"{OUTPUT_DIR}/{subreddit}.top.day.jsonl"
 
 
-def _is_due(workspace: Workspace, subreddit: str, now: datetime) -> bool:
+def _is_due(workspace: Workspace, subreddit: str, now: datetime, *, retry_backoff: timedelta) -> bool:
     status = _load_status(workspace, subreddit)
     last_success_at = status.get("last_success_at")
     if not last_success_at:
-        return True
+        last_attempt_at = status.get("last_attempt_at")
+        if not last_attempt_at:
+            return True
+        try:
+            last_attempt = datetime.fromisoformat(last_attempt_at)
+        except Exception:
+            return True
+        if last_attempt.tzinfo is None:
+            last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+        return now - last_attempt >= retry_backoff
     try:
         last_success = datetime.fromisoformat(last_success_at)
     except Exception:

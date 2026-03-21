@@ -166,6 +166,25 @@ class NewCollectorsTests(unittest.TestCase):
             self.assertIn('"source": "reddit_top"', normalized)
             self.assertIn('"subreddit": "localllama"', normalized)
 
+    def test_reddit_skips_recent_failed_attempt_until_retry_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            recent_attempt = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+            workspace.write_text(
+                "collectors/reddit_top/status/python.json",
+                json.dumps({"subreddit": "python", "last_attempt_at": recent_attempt, "last_error": "blocked"}),
+            )
+
+            collector = register_reddit_collector({"subreddits": ["python"]})
+
+            from unittest.mock import patch
+
+            with patch("collectors.reddit_top.urlopen") as mocked:
+                collector["run"](workspace)
+
+            mocked.assert_not_called()
+            self.assertEqual(workspace.read_text("reddit/python.top.day.jsonl"), "")
+
     def test_news_headlines_collects_recent_items_and_balances_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)
