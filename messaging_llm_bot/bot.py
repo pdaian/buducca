@@ -1344,7 +1344,6 @@ class BotRunner:
 
     def _build_hourly_prompt(self, hourly_text: str, slot: datetime) -> str:
         timezone_name = self.config.llm.system_prompt_timezone
-        agent_context = "\n\n".join(self._build_agent_context_sections())
         lines = [
             "[Hourly routine]",
             f"- scheduled_for_local: {slot.isoformat()}",
@@ -1356,11 +1355,6 @@ class BotRunner:
             f"If nothing should happen for this hour, reply with exactly {_HOURLY_NO_ACTION_REPLY}.",
             "Avoid duplicate side effects for the same hour. If evidence is insufficient for a mutating action, prefer no action or a read-first step over guessing.",
             "For external messages, reminders, or other visible side effects, require a clear instruction in the hourly file or workspace evidence before acting.",
-            "",
-            "[Agent context snapshot]",
-            "The same skills, learnings, and loaded workspace context available to normal conversations are repeated below for this scheduled run.",
-            "",
-            agent_context,
             "",
             f"Instructions from workspace/{self.config.runtime.hourly_file}:",
             hourly_text,

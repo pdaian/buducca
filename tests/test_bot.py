@@ -983,7 +983,7 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [])
             self.assertEqual(bot.llm.calls, 1)
 
-    def test_hourly_task_prompt_repeats_agent_context_snapshot(self) -> None:
+    def test_hourly_task_prompt_keeps_hourly_context_compact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
             skills_dir.mkdir(parents=True)
@@ -1023,11 +1023,11 @@ class BotTests(unittest.TestCase):
             self.assertIn("echo: Echoes user text.", system_prompt)
             self.assertIn("Workspace summary of general learnings", system_prompt)
             self.assertIn("- Remember the hourly summary format.", system_prompt)
-            self.assertIn("[Agent context snapshot]", hourly_prompt)
-            self.assertIn("Available skills", hourly_prompt)
-            self.assertIn("echo: Echoes user text.", hourly_prompt)
-            self.assertIn("Workspace summary of general learnings", hourly_prompt)
-            self.assertIn("- Remember the hourly summary format.", hourly_prompt)
+            self.assertNotIn("[Agent context snapshot]", hourly_prompt)
+            self.assertNotIn("Available skills", hourly_prompt)
+            self.assertNotIn("echo: Echoes user text.", hourly_prompt)
+            self.assertNotIn("Workspace summary of general learnings", hourly_prompt)
+            self.assertNotIn("- Remember the hourly summary format.", hourly_prompt)
             self.assertIn("Avoid duplicate side effects for the same hour.", hourly_prompt)
             self.assertIn("require a clear instruction in the hourly file or workspace evidence before acting.", hourly_prompt)
 
