@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.config import AndroidConfig, BotConfig, ContactConfig, GoogleFiConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
+from messaging_llm_bot.config import AndroidConfig, BotConfig, ContactConfig, LLMConfig, RuntimeConfig, SignalConfig, TelegramConfig, WhatsAppConfig
 from messaging_llm_bot.telegram_client import IncomingMessage
 from messaging_llm_bot.interfaces import IncomingAttachment
 from messaging_llm_bot.signal_client import SignalFrontendUnavailableError
@@ -65,14 +65,6 @@ class FlakySignal:
     def send_message(self, recipient: str, text: str) -> None:
         if len(text) > self.max_len:
             raise RuntimeError("message too long")
-        self.sent.append((recipient, text))
-
-
-class DummyGoogleFi:
-    def __init__(self) -> None:
-        self.sent = []
-
-    def send_message(self, recipient: str, text: str) -> None:
         self.sent.append((recipient, text))
 
 
@@ -163,15 +155,15 @@ class PollingSignal:
         return result
 
 
-class RetryableGoogleFi:
+class RetryableTelegram:
     def __init__(self, stop_event: threading.Event) -> None:
         self.calls = 0
         self.stop_event = stop_event
 
-    def get_updates(self):
+    def get_updates(self, offset=None, timeout_seconds=30):
         self.calls += 1
         if self.calls == 1:
-            raise RuntimeError("Google Fi receive command failed: login required")
+            raise RuntimeError("telegram transport failed")
         self.stop_event.set()
         return []
 
@@ -424,17 +416,6 @@ class BotTests(unittest.TestCase):
                 "friend",
                 "me",
             ),
-            (
-                "google_fi",
-                BotConfig(
-                    google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"]),
-                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                    runtime=RuntimeConfig(),
-                ),
-                DummyGoogleFi,
-                "friend",
-                "me",
-            ),
         ]
 
         for backend, cfg, frontend_factory, user_sender_id, self_sender_id in cases:
@@ -633,16 +614,6 @@ class BotTests(unittest.TestCase):
                     runtime=RuntimeConfig(),
                 ),
                 DummyWhatsApp,
-                "friend",
-            ),
-            (
-                "google_fi",
-                BotConfig(
-                    google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"]),
-                    llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                    runtime=RuntimeConfig(),
-                ),
-                DummyGoogleFi,
                 "friend",
             ),
         ]
@@ -3556,26 +3527,26 @@ class BotTests(unittest.TestCase):
     def test_frontend_worker_writes_error_file_and_retries_after_runtime_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
-                google_fi=GoogleFiConfig(account="me", allowed_sender_ids=["friend"], poll_interval_seconds=0.01),
+                telegram=TelegramConfig(bot_token="t", poll_interval_seconds=0.01, process_pending_updates_on_startup=True),
                 llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
                 runtime=RuntimeConfig(workspace_dir=str(Path(td) / "workspace")),
             )
             bot = BotRunner(cfg)
-            bot.google_fi = RetryableGoogleFi(bot._stop_event)
+            bot.telegram = RetryableTelegram(bot._stop_event)
 
-            worker = threading.Thread(target=bot._run_frontend_worker, args=("google_fi",))
+            worker = threading.Thread(target=bot._run_frontend_worker, args=("telegram",))
             worker.start()
             worker.join(timeout=1.0)
 
             self.assertFalse(worker.is_alive())
-            self.assertEqual(bot.google_fi.calls, 2)
-            self.assertIsNone(bot._frontend_workers["google_fi"].fatal_exception)
-            error_path = Path(td) / "google_fi.error"
+            self.assertEqual(bot.telegram.calls, 2)
+            self.assertIsNone(bot._frontend_workers["telegram"].fatal_exception)
+            error_path = Path(td) / "telegram.error"
             self.assertTrue(error_path.exists())
             error_text = error_path.read_text(encoding="utf-8")
-            self.assertIn("frontend: google_fi", error_text)
+            self.assertIn("frontend: telegram", error_text)
             self.assertIn("RuntimeError", error_text)
-            self.assertIn("login required", error_text)
+            self.assertIn("telegram transport failed", error_text)
 
     def test_poll_telegram_once_uses_long_poll_timeout_even_when_signal_exists(self) -> None:
         cfg = BotConfig(
@@ -3635,71 +3606,6 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.telegram.sent, [(1, "I could not transcribe that voice note locally.")])
 
-    def test_google_fi_sender_not_allowed_when_allowlist_is_configured(self) -> None:
-        cfg = BotConfig(
-            google_fi=GoogleFiConfig(
-                account="default",
-                allowed_sender_ids=["+15551112222"],
-            ),
-            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-            runtime=RuntimeConfig(),
-        )
-        bot = BotRunner(cfg)
-        bot.google_fi = object()
-        bot._send_message = lambda backend, conversation_id, text: None
-        bot.llm = DummyLLM("hello")
-
-        bot._handle_message("google_fi", "thread-1", "+15553334444", "hi")
-
-        self.assertEqual(bot.llm.calls, 0)
-
-    def test_google_fi_sender_allowed_when_number_format_differs(self) -> None:
-        cfg = BotConfig(
-            google_fi=GoogleFiConfig(
-                account="default",
-                allowed_sender_ids=["+1 (555) 111-2222"],
-            ),
-            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-            runtime=RuntimeConfig(),
-        )
-        bot = BotRunner(cfg)
-        bot.google_fi = object()
-        bot._send_message = lambda backend, conversation_id, text: None
-        bot.llm = DummyLLM("hello")
-
-        bot._handle_message("google_fi", "thread-1", "+15551112222", "hi")
-
-        self.assertEqual(bot.llm.calls, 1)
-
-    def test_google_fi_unanswered_messages_are_deduplicated(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                    allowed_sender_ids=["+15551112222"],
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-            bot.llm = DummyLLM("hello")
-
-            update = IncomingMessage(
-                update_id=1,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+15553334444",
-                text="collect me",
-            )
-            bot._handle_update(update)
-            bot._handle_update(update)
-
-            recent_lines = [
-                line for line in (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines() if line.strip()
-            ]
-            self.assertEqual(len(recent_lines), 1)
-
     def test_telegram_unanswered_messages_are_deduplicated_by_update_id(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
@@ -3724,174 +3630,6 @@ class BotTests(unittest.TestCase):
             recent_lines = [line for line in (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(recent_lines), 1)
 
-
-    def test_google_fi_call_events_are_deduplicated(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            update = IncomingMessage(
-                update_id=1,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+15553334444",
-                text="[Call event] ringing",
-            )
-            setattr(update, "event_type", "call")
-            bot._handle_update(update)
-            bot._handle_update(update)
-
-            recent_lines = [
-                line for line in (Path(td) / "google_fi.calls.recent").read_text(encoding="utf-8").splitlines() if line.strip()
-            ]
-            self.assertEqual(len(recent_lines), 1)
-
-    def test_google_fi_call_events_do_not_duplicate_into_messages_recent(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            update = IncomingMessage(
-                update_id=1,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+15553334444",
-                text="[Call event] ringing",
-            )
-            setattr(update, "event_type", "call")
-            bot._handle_update(update)
-
-            call_lines = [
-                line for line in (Path(td) / "google_fi.calls.recent").read_text(encoding="utf-8").splitlines() if line.strip()
-            ]
-            self.assertEqual(len(call_lines), 1)
-            self.assertFalse((Path(td) / "google_fi.messages.recent").exists())
-
-    def test_google_fi_call_events_are_deduplicated_after_restart_with_numeric_event_id(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            call_log = Path(td) / "google_fi.calls.recent"
-            call_log.write_text(
-                json.dumps(
-                    {
-                        "logged_at": "2026-03-10T13:23:00+00:00",
-                        "collected_at": "2026-03-10T13:23:00+00:00",
-                        "source": "frontend_log",
-                        "backend": "google_fi",
-                        "account": "default",
-                        "direction": "incoming",
-                        "conversation_id": "thread-1",
-                        "sender_id": "+15553334444",
-                        "event_id": 1,
-                        "sender_name": None,
-                        "sender_contact": "+15553334444",
-                        "text": "[Call event] ringing",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            update = IncomingMessage(
-                update_id=1,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+15553334444",
-                text="[Call event] ringing",
-            )
-            setattr(update, "event_type", "call")
-            bot._handle_update(update)
-
-            recent_lines = [line for line in call_log.read_text(encoding="utf-8").splitlines() if line.strip()]
-            self.assertEqual(len(recent_lines), 1)
-
-    def test_google_fi_voicemail_call_events_are_deduplicated_across_event_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            first = IncomingMessage(
-                update_id=14784,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+1845514475900",
-                text="[Call event] call",
-                sent_at="2026-03-12T16:48:33.691086+00:00",
-            )
-            second = IncomingMessage(
-                update_id=14785,
-                backend="google_fi",
-                conversation_id="thread-1",
-                sender_id="+1845514475900",
-                text="[Call event] call",
-                sent_at="2026-03-12T16:48:33.691086+00:00",
-            )
-            setattr(first, "event_type", "call")
-            setattr(second, "event_type", "call")
-
-            bot._handle_update(first)
-            bot._handle_update(second)
-
-            recent_lines = [
-                line for line in (Path(td) / "google_fi.calls.recent").read_text(encoding="utf-8").splitlines() if line.strip()
-            ]
-            self.assertEqual(len(recent_lines), 1)
-
-    def test_google_fi_timeout_is_stored_as_unprocessed_message(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                    allowed_sender_ids=["+15550000000"],
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-            bot._send_message = lambda backend, conversation_id, text: None
-            bot.llm = TimeoutLLM()
-
-            bot._handle_update(
-                IncomingMessage(
-                    update_id=1,
-                    backend="google_fi",
-                    conversation_id="thread-1",
-                    sender_id="+15551112222",
-                    text="request that times out",
-                )
-            )
-
-            recent = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8")
-            self.assertIn("request that times out", recent)
 
     def test_signal_timeout_is_stored_as_unprocessed_message(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3953,80 +3691,6 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
             self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
-
-    def test_google_fi_uses_sent_at_for_logged_timestamp(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                    allowed_sender_ids=["+15550000000"],
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            bot._handle_update(
-                IncomingMessage(
-                    update_id=1,
-                    backend="google_fi",
-                    conversation_id="thread-1",
-                    sender_id="+15553334444",
-                    text="collect me",
-                    sent_at="2026-03-10T13:23:00+00:00",
-                )
-            )
-
-            recent_line = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines()[0]
-
-            self.assertEqual(json.loads(recent_line)["logged_at"], "2026-03-10T13:23:00+00:00")
-            self.assertNotEqual(json.loads(recent_line)["collected_at"], "2026-03-10T13:23:00+00:00")
-            self.assertFalse((Path(td) / "logs" / "google_fi.history").exists())
-
-    def test_google_fi_unanswered_messages_are_sorted_by_logged_at(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = BotConfig(
-                google_fi=GoogleFiConfig(
-                    account="default",
-                    allowed_sender_ids=["+15550000000"],
-                    store_unanswered_messages=True,
-                ),
-                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
-                runtime=RuntimeConfig(workspace_dir=td),
-            )
-            bot = BotRunner(cfg)
-
-            bot._handle_update(
-                IncomingMessage(
-                    update_id=2,
-                    backend="google_fi",
-                    conversation_id="thread-1",
-                    sender_id="+15553334444",
-                    text="newer message",
-                    sent_at="2026-03-10T13:24:00+00:00",
-                )
-            )
-            bot._handle_update(
-                IncomingMessage(
-                    update_id=1,
-                    backend="google_fi",
-                    conversation_id="thread-1",
-                    sender_id="+15553334444",
-                    text="older message",
-                    sent_at="2026-03-10T13:23:00+00:00",
-                )
-            )
-
-            recent_lines = (Path(td) / "google_fi.messages.recent").read_text(encoding="utf-8").splitlines()
-            recent = [json.loads(line) for line in recent_lines if line.strip()]
-
-            self.assertEqual([item["text"] for item in recent], ["older message", "newer message"])
-            self.assertEqual(
-                [item["logged_at"] for item in recent],
-                ["2026-03-10T13:23:00+00:00", "2026-03-10T13:24:00+00:00"],
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

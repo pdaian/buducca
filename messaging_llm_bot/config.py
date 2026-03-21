@@ -49,17 +49,6 @@ class WhatsAppConfig:
 
 
 @dataclass
-class GoogleFiConfig:
-    account: str = "default"
-    poll_interval_seconds: float = 1.0
-    allowed_sender_ids: list[str] = field(default_factory=list)
-    receive_command: list[str] = field(default_factory=list)
-    send_command: list[str] = field(default_factory=list)
-    read_only: bool = False
-    store_unanswered_messages: bool = False
-
-
-@dataclass
 class AndroidConfig:
     account: str = "android"
     poll_interval_seconds: float = 1.0
@@ -129,7 +118,6 @@ class BotConfig:
     telegram: TelegramConfig | None = None
     signal: SignalConfig | None = None
     whatsapp: WhatsAppConfig | None = None
-    google_fi: GoogleFiConfig | None = None
     android: AndroidConfig | None = None
     contacts: list[ContactConfig] = field(default_factory=list)
     llm: LLMConfig | None = None
@@ -140,7 +128,6 @@ WORKSPACE_CONTACT_MAP_FILES = {
     "telegram": "telegram.contacts",
     "signal": "signal.contacts",
     "whatsapp": "whatsapp.contacts",
-    "google_fi": "google_fi.contacts",
     "android": "android.contacts",
 }
 
@@ -287,8 +274,8 @@ def _dedupe_contacts(contacts: list[ContactConfig]) -> list[ContactConfig]:
 
 
 def _validate(config: BotConfig, *, config_path: Path) -> None:
-    if not config.telegram and not config.signal and not config.whatsapp and not config.google_fi and not config.android:
-        raise ValueError("At least one frontend must be configured: telegram, signal, whatsapp, google_fi, or android")
+    if not config.telegram and not config.signal and not config.whatsapp and not config.android:
+        raise ValueError("At least one frontend must be configured: telegram, signal, whatsapp, or android")
 
     if config.telegram:
         mode = config.telegram.mode.strip().lower()
@@ -321,12 +308,6 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         if config.whatsapp.poll_interval_seconds < 0:
             raise ValueError("whatsapp.poll_interval_seconds must be >= 0")
 
-    if config.google_fi:
-        if not config.google_fi.account.strip():
-            raise ValueError("google_fi.account must be set")
-        if config.google_fi.poll_interval_seconds < 0:
-            raise ValueError("google_fi.poll_interval_seconds must be >= 0")
-
     if config.android:
         if not config.android.account.strip():
             raise ValueError("android.account must be set")
@@ -339,12 +320,10 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         if config.android.send_via_outbox and not config.android.sms_outbox_path.strip():
             raise ValueError("android.sms_outbox_path must be set when android.send_via_outbox is true")
 
-    valid_contact_platforms = {"telegram", "signal", "whatsapp", "google_fi", "fi", "android"}
+    valid_contact_platforms = {"telegram", "signal", "whatsapp", "android"}
     for contact in config.contacts:
         if contact.platform not in valid_contact_platforms:
-            raise ValueError(
-                "contacts[].platform must be one of: telegram, signal, whatsapp, google_fi, fi, android"
-            )
+            raise ValueError("contacts[].platform must be one of: telegram, signal, whatsapp, android")
 
     if not config.llm:
         raise ValueError("llm must be set")
@@ -389,12 +368,10 @@ def load_config(path: str | Path) -> BotConfig:
     telegram_raw = raw.get("telegram")
     signal_raw = raw.get("signal")
     whatsapp_raw = raw.get("whatsapp")
-    google_fi_raw = raw.get("google_fi")
     android_raw = raw.get("android")
     telegram = TelegramConfig(**_normalize_telegram_config(telegram_raw)) if isinstance(telegram_raw, dict) else None
     signal = SignalConfig(**_strip_comment_keys(signal_raw)) if isinstance(signal_raw, dict) else None
     whatsapp = WhatsAppConfig(**_strip_comment_keys(whatsapp_raw)) if isinstance(whatsapp_raw, dict) else None
-    google_fi = GoogleFiConfig(**_strip_comment_keys(google_fi_raw)) if isinstance(google_fi_raw, dict) else None
     android = AndroidConfig(**_strip_comment_keys(android_raw)) if isinstance(android_raw, dict) else None
     try:
         llm = LLMConfig(**_strip_comment_keys(raw["llm"]))
@@ -411,7 +388,6 @@ def load_config(path: str | Path) -> BotConfig:
         telegram=telegram,
         signal=signal,
         whatsapp=whatsapp,
-        google_fi=google_fi,
         android=android,
         contacts=contacts,
         llm=llm,

@@ -183,16 +183,6 @@ If send fails, fix the `Termux:API` SMS permission before starting the bot.
 
 More detail: [`docs/frontends.md`](./frontends.md)
 
-### Google Fi
-
-Google Fi also uses Playwright:
-
-```bash
-pip install playwright
-python3 -m playwright install chromium
-python3 -m messaging_llm_bot.google_fi_client receive --headful
-```
-
 More detail: [`docs/frontends.md`](./frontends.md)
 
 ## 4. Run the bot

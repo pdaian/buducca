@@ -15,7 +15,7 @@ ARGS_SCHEMA = """
 {
   group?: string;
   name?: string;
-  backend?: "telegram" | "signal" | "whatsapp" | "google_fi" | "fi";
+  backend?: "telegram" | "signal" | "whatsapp";
   conversation_id?: string | number;
   config_path?: string;
 }

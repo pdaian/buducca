@@ -7,15 +7,13 @@ from typing import Any
 from .workspace import Workspace
 
 MAIN_GROUP_FILE = "assistant/main_group.json"
-_SUPPORTED_BACKENDS = {"telegram", "signal", "whatsapp", "google_fi"}
+_SUPPORTED_BACKENDS = {"telegram", "signal", "whatsapp"}
 
 
 def normalize_backend(value: Any) -> str:
     backend = str(value or "").strip().lower()
-    if backend == "fi":
-        backend = "google_fi"
     if backend not in _SUPPORTED_BACKENDS:
-        raise ValueError("Unsupported backend. Use telegram, signal, whatsapp, or google_fi.")
+        raise ValueError("Unsupported backend. Use telegram, signal, or whatsapp.")
     return backend
 
 

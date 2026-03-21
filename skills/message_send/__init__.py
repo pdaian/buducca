@@ -7,7 +7,6 @@ from typing import Any
 from assistant_framework.action_runtime import ActionEnvelope
 from assistant_framework.workspace import Workspace
 from messaging_llm_bot.config import BotConfig, load_config
-from messaging_llm_bot.google_fi_client import GoogleFiClient
 from messaging_llm_bot.http import HttpClient
 from messaging_llm_bot.signal_client import SignalClient
 from messaging_llm_bot.telegram_client import TelegramClient
@@ -17,16 +16,16 @@ from messaging_llm_bot.whatsapp_client import WhatsAppClient
 NAME = "message_send"
 DESCRIPTION = (
     "Send outbound messages through configured messaging backends. "
-    "Supports telegram (bot or user mode), signal, whatsapp, and google_fi/fi. "
+    "Supports telegram (bot or user mode), signal, and whatsapp. "
     "Use args.backend for one backend or 'all', args.message, and args.recipient for single-backend sends "
     "or args.recipients for per-backend fanout."
 )
 ARGS_SCHEMA = """
 {
-  backend: "telegram" | "signal" | "whatsapp" | "google_fi" | "fi" | "all" | string[];
+  backend: "telegram" | "signal" | "whatsapp" | "all" | string[];
   message: string;
   recipient?: string | number;
-  recipients?: Partial<Record<"telegram" | "signal" | "whatsapp" | "google_fi" | "fi", string | number>>;
+  recipients?: Partial<Record<"telegram" | "signal" | "whatsapp", string | number>>;
   config_path?: string;
 }
 """.strip()
@@ -35,11 +34,8 @@ _BACKEND_ALIASES = {
     "telegram": "telegram",
     "signal": "signal",
     "whatsapp": "whatsapp",
-    "google_fi": "google_fi",
-    "google-fi": "google_fi",
-    "fi": "google_fi",
 }
-_BACKEND_ORDER = ["telegram", "signal", "whatsapp", "google_fi"]
+_BACKEND_ORDER = ["telegram", "signal", "whatsapp"]
 
 
 def _resolve_config_path(workspace: Workspace, raw_path: Any) -> Path:
@@ -144,8 +140,6 @@ def _configured_backend_names(config: BotConfig) -> list[str]:
         names.append("signal")
     if config.whatsapp:
         names.append("whatsapp")
-    if config.google_fi:
-        names.append("google_fi")
     return names
 
 
@@ -185,15 +179,6 @@ def _build_clients(config: BotConfig) -> dict[str, tuple[Any, bool]]:
                 send_command=config.whatsapp.send_command,
             ),
             bool(config.whatsapp.read_only),
-        )
-
-    if config.google_fi:
-        clients["google_fi"] = (
-            GoogleFiClient(
-                receive_command=config.google_fi.receive_command,
-                send_command=config.google_fi.send_command,
-            ),
-            bool(config.google_fi.read_only),
         )
 
     return clients

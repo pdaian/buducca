@@ -1,6 +1,6 @@
 # Frontends
 
-BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel. Google Fi additionally emits call events that are logged.
+BUDUCCA frontends are bidirectional adapters: they receive messages and send replies on the same channel.
 
 ## Android
 
@@ -282,7 +282,7 @@ Recipient notes:
 
 ## Common behavior flags
 
-Per frontend (`telegram`, `signal`, `whatsapp`, `google_fi`, `android`):
+Per frontend (`telegram`, `signal`, `whatsapp`, `android`):
 
 - `read_only: true` → receive-only mode, no outgoing replies.
 - `store_unanswered_messages: true` → persist non-agent/unanswered messages into workspace files.
@@ -294,7 +294,6 @@ Unread-storage files by frontend:
 - Unanswered incoming Telegram messages are stored in `workspace/telegram.recent`. `workspace/telegram.messages.recent` is legacy compatibility input and is no longer written.
 - Unanswered incoming Signal messages are stored in `workspace/signal.messages.recent`.
 - Unanswered incoming WhatsApp messages are stored in `workspace/whatsapp.messages.recent`.
-- Unanswered incoming Google Fi messages are stored in `workspace/google_fi.messages.recent`. Google Fi call events are stored once in `workspace/google_fi.calls.recent`.
 - Unanswered incoming Android events are stored in `workspace/android.messages.recent`.
 
 Global runtime:
@@ -339,39 +338,3 @@ Example:
   "{input}"
 ]
 ```
-
-
-
-## Google Fi
-
-Google Fi support is upstreamed into `messaging_llm_bot/google_fi_client.py`.
-
-Use module commands directly:
-
-```bash
-python3 -m messaging_llm_bot.google_fi_client receive
-python3 -m messaging_llm_bot.google_fi_client send --recipient "+15550001111" --message "test"
-python3 -m messaging_llm_bot.google_fi_client list-messages
-```
-
-Setup requirements:
-
-```bash
-pip install playwright
-playwright install chromium
-python3 -m messaging_llm_bot.google_fi_client receive --headful
-```
-
-The first headful run is used to complete Google Messages login and save browser/session state under `data/google_fi_browser_profile`.
-The receive command stores its dedupe state under `workspace/data/google_fi_receive_state.json` by default, so separate workspaces do not share message dedupe history.
-If login takes longer, increase the wait window with `--signup-wait-seconds` (default: `300`).
-
-Per-frontend flags also apply: `read_only` and `store_unanswered_messages`.
-
-Timestamp logging note:
-
-- `logged_collected_match` in frontend debug logs compares `logged_at` and `collected_at` only.
-- For Google Fi, incoming messages prefer the message timestamp recovered from Google Messages as `logged_at` and `sent_at`.
-- `collected_at` is still set when BUDUCCA writes the record locally.
-- Because of that, `logged_collected_match=False` is expected whenever Google Fi successfully recovers an older message timestamp from the DOM. It means "message time differs from ingestion time", not "timestamp parsing failed".
-- If Google Fi cannot recover a parseable message timestamp, `logged_at` falls back to the current write time and `logged_collected_match` will usually be `True`.

@@ -6,7 +6,6 @@ from typing import Any
 from assistant_framework.action_runtime import ActionEnvelope
 from assistant_framework.workspace import Workspace
 from messaging_llm_bot.config import BotConfig, load_config
-from messaging_llm_bot.google_fi_client import GoogleFiClient
 from messaging_llm_bot.http import HttpClient
 from messaging_llm_bot.signal_client import SignalClient
 from messaging_llm_bot.telegram_client import TelegramClient
@@ -21,11 +20,11 @@ DESCRIPTION = (
 )
 ARGS_SCHEMA = """
 {
-  backend: "telegram" | "signal" | "whatsapp" | "google_fi" | "fi" | string[];
+  backend: "telegram" | "signal" | "whatsapp" | string[];
   path: string;
   caption?: string;
   recipient?: string | number;
-  recipients?: Partial<Record<"telegram" | "signal" | "whatsapp" | "google_fi" | "fi", string | number>>;
+  recipients?: Partial<Record<"telegram" | "signal" | "whatsapp", string | number>>;
   config_path?: string;
 }
 """.strip()
@@ -34,11 +33,8 @@ _BACKEND_ALIASES = {
     "telegram": "telegram",
     "signal": "signal",
     "whatsapp": "whatsapp",
-    "google_fi": "google_fi",
-    "google-fi": "google_fi",
-    "fi": "google_fi",
 }
-_BACKEND_ORDER = ["telegram", "signal", "whatsapp", "google_fi"]
+_BACKEND_ORDER = ["telegram", "signal", "whatsapp"]
 
 
 def _resolve_config_path(workspace: Workspace, raw_path: Any) -> Path:
@@ -156,15 +152,6 @@ def _build_clients(config: BotConfig) -> dict[str, tuple[Any, bool]]:
                 send_command=config.whatsapp.send_command,
             ),
             bool(config.whatsapp.read_only),
-        )
-
-    if config.google_fi:
-        clients["google_fi"] = (
-            GoogleFiClient(
-                receive_command=config.google_fi.receive_command,
-                send_command=config.google_fi.send_command,
-            ),
-            bool(config.google_fi.read_only),
         )
 
     return clients

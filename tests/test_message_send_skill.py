@@ -81,9 +81,9 @@ class MessageSendSkillTests(unittest.TestCase):
             self.assertEqual(result, "telegram: sent to 123456789.")
             self.assertEqual(sent, [(123456789, "hello")])
 
-    def test_supports_multi_backend_fanout_with_aliases(self) -> None:
+    def test_supports_multi_backend_fanout(self) -> None:
         signal_sent: list[tuple[str, str]] = []
-        fi_sent: list[tuple[str, str]] = []
+        whatsapp_sent: list[tuple[str, str]] = []
 
         class FakeSignalClient:
             def __init__(self, **kwargs) -> None:
@@ -92,15 +92,15 @@ class MessageSendSkillTests(unittest.TestCase):
             def send_message(self, recipient: str, text: str) -> None:
                 signal_sent.append((recipient, text))
 
-        class FakeGoogleFiClient:
+        class FakeWhatsAppClient:
             def __init__(self, **kwargs) -> None:
                 self.kwargs = kwargs
 
             def send_message(self, recipient: str, text: str) -> None:
-                fi_sent.append((recipient, text))
+                whatsapp_sent.append((recipient, text))
 
         self.module.SignalClient = FakeSignalClient
-        self.module.GoogleFiClient = FakeGoogleFiClient
+        self.module.WhatsAppClient = FakeWhatsAppClient
 
         with tempfile.TemporaryDirectory() as td:
             config = base_config()
@@ -109,10 +109,10 @@ class MessageSendSkillTests(unittest.TestCase):
                 "receive_command": ["signal-cli", "receive"],
                 "send_command": ["signal-cli", "send"],
             }
-            config["google_fi"] = {
+            config["whatsapp"] = {
                 "account": "personal",
-                "receive_command": ["python3", "-m", "messaging_llm_bot.google_fi_client", "receive"],
-                "send_command": ["python3", "-m", "messaging_llm_bot.google_fi_client", "send"],
+                "receive_command": ["python3", "-m", "messaging_llm_bot.whatsapp_client", "receive"],
+                "send_command": ["python3", "-m", "messaging_llm_bot.whatsapp_client", "send"],
             }
             workspace = Workspace(Path(td) / "workspace")
             config_path = workspace.resolve("config.json")
@@ -120,10 +120,10 @@ class MessageSendSkillTests(unittest.TestCase):
             result = self.module.run(
                 workspace,
                 {
-                    "backend": ["signal", "fi"],
+                    "backend": ["signal", "whatsapp"],
                     "recipients": {
                         "signal": "+15551234567",
-                        "fi": "+15557654321",
+                        "whatsapp": "+15557654321",
                     },
                     "message": "ping",
                     "config_path": str(config_path),
@@ -134,10 +134,10 @@ class MessageSendSkillTests(unittest.TestCase):
                 result,
                 "Sent 2 of 2 requested message(s).\n"
                 "signal: sent to +15551234567.\n"
-                "google_fi: sent to +15557654321.",
+                "whatsapp: sent to +15557654321.",
             )
             self.assertEqual(signal_sent, [("+15551234567", "ping")])
-            self.assertEqual(fi_sent, [("+15557654321", "ping")])
+            self.assertEqual(whatsapp_sent, [("+15557654321", "ping")])
 
     def test_rejects_read_only_backend(self) -> None:
         class FakeSignalClient:
