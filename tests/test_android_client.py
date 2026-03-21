@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import run_client
 from messaging_llm_bot.android_client import (
     AndroidClient,
     AndroidFrontendUnavailableError,
@@ -261,6 +262,90 @@ class AndroidClientTests(unittest.TestCase):
         self.assertIsNone(_normalize_include_packages(None))
         self.assertIsNone(_normalize_include_packages([]))
         self.assertIsNone(_normalize_include_packages({"", "   "}))
+
+
+class RunClientTests(unittest.TestCase):
+    def test_run_client_receive_reads_only_new_jsonl_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "android-state.json"
+            inbox.write_text(json.dumps({"type": "sms", "sender_id": "+15550001", "body": "hello"}) + "\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = run_client.main(["receive", "--inbox", str(inbox), "--state-file", str(state)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("+15550001", stdout.getvalue())
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = run_client.main(["receive", "--inbox", str(inbox), "--state-file", str(state)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue().strip(), '{"messages": []}')
+
+    def test_run_client_collect_notifications_once_appends_only_new_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            payload = json.dumps(
+                [
+                    {
+                        "packageName": "org.example.chat",
+                        "applicationLabel": "Example Chat",
+                        "id": 41,
+                        "title": "Alice",
+                        "content": "hello",
+                        "when": "2026-03-18T09:01:00-04:00",
+                    }
+                ]
+            )
+
+            with patch("run_client.which", return_value="/usr/bin/termux-notification-list"):
+                with patch("run_client.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+                    appended = run_client.collect_notifications_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+                    self.assertEqual(appended, 1)
+                    appended = run_client.collect_notifications_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+                    self.assertEqual(appended, 0)
+
+            written = [json.loads(line) for line in inbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(written), 1)
+            self.assertEqual(written[0]["package_name"], "org.example.chat")
+
+    def test_run_client_sync_once_pushes_pulls_and_flushes_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+            outbox_state = Path(td) / "android-sms-outbox-state.json"
+            inbox.write_text("", encoding="utf-8")
+            outbox.write_text(json.dumps({"recipient": "+15550001", "message": "queued"}) + "\n", encoding="utf-8")
+
+            with patch("run_client.which", return_value="/usr/bin/fake"):
+                with patch("run_client.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout="", stderr="")
+                    delivered = run_client.sync_once(
+                        local_inbox=inbox,
+                        local_outbox=outbox,
+                        remote_host="server",
+                        remote_dir="/srv/android",
+                        ssh_key="/tmp/key",
+                        sms_command="termux-sms-send",
+                        outbox_state_path=outbox_state,
+                        scp_command="scp",
+                    )
+
+            self.assertEqual(delivered, 1)
+            self.assertEqual(run.call_count, 3)
 
 
 if __name__ == "__main__":

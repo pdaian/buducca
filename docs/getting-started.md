@@ -140,18 +140,23 @@ Create `config/android.json` from the example and set the exact SMS numbers that
 }
 ```
 
-Start the built-in Termux notification collector in another Termux session:
+Copy `run_client.py` to the phone and start the built-in Termux client:
 
 ```bash
-python3 -m messaging_llm_bot.termux_notification_collector run \
+python3 run_client.py run \
   --inbox data/android-events.jsonl \
-  --state-file data/termux-notifications-state.json \
+  --notification-state-file data/termux-notifications-state.json \
+  --outbox data/android-sms-outbox.jsonl \
+  --outbox-state-file data/android-sms-outbox-state.json \
+  --remote-host "$SERVER" \
+  --remote-dir "$REMOTE_DIR" \
+  --ssh-key "$HOME/.ssh/buducca_android_sync" \
   --include-package org.thoughtcrime.securesms \
   --include-package com.whatsapp \
   --interval-seconds 2
 ```
 
-This removes the dependency on third-party Android automation apps. The collector polls `termux-notification-list` and appends newly seen notifications into `data/android-events.jsonl`.
+This removes the dependency on third-party Android automation apps. The client polls `termux-notification-list`, appends newly seen notifications into `data/android-events.jsonl`, syncs that file to the server, pulls the SMS outbox, and sends queued SMS locally.
 
 If you also want to inject SMS events into the Android bridge, append JSONL rows shaped like:
 
@@ -164,7 +169,7 @@ Grant SMS permission to `Termux:API` before testing send. On the phone, open And
 Verify the receive bridge by running one collection pass and reading it:
 
 ```bash
-python3 -m messaging_llm_bot.termux_notification_collector once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
+python3 run_client.py collect-notifications once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
 ```
 
