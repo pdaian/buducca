@@ -8,7 +8,7 @@ Android support is command-driven like Signal and WhatsApp, but the recommended 
 
 - `Termux` for the local Python runtime.
 - `Termux:API` for SMS sending via `termux-sms-send`.
-- Any visible notification/SMS automation on the device that can run a shell command and append JSON lines into `data/android-events.jsonl`.
+- `termux-notification-list` polling for notification ingestion with no third-party automation app.
 
 The in-repo bridge is `python3 -m messaging_llm_bot.android_client`. It reads new JSONL events and sends SMS replies.
 
@@ -61,41 +61,40 @@ mkdir -p data
 }
 ```
 
-5. Set up two device-side automation rules:
+5. Start the in-repo Termux notification collector in a second Termux session:
 
-- One rule triggered by incoming SMS.
-- One rule triggered by notifications from only the packages you want to ingest.
+```bash
+python3 -m messaging_llm_bot.termux_notification_collector run \
+  --inbox data/android-events.jsonl \
+  --state-file data/termux-notifications-state.json \
+  --include-package org.thoughtcrime.securesms \
+  --include-package com.whatsapp \
+  --interval-seconds 2
+```
 
-Each rule must append exactly one JSON object plus a trailing newline to `data/android-events.jsonl`. Use the repository root as the working directory or write to the file with an absolute path.
+The collector polls `termux-notification-list`, appends only newly seen active notifications, and reuses the existing JSONL bridge. Omit `--include-package` to ingest every visible notification. Lower intervals reduce the chance of missing short-lived notifications.
 
-Recommended appended event shapes:
+The collector appends lines shaped like:
 
 ```json
-{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
 {"type":"notification","package_name":"org.thoughtcrime.securesms","app_name":"Signal","title":"Alice","body":"Are you free?","timestamp":"2026-03-18T09:01:00-04:00"}
 ```
 
-If your automation tool can execute a Termux shell command, use one of these exact append patterns:
+If you also want SMS events in the Android bridge, append them to `data/android-events.jsonl` from your own device-side workflow with one JSON object per line:
 
-```bash
-python3 -c 'import json,sys; print(json.dumps({"type":"sms","sender_id":sys.argv[1],"body":sys.argv[2],"timestamp":sys.argv[3]}, ensure_ascii=False))' "+15551234567" "Ping" "2026-03-18T09:00:00-04:00" >> data/android-events.jsonl
-python3 -c 'import json,sys; print(json.dumps({"type":"notification","package_name":sys.argv[1],"app_name":sys.argv[2],"title":sys.argv[3],"body":sys.argv[4],"timestamp":sys.argv[5]}, ensure_ascii=False))' "org.thoughtcrime.securesms" "Signal" "Alice" "Are you free?" "2026-03-18T09:01:00-04:00" >> data/android-events.jsonl
+```json
+{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
 ```
 
-Map the values from your automation tool into the arguments:
-
-- SMS rule: sender phone number, SMS body, ISO-8601 timestamp.
-- Notification rule: Android package name, app label, notification title, notification body, ISO-8601 timestamp.
-
 6. Grant SMS permission to `Termux:API` in Android system settings. Open Android Settings, find Apps, open `Termux:API`, open Permissions, and allow SMS. `termux-sms-send` will fail until this is granted.
-7. Verify the receive side by appending one test SMS event, then reading it through the bridge:
+7. Verify the receive side by running one collection pass, then reading through the bridge:
 
 ```bash
-printf '%s\n' '{"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}' >> data/android-events.jsonl
+python3 -m messaging_llm_bot.termux_notification_collector once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
 ```
 
-The command should print JSON with one message under `"messages"`.
+The second command should print JSON with any newly collected notifications under `"messages"`.
 
 8. Verify the send side:
 
@@ -113,7 +112,8 @@ python3 run_bot.py --config config
 Minimum requirements for appended events:
 
 - One valid JSON object per line in `data/android-events.jsonl`.
-- The Android automation must append to the file; the bridge only reads new lines and does not fetch SMS or notifications from Android by itself.
+- The bridge only reads new lines and does not fetch SMS or notifications from Android by itself.
+- `python3 -m messaging_llm_bot.termux_notification_collector` is the built-in notification ingester and writes notification events into the file.
 - SMS events must include enough data for the bridge to derive `conversation_id`, `sender_id`, and message text. The example `type`, `sender_id`, and `body` fields are sufficient.
 - Notification events should use `type: "notification"` and usually include `package_name`, `title`, and `body`.
 
@@ -123,6 +123,7 @@ Operational notes:
 - Leave `store_unanswered_messages` enabled if you want all notification traffic persisted to `workspace/android.messages.recent`.
 - Notifications from non-allowlisted senders are still collected into the recent file, but they are not allowed to trigger replies.
 - SMS replies use `termux-sms-send`, so the device must grant the required SMS permission to `Termux:API`.
+- The Termux collector can only see notifications that still exist when `termux-notification-list` runs, so use a short poll interval for ephemeral notifications.
 
 ## Telegram
 

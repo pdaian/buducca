@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from messaging_llm_bot.android_client import AndroidClient, AndroidFrontendUnavailableError, main
+from messaging_llm_bot.termux_notification_collector import collect_once
 
 
 class AndroidClientTests(unittest.TestCase):
@@ -88,6 +89,87 @@ class AndroidClientTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(stdout.getvalue().strip(), '{"messages": []}')
+
+    def test_termux_notification_collector_appends_only_new_notifications(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            payload = json.dumps(
+                [
+                    {
+                        "packageName": "org.example.chat",
+                        "applicationLabel": "Example Chat",
+                        "id": 41,
+                        "title": "Alice",
+                        "content": "hello",
+                        "when": "2026-03-18T09:01:00-04:00",
+                    }
+                ]
+            )
+
+            with patch("messaging_llm_bot.termux_notification_collector.which", return_value="/usr/bin/termux-notification-list"):
+                with patch("messaging_llm_bot.termux_notification_collector.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+                    appended = collect_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+
+                    self.assertEqual(appended, 1)
+                    written = [json.loads(line) for line in inbox.read_text(encoding="utf-8").splitlines()]
+                    self.assertEqual(
+                        written,
+                        [
+                            {
+                                "type": "notification",
+                                "package_name": "org.example.chat",
+                                "app_name": "Example Chat",
+                                "title": "Alice",
+                                "body": "hello",
+                                "timestamp": "2026-03-18T09:01:00-04:00",
+                            }
+                        ],
+                    )
+
+                    appended = collect_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+                    self.assertEqual(appended, 0)
+                    run.assert_called_with(
+                        ["termux-notification-list"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+    def test_termux_notification_collector_filters_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            payload = json.dumps(
+                [
+                    {"packageName": "org.keep", "title": "Wanted", "content": "collect"},
+                    {"packageName": "org.drop", "title": "Noise", "content": "ignore"},
+                ]
+            )
+
+            with patch("messaging_llm_bot.termux_notification_collector.which", return_value="/usr/bin/termux-notification-list"):
+                with patch("messaging_llm_bot.termux_notification_collector.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+                    appended = collect_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                        include_packages={"org.keep"},
+                    )
+
+            self.assertEqual(appended, 1)
+            written = [json.loads(line) for line in inbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(written), 1)
+            self.assertEqual(written[0]["package_name"], "org.keep")
 
 
 if __name__ == "__main__":
