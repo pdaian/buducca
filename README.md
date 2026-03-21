@@ -71,6 +71,10 @@ python3 -m assistant_framework.cli trace replay --workspace workspace
 
 In chat, the built-in operator commands are `/status` and `/skill`. Frontend details live in [docs/frontends.md](docs/frontends.md).
 
+Remote Android note:
+
+- The Android/Termux frontend supports a server-side inbox plus SMS outbox flow now. A Termux device can generate its own SSH key, push notification/SMS JSONL files to a limited server account, pull queued SMS commands back down, and send them locally via `Termux:API`. Setup details, file permissions, and the exact commands are in [docs/frontends.md](docs/frontends.md).
+
 ## Documentation map
 
 - Start here: [docs/getting-started.md](docs/getting-started.md)

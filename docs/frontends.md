@@ -4,13 +4,30 @@ BUDUCCA frontends are bidirectional adapters: they receive messages and send rep
 
 ## Android
 
-Android support is command-driven like Signal and WhatsApp, but the recommended device-side path is:
+Android support is command-driven like Signal and WhatsApp. The production path for a remote Android device is:
 
 - `Termux` for the local Python runtime.
 - `Termux:API` for SMS sending via `termux-sms-send`.
 - `termux-notification-list` polling for notification ingestion with no third-party automation app.
+- a limited SSH account on the server so the phone can push event files and pull an SMS outbox file
 
-The in-repo bridge is `python3 -m messaging_llm_bot.android_client`. It reads new JSONL events and sends SMS replies.
+The in-repo bridge is `python3 -m messaging_llm_bot.android_client`. It now supports three pieces:
+
+- `receive`: read new JSONL events from a synced inbox file on the server
+- `send --outbox ...`: queue outbound SMS requests into a JSONL outbox file on the server
+- `flush-outbox`: on the Android device, read new outbox entries and send them with `termux-sms-send`
+
+Recommended file layout on the server:
+
+- inbox: `data/android-events.jsonl`
+- receive cursor: `data/android-bridge-state.json`
+- SMS outbox: `data/android-sms-outbox.jsonl`
+
+Recommended file layout on the Android device:
+
+- local event spool: `$HOME/buducca-sync/android-events.jsonl`
+- local SMS outbox mirror: `$HOME/buducca-sync/android-sms-outbox.jsonl`
+- local SMS outbox cursor: `$HOME/buducca-sync/android-sms-outbox-state.json`
 
 Concrete setup sequence on the Android device:
 
@@ -19,54 +36,51 @@ Concrete setup sequence on the Android device:
 
 ```bash
 pkg update
-pkg install python termux-api
+pkg install python termux-api openssh
 ```
 
-3. From the repository root in Termux, create the inbox directory and file used by the bridge:
+3. Generate an SSH key on the Android device and copy the printed public key into the limited server account's `authorized_keys`:
 
 ```bash
-mkdir -p data
-: > data/android-events.jsonl
+python3 -m messaging_llm_bot.android_client generate-ssh-key \
+  --private-key $HOME/.ssh/buducca_android_sync
 ```
 
-4. Create `config/android.json` and set `allowed_sender_ids` to the exact phone numbers that may trigger replies:
+The limited server account only needs read/write access to the Android sync directory. The bot process needs local access to that same directory on the server.
+
+4. On the Android device, create the local sync directory and make the spool files world readable and writable if you want other local processes to append to them exactly as-is:
+
+```bash
+mkdir -p "$HOME/buducca-sync"
+: > "$HOME/buducca-sync/android-events.jsonl"
+: > "$HOME/buducca-sync/android-sms-outbox.jsonl"
+chmod 666 "$HOME/buducca-sync/android-events.jsonl" "$HOME/buducca-sync/android-sms-outbox.jsonl"
+```
+
+5. On the server, create `config/android.json` and point it at the synced files:
 
 ```json
 {
   "account": "android",
   "poll_interval_seconds": 1.0,
   "allowed_sender_ids": ["+15551234567"],
-  "receive_command": [
-    "python3",
-    "-m",
-    "messaging_llm_bot.android_client",
-    "receive",
-    "--inbox",
-    "data/android-events.jsonl",
-    "--state-file",
-    "data/android-bridge-state.json"
-  ],
-  "send_command": [
-    "python3",
-    "-m",
-    "messaging_llm_bot.android_client",
-    "send",
-    "--recipient",
-    "{recipient}",
-    "--message",
-    "{message}"
-  ],
+  "inbox_path": "data/android-events.jsonl",
+  "state_file": "data/android-bridge-state.json",
+  "sms_outbox_path": "data/android-sms-outbox.jsonl",
+  "send_via_outbox": true,
   "read_only": false,
   "store_unanswered_messages": true
 }
 ```
 
-5. Start the in-repo Termux notification collector in a second Termux session:
+If you prefer a custom workflow, you can still override `receive_command` and `send_command` directly.
+
+6. Start the in-repo Termux notification collector in a second Termux session:
 
 ```bash
 python3 -m messaging_llm_bot.termux_notification_collector run \
-  --inbox data/android-events.jsonl \
-  --state-file data/termux-notifications-state.json \
+  --inbox "$HOME/buducca-sync/android-events.jsonl" \
+  --state-file "$HOME/buducca-sync/termux-notifications-state.json" \
   --include-package org.thoughtcrime.securesms \
   --include-package com.whatsapp \
   --interval-seconds 2
@@ -80,30 +94,48 @@ The collector appends lines shaped like:
 {"type":"notification","package_name":"org.thoughtcrime.securesms","app_name":"Signal","title":"Alice","body":"Are you free?","timestamp":"2026-03-18T09:01:00-04:00"}
 ```
 
-If you also want SMS events in the Android bridge, append them to `data/android-events.jsonl` from your own device-side workflow with one JSON object per line:
+If you also want SMS events in the Android bridge, append them to `$HOME/buducca-sync/android-events.jsonl` from your own device-side workflow with one JSON object per line:
 
 ```json
 {"type":"sms","sender_id":"+15551234567","body":"Ping","timestamp":"2026-03-18T09:00:00-04:00"}
 ```
 
-6. Grant SMS permission to `Termux:API` in Android system settings. Open Android Settings, find Apps, open `Termux:API`, open Permissions, and allow SMS. `termux-sms-send` will fail until this is granted.
-7. Verify the receive side by running one collection pass, then reading through the bridge:
+7. Add a small sync loop on the Android device that pushes the inbox file to the server and pulls the SMS outbox file back down. `SERVER`, `REMOTE_DIR`, and the SSH key path are examples:
 
 ```bash
-python3 -m messaging_llm_bot.termux_notification_collector once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
+while true; do
+  scp -q -i "$HOME/.ssh/buducca_android_sync" "$HOME/buducca-sync/android-events.jsonl" "$SERVER:$REMOTE_DIR/android-events.jsonl"
+  scp -q -i "$HOME/.ssh/buducca_android_sync" "$SERVER:$REMOTE_DIR/android-sms-outbox.jsonl" "$HOME/buducca-sync/android-sms-outbox.jsonl"
+  python3 -m messaging_llm_bot.android_client flush-outbox \
+    --outbox "$HOME/buducca-sync/android-sms-outbox.jsonl" \
+    --state-file "$HOME/buducca-sync/android-sms-outbox-state.json"
+  sleep 2
+done
+```
+
+This is intentionally pull-based for SMS delivery: the phone polls the server outbox, sends any new entries, and advances its local cursor.
+
+8. Grant SMS permission to `Termux:API` in Android system settings. Open Android Settings, find Apps, open `Termux:API`, open Permissions, and allow SMS. `termux-sms-send` will fail until this is granted.
+9. Verify the receive side by running one collection pass, then reading through the bridge on the server:
+
+```bash
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
 ```
 
 The second command should print JSON with any newly collected notifications under `"messages"`.
 
-8. Verify the send side:
+10. Verify the send side on the server:
 
 ```bash
-python3 -m messaging_llm_bot.android_client send --recipient +15551234567 --message "BUDUCCA Android bridge test"
+python3 -m messaging_llm_bot.android_client send \
+  --recipient +15551234567 \
+  --message "BUDUCCA Android bridge test" \
+  --outbox data/android-sms-outbox.jsonl
 ```
 
-If this fails, fix `Termux:API` permissions before running the bot.
-9. Start BUDUCCA:
+Then wait for the Android sync loop to pull the outbox entry and transmit it.
+
+11. Start BUDUCCA on the server:
 
 ```bash
 python3 run_bot.py --config config
@@ -114,6 +146,7 @@ Minimum requirements for appended events:
 - One valid JSON object per line in `data/android-events.jsonl`.
 - The bridge only reads new lines and does not fetch SMS or notifications from Android by itself.
 - `python3 -m messaging_llm_bot.termux_notification_collector` is the built-in notification ingester and writes notification events into the file.
+- `python3 -m messaging_llm_bot.android_client send --outbox ...` writes outbound SMS requests into a JSONL outbox file; `flush-outbox` is the device-side sender.
 - SMS events must include enough data for the bridge to derive `conversation_id`, `sender_id`, and message text. The example `type`, `sender_id`, and `body` fields are sufficient.
 - Notification events should use `type: "notification"` and usually include `package_name`, `title`, and `body`.
 
@@ -122,7 +155,7 @@ Operational notes:
 - Set `android.allowed_sender_ids` to the SMS numbers that may trigger agent replies.
 - Leave `store_unanswered_messages` enabled if you want all notification traffic persisted to `workspace/android.messages.recent`.
 - Notifications from non-allowlisted senders are still collected into the recent file, but they are not allowed to trigger replies.
-- SMS replies use `termux-sms-send`, so the device must grant the required SMS permission to `Termux:API`.
+- SMS replies are queued on the server and sent by the Android device with `termux-sms-send`, so the device must grant the required SMS permission to `Termux:API`.
 - The Termux collector can only see notifications that still exist when `termux-notification-list` runs, so use a short poll interval for ephemeral notifications.
 
 ## Telegram

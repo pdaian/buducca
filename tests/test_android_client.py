@@ -6,7 +6,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from messaging_llm_bot.android_client import AndroidClient, AndroidFrontendUnavailableError, main
+from messaging_llm_bot.android_client import (
+    AndroidClient,
+    AndroidFrontendUnavailableError,
+    generate_ssh_key,
+    main,
+)
 from messaging_llm_bot.termux_notification_collector import collect_once
 
 
@@ -60,6 +65,87 @@ class AndroidClientTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def test_main_send_can_queue_sms_to_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+
+            exit_code = main(
+                [
+                    "send",
+                    "--recipient",
+                    "+15550001",
+                    "--message",
+                    "queued",
+                    "--outbox",
+                    str(outbox),
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(payloads), 1)
+            self.assertEqual(payloads[0]["recipient"], "+15550001")
+            self.assertEqual(payloads[0]["message"], "queued")
+
+    def test_main_flush_outbox_sends_only_new_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+            state = Path(td) / "android-sms-state.json"
+            outbox.write_text(
+                json.dumps({"recipient": "+15550001", "message": "first"}) + "\n"
+                + json.dumps({"recipient": "+15550002", "message": "second"}) + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/termux-sms-send"):
+                with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout="", stderr="")
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout):
+                        exit_code = main(
+                            [
+                                "flush-outbox",
+                                "--outbox",
+                                str(outbox),
+                                "--state-file",
+                                str(state),
+                            ]
+                        )
+
+                    self.assertEqual(exit_code, 0)
+                    self.assertEqual(run.call_count, 2)
+                    self.assertEqual(json.loads(stdout.getvalue()), {"delivered": 2})
+
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout):
+                        exit_code = main(
+                            [
+                                "flush-outbox",
+                                "--outbox",
+                                str(outbox),
+                                "--state-file",
+                                str(state),
+                            ]
+                        )
+
+                    self.assertEqual(exit_code, 0)
+                    self.assertEqual(run.call_count, 2)
+                    self.assertEqual(json.loads(stdout.getvalue()), {"delivered": 0})
+
+    def test_generate_ssh_key_returns_public_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            key_path = Path(td) / "android-sync-ed25519"
+            public_key = key_path.with_name(key_path.name + ".pub")
+            public_key.write_text("ssh-ed25519 AAAA example@test\n", encoding="utf-8")
+
+            with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/ssh-keygen"):
+                with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+                    run.return_value = Mock(returncode=0, stdout="", stderr="")
+                    value = generate_ssh_key(private_key_path=key_path, comment="android@test", force=True)
+
+            self.assertEqual(value, "ssh-ed25519 AAAA example@test")
+            run.assert_called_once()
 
     def test_missing_executable_raises_frontend_unavailable(self) -> None:
         client = AndroidClient(receive_command=["missingcmd"], send_command=["python3", "send.py"])

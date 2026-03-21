@@ -64,6 +64,10 @@ class AndroidConfig:
     account: str = "android"
     poll_interval_seconds: float = 1.0
     allowed_sender_ids: list[str] = field(default_factory=list)
+    inbox_path: str = "data/android-events.jsonl"
+    state_file: str = "data/android-bridge-state.json"
+    sms_outbox_path: str = "data/android-sms-outbox.jsonl"
+    send_via_outbox: bool = True
     receive_command: list[str] = field(default_factory=list)
     send_command: list[str] = field(default_factory=list)
     read_only: bool = False
@@ -328,6 +332,12 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
             raise ValueError("android.account must be set")
         if config.android.poll_interval_seconds < 0:
             raise ValueError("android.poll_interval_seconds must be >= 0")
+        if not config.android.inbox_path.strip():
+            raise ValueError("android.inbox_path must be set")
+        if not config.android.state_file.strip():
+            raise ValueError("android.state_file must be set")
+        if config.android.send_via_outbox and not config.android.sms_outbox_path.strip():
+            raise ValueError("android.sms_outbox_path must be set when android.send_via_outbox is true")
 
     valid_contact_platforms = {"telegram", "signal", "whatsapp", "google_fi", "fi", "android"}
     for contact in config.contacts:

@@ -57,8 +57,8 @@ class ConfigTests(unittest.TestCase):
         data = {
             "android": {
                 "account": "phone",
-                "receive_command": ["python3", "-m", "messaging_llm_bot.android_client", "receive"],
-                "send_command": ["python3", "-m", "messaging_llm_bot.android_client", "send", "--recipient", "{recipient}", "--message", "{message}"],
+                "inbox_path": "data/remote-android-events.jsonl",
+                "sms_outbox_path": "data/remote-android-sms-outbox.jsonl",
             },
             "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
         }
@@ -68,6 +68,7 @@ class ConfigTests(unittest.TestCase):
             config = load_config(path)
             self.assertIsNotNone(config.android)
             self.assertIsNone(config.telegram)
+            self.assertTrue(config.android.send_via_outbox)
 
     def test_invalid_missing_token(self) -> None:
         data = {
@@ -245,8 +246,6 @@ class ConfigTests(unittest.TestCase):
             "android": {
                 "account": "phone",
                 "poll_interval_seconds": -1,
-                "receive_command": ["python3", "-m", "messaging_llm_bot.android_client", "receive"],
-                "send_command": ["python3", "-m", "messaging_llm_bot.android_client", "send", "--recipient", "{recipient}", "--message", "{message}"],
             },
             "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
         }
