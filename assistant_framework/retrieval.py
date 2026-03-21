@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from .workspace import Workspace
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+_STRUCTURED_MEMORY_MAX_FILES = 20
+_STRUCTURED_MEMORY_MAX_CHARS = 16_000
+
 @dataclass
 class Evidence:
     path: str
@@ -97,18 +100,49 @@ def format_evidence_context(evidence: list[Evidence]) -> str:
     return "\n".join(lines)
 
 
-def build_structured_memory_context(workspace: Workspace, *, line_limit: int = 50) -> str:
+def build_structured_memory_context(
+    workspace: Workspace,
+    *,
+    line_limit: int = 50,
+    max_files: int = _STRUCTURED_MEMORY_MAX_FILES,
+    max_chars: int = _STRUCTURED_MEMORY_MAX_CHARS,
+) -> str:
     files = _iter_learned_fact_files(workspace)
     lines = ["[Workspace summary]", f"Each preview is a file preview of the last {line_limit} lines of that file."]
     if not files:
         lines.append("No learn-sourced fact files found.")
         return "\n".join(lines)
 
+    remaining_chars = max_chars - len("\n".join(lines))
+    included_files = 0
+    omitted_files = 0
+
     for relative_path in files:
+        if included_files >= max_files or remaining_chars <= 0:
+            omitted_files += 1
+            continue
+
         content = workspace.read_text(relative_path, default="")
         preview = _tail_lines(content, line_limit) if content else ""
-        lines.append(f"File: {relative_path}")
-        lines.append(preview or "(empty file)")
+        section_lines = [f"File: {relative_path}", preview or "(empty file)"]
+        section = "\n".join(section_lines)
+        if len(section) > remaining_chars:
+            if remaining_chars <= len(section_lines[0]) + 1:
+                omitted_files += 1
+                continue
+            truncated_preview_budget = remaining_chars - len(section_lines[0]) - 1
+            truncated_preview = section_lines[1][: max(0, truncated_preview_budget)].rstrip()
+            if truncated_preview and len(truncated_preview) < len(section_lines[1]):
+                truncated_preview = truncated_preview[:-3].rstrip() + "..."
+            section_lines[1] = truncated_preview or "(truncated)"
+            section = "\n".join(section_lines)
+        lines.extend(section_lines)
+        remaining_chars -= len(section) + 1
+        included_files += 1
+
+    omitted_files += max(0, len(files) - included_files - omitted_files)
+    if omitted_files:
+        lines.append(f"... {omitted_files} additional learn-sourced file(s) omitted to keep prompt size bounded.")
     return "\n".join(lines)
 
 
