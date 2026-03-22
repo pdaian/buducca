@@ -3011,7 +3011,9 @@ class BotRunner:
     def _handle_update_locked(self, update: IncomingMessage) -> None:
         backend = getattr(update, "backend", "telegram")
         update_id = getattr(update, "update_id", None)
-        event_id = str(update_id) if update_id is not None else None
+        event_id = self._coerce_event_id(getattr(update, "event_id", None))
+        if event_id is None and update_id is not None:
+            event_id = str(update_id)
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
         conversation_name = getattr(update, "conversation_name", None)
         sender_id = getattr(update, "sender_id", conversation_id)

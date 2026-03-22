@@ -15,6 +15,7 @@ class IncomingAttachment:
 @dataclass(slots=True)
 class IncomingMessage:
     update_id: int
+    event_id: str | None = None
     backend: str = "telegram"
     conversation_id: str = ""
     conversation_name: str | None = None

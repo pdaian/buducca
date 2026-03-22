@@ -78,6 +78,37 @@ class AndroidClientTests(unittest.TestCase):
         self.assertEqual(updates[0].conversation_id, "(646) 374-2069")
         self.assertEqual(updates[0].sender_contact, "(646) 374-2069")
 
+    def test_get_updates_generates_stable_event_id_when_source_event_id_is_missing(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [
+                    {
+                        "type": "notification",
+                        "package_name": "org.example.app",
+                        "title": "Build",
+                        "body": "Finished",
+                        "timestamp": "2026-03-18T09:01:00-04:00",
+                    }
+                ]
+            }
+        )
+        with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/python3"):
+                first_client = AndroidClient(
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                )
+                second_client = AndroidClient(
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                )
+                first_updates = first_client.get_updates()
+                second_updates = second_client.get_updates()
+
+        self.assertEqual(len(first_updates), 1)
+        self.assertEqual(first_updates[0].event_id, second_updates[0].event_id)
+
     def test_send_message_replaces_placeholders(self) -> None:
         with patch("messaging_llm_bot.android_client.subprocess.run") as run:
             run.return_value = Mock(returncode=0, stdout="", stderr="")

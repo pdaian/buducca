@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -132,6 +133,14 @@ class AndroidClient:
 
         return IncomingMessage(
             update_id=self._next_update_id(),
+            event_id=event_id or self._fallback_event_id(
+                channel=channel,
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=text_value,
+                sent_at=sent_at,
+                is_outgoing=bool(item.get("is_outgoing", False)),
+            ),
             backend="android",
             conversation_id=conversation_id,
             sender_id=sender_id,
@@ -142,6 +151,29 @@ class AndroidClient:
             event_type=channel,
             is_outgoing=bool(item.get("is_outgoing", False)),
         )
+
+    @staticmethod
+    def _fallback_event_id(
+        *,
+        channel: str,
+        conversation_id: str,
+        sender_id: str,
+        text: str,
+        sent_at: str | None,
+        is_outgoing: bool,
+    ) -> str:
+        raw = "\n".join(
+            (
+                "android",
+                channel,
+                conversation_id,
+                sender_id,
+                sent_at or "",
+                "1" if is_outgoing else "0",
+                text,
+            )
+        )
+        return f"android:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
     def _next_update_id(self) -> int:
         self._update_counter += 1
