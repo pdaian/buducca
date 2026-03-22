@@ -140,16 +140,16 @@ Create `config/android.json` from the example and set the exact SMS numbers that
 }
 ```
 
-Copy `run_client.py` to the phone and start the built-in Termux client:
+Copy `scripts/run_client.py` to the phone. Running it with no arguments prints the built-in setup guide. Then start the built-in Termux client:
 
 ```bash
-python3 run_client.py run \
+export BUDUCCA_REMOTE_HOST="$SERVER"
+export BUDUCCA_REMOTE_DIR="$REMOTE_DIR"
+python3 scripts/run_client.py run \
   --inbox data/android-events.jsonl \
   --notification-state-file data/termux-notifications-state.json \
   --outbox data/android-sms-outbox.jsonl \
   --outbox-state-file data/android-sms-outbox-state.json \
-  --remote-host "$SERVER" \
-  --remote-dir "$REMOTE_DIR" \
   --ssh-key "$HOME/.ssh/buducca_android_sync" \
   --include-package org.thoughtcrime.securesms \
   --include-package com.whatsapp \
@@ -169,7 +169,7 @@ Grant SMS permission to `Termux:API` before testing send. On the phone, open And
 Verify the receive bridge by running one collection pass and reading it:
 
 ```bash
-python3 run_client.py collect-notifications once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
+python3 scripts/run_client.py collect-notifications once --inbox data/android-events.jsonl --state-file data/termux-notifications-state.json
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
 ```
 

@@ -74,6 +74,7 @@ In chat, the built-in operator commands are `/status` and `/skill`. Frontend det
 Remote Android note:
 
 - The Android/Termux frontend supports a server-side inbox plus SMS outbox flow now. A Termux device can generate its own SSH key, push notification/SMS JSONL files to a limited server account, pull queued SMS commands back down, and send them locally via `Termux:API`. Setup details, file permissions, and the exact commands are in [docs/frontends.md](docs/frontends.md).
+- The Android helper now lives at [`scripts/run_client.py`](scripts/run_client.py). Running it with no arguments prints the setup guide and default local file layout.
 
 ## Documentation map
 

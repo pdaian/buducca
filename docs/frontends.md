@@ -11,7 +11,7 @@ Android support is command-driven like Signal and WhatsApp. The production path 
 - `termux-notification-list` polling for notification ingestion with no third-party automation app.
 - a limited SSH account on the server so the phone can push event files and pull an SMS outbox file
 
-The server-side bridge is still `python3 -m messaging_llm_bot.android_client`. On the Android device, use the self-contained `run_client.py` file from this repo. It supports:
+The server-side bridge is still `python3 -m messaging_llm_bot.android_client`. On the Android device, use the self-contained `scripts/run_client.py` file from this repo. It supports:
 
 - `generate-ssh-key`: create the SSH key used by the phone
 - `collect-notifications`: poll `termux-notification-list` and append only newly seen notifications
@@ -40,22 +40,19 @@ pkg update
 pkg install python termux-api openssh
 ```
 
-3. Copy `run_client.py` onto the Android device. Then generate an SSH key on the Android device and copy the printed public key into the limited server account's `authorized_keys`:
+3. Copy `scripts/run_client.py` onto the Android device. Running it with no arguments prints the built-in setup guide. Then generate an SSH key on the Android device and copy the printed public key into the limited server account's `authorized_keys`:
 
 ```bash
-python3 run_client.py generate-ssh-key \
+python3 scripts/run_client.py generate-ssh-key \
   --private-key $HOME/.ssh/buducca_android_sync
 ```
 
 The limited server account only needs read/write access to the Android sync directory. The bot process needs local access to that same directory on the server.
 
-4. On the Android device, create the local sync directory and make the spool files world readable and writable if you want other local processes to append to them exactly as-is:
+4. On the Android device, create the local sync directory if you want to inspect the files manually. The client will create the spool files automatically:
 
 ```bash
 mkdir -p "$HOME/buducca-sync"
-: > "$HOME/buducca-sync/android-events.jsonl"
-: > "$HOME/buducca-sync/android-sms-outbox.jsonl"
-chmod 666 "$HOME/buducca-sync/android-events.jsonl" "$HOME/buducca-sync/android-sms-outbox.jsonl"
 ```
 
 5. On the server, create `config/android.json` and point it at the synced files:
@@ -76,16 +73,16 @@ chmod 666 "$HOME/buducca-sync/android-events.jsonl" "$HOME/buducca-sync/android-
 
 If you prefer a custom workflow, you can still override `receive_command` and `send_command` directly.
 
-6. Start the self-contained Termux client:
+6. Export the sync target or pass it explicitly, then start the self-contained Termux client:
 
 ```bash
-python3 run_client.py run \
+export BUDUCCA_REMOTE_HOST="$SERVER"
+export BUDUCCA_REMOTE_DIR="$REMOTE_DIR"
+python3 scripts/run_client.py run \
   --inbox "$HOME/buducca-sync/android-events.jsonl" \
   --notification-state-file "$HOME/buducca-sync/termux-notifications-state.json" \
   --outbox "$HOME/buducca-sync/android-sms-outbox.jsonl" \
   --outbox-state-file "$HOME/buducca-sync/android-sms-outbox-state.json" \
-  --remote-host "$SERVER" \
-  --remote-dir "$REMOTE_DIR" \
   --ssh-key "$HOME/.ssh/buducca_android_sync" \
   --include-package org.thoughtcrime.securesms \
   --include-package com.whatsapp \
@@ -110,7 +107,7 @@ If you also want SMS events in the Android bridge, append them to `$HOME/buducca
 8. Verify the receive side by running one collection pass on the phone, then reading through the bridge on the server:
 
 ```bash
-python3 run_client.py collect-notifications once \
+python3 scripts/run_client.py collect-notifications once \
   --inbox "$HOME/buducca-sync/android-events.jsonl" \
   --state-file "$HOME/buducca-sync/termux-notifications-state.json"
 python3 -m messaging_llm_bot.android_client receive --inbox data/android-events.jsonl --state-file data/android-bridge-state.json
@@ -130,12 +127,10 @@ python3 -m messaging_llm_bot.android_client send \
 Then run one sync pass on the phone or wait for the main loop to pull the outbox entry and transmit it:
 
 ```bash
-python3 run_client.py sync once \
+python3 scripts/run_client.py sync once \
   --inbox "$HOME/buducca-sync/android-events.jsonl" \
   --outbox "$HOME/buducca-sync/android-sms-outbox.jsonl" \
   --outbox-state-file "$HOME/buducca-sync/android-sms-outbox-state.json" \
-  --remote-host "$SERVER" \
-  --remote-dir "$REMOTE_DIR" \
   --ssh-key "$HOME/.ssh/buducca_android_sync"
 ```
 
@@ -149,8 +144,8 @@ Minimum requirements for appended events:
 
 - One valid JSON object per line in `data/android-events.jsonl`.
 - The bridge only reads new lines and does not fetch SMS or notifications from Android by itself.
-- `python3 run_client.py collect-notifications ...` is the built-in notification ingester on the phone.
-- `python3 -m messaging_llm_bot.android_client send --outbox ...` writes outbound SMS requests into a JSONL outbox file; `python3 run_client.py sync ...` is the device-side sender.
+- `python3 scripts/run_client.py collect-notifications ...` is the built-in notification ingester on the phone.
+- `python3 -m messaging_llm_bot.android_client send --outbox ...` writes outbound SMS requests into a JSONL outbox file; `python3 scripts/run_client.py sync ...` is the device-side sender.
 - SMS events must include enough data for the bridge to derive `conversation_id`, `sender_id`, and message text. The example `type`, `sender_id`, and `body` fields are sufficient.
 - Notification events should use `type: "notification"` and usually include `package_name`, `title`, and `body`.
 
