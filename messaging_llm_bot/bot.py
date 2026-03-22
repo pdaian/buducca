@@ -157,6 +157,11 @@ class BotRunner:
             set(config.whatsapp.allowed_group_ids_when_sender_not_allowed) if config.whatsapp else set()
         )
         self._allowed_android_sender_ids = set(config.android.allowed_sender_ids) if config.android else set()
+        self._allowed_android_sender_ids_normalized = {
+            self._normalize_android_identifier(sender_id)
+            for sender_id in self._allowed_android_sender_ids
+            if self._normalize_android_identifier(sender_id)
+        }
         self._telegram_offset: int | None = None
         self._offset: int | None = None
         self._telegram_conflict_logged_at: float | None = None
@@ -2825,6 +2830,9 @@ class BotRunner:
                 return True
             if sender_id in self._allowed_android_sender_ids:
                 return True
+            normalized_sender_id = self._normalize_android_identifier(sender_id)
+            if normalized_sender_id and normalized_sender_id in self._allowed_android_sender_ids_normalized:
+                return True
             logging.warning(
                 "Blocked message from unauthorized android sender_id=%s conversation_id=%s",
                 sender_id,
@@ -2846,6 +2854,18 @@ class BotRunner:
     @staticmethod
     def _normalize_signal_identifier(identifier: str) -> str:
         return "".join(ch for ch in identifier if ch == "+" or ch.isdigit())
+
+    @staticmethod
+    def _normalize_android_identifier(identifier: str) -> str:
+        normalized = "".join(ch for ch in identifier if ch == "+" or ch.isdigit())
+        digits = "".join(ch for ch in normalized if ch.isdigit())
+        if not digits:
+            return identifier.strip()
+        if len(digits) == 10:
+            return f"+1{digits}"
+        if normalized.startswith("+"):
+            return f"+{digits}"
+        return digits
 
     def _remember_contact_mapping(
         self,

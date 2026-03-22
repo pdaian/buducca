@@ -269,6 +269,34 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.android.sent, [("+15550001", "hello from android")])
 
+    def test_android_authorized_message_supports_phone_number_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                android=AndroidConfig(
+                    account="android",
+                    allowed_sender_ids=["+16463742069"],
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.android = DummyAndroid()
+            bot.llm = DummyLLM("hello from android")
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    backend="android",
+                    conversation_id="(646) 374-2069",
+                    sender_id="(646) 374-2069",
+                    text="collect me",
+                )
+            )
+
+            self.assertEqual(bot.android.sent, [("(646) 374-2069", "hello from android")])
+
     def test_replied_message_logs_agenta_query(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
