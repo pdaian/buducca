@@ -10,6 +10,7 @@ import run_client
 from messaging_llm_bot.android_client import (
     AndroidClient,
     AndroidFrontendUnavailableError,
+    MAX_ANDROID_OUTBOX_LINES,
     generate_ssh_key,
     main,
 )
@@ -116,6 +117,53 @@ class AndroidClientTests(unittest.TestCase):
             self.assertEqual(payloads[0]["recipient"], "+15550001")
             self.assertEqual(payloads[0]["message"], "queued")
 
+    def test_main_send_normalizes_us_sms_recipient_when_queueing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+
+            exit_code = main(
+                [
+                    "send",
+                    "--recipient",
+                    "(646) 374-2069",
+                    "--message",
+                    "queued",
+                    "--outbox",
+                    str(outbox),
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(payloads[0]["recipient"], "+16463742069")
+
+    def test_main_send_limits_outbox_to_latest_50_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+            existing = [
+                json.dumps({"recipient": f"+1555000{index:02d}", "message": f"old-{index}"}, ensure_ascii=False)
+                for index in range(MAX_ANDROID_OUTBOX_LINES)
+            ]
+            outbox.write_text("\n".join(existing) + "\n", encoding="utf-8")
+
+            exit_code = main(
+                [
+                    "send",
+                    "--recipient",
+                    "+15559999999",
+                    "--message",
+                    "newest",
+                    "--outbox",
+                    str(outbox),
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(payloads), MAX_ANDROID_OUTBOX_LINES)
+            self.assertEqual(payloads[0]["message"], "old-1")
+            self.assertEqual(payloads[-1]["message"], "newest")
+
     def test_main_flush_outbox_sends_only_new_messages(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             outbox = Path(td) / "android-sms-outbox.jsonl"
@@ -160,6 +208,29 @@ class AndroidClientTests(unittest.TestCase):
                     self.assertEqual(exit_code, 0)
                     self.assertEqual(run.call_count, 2)
                     self.assertEqual(json.loads(stdout.getvalue()), {"delivered": 0})
+
+    def test_main_send_normalizes_us_sms_recipient_for_direct_send(self) -> None:
+        with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/termux-sms-send"):
+            with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+                run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+                exit_code = main(
+                    [
+                        "send",
+                        "--recipient",
+                        "(646) 374-2069",
+                        "--message",
+                        "queued",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once_with(
+            ["termux-sms-send", "-n", "+16463742069", "queued"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def test_generate_ssh_key_returns_public_key(self) -> None:
         with tempfile.TemporaryDirectory() as td:

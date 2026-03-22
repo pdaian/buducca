@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ DEFAULT_ANDROID_STATE_FILE = "data/android-bridge-state.json"
 DEFAULT_ANDROID_OUTBOX = "data/android-sms-outbox.jsonl"
 DEFAULT_ANDROID_OUTBOX_STATE_FILE = "data/android-sms-outbox-state.json"
 DEFAULT_ANDROID_SSH_KEY = "data/android-sync-ed25519"
+MAX_ANDROID_OUTBOX_LINES = 50
 
 
 class AndroidFrontendUnavailableError(RuntimeError):
@@ -189,6 +191,15 @@ def _save_offset(path: Path, offset: int) -> None:
     path.write_text(json.dumps({"offset": max(0, offset)}) + "\n", encoding="utf-8")
 
 
+def _trim_jsonl_file(path: Path, *, max_lines: int) -> None:
+    if max_lines <= 0 or not path.exists():
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= max_lines:
+        return
+    path.write_text("\n".join(lines[-max_lines:]) + "\n", encoding="utf-8")
+
+
 def _jsonl_messages(inbox_path: Path, *, start_offset: int) -> tuple[list[dict[str, Any]], int]:
     if not inbox_path.exists():
         return [], 0
@@ -242,12 +253,30 @@ def receive_events(*, inbox_path: Path, state_path: Path) -> dict[str, list[dict
     return {"messages": messages}
 
 
+def _normalize_sms_recipient(recipient: str) -> str:
+    value = recipient.strip()
+    if not value:
+        return ""
+    if value.startswith("+"):
+        digits = re.sub(r"\D", "", value)
+        return f"+{digits}" if digits else ""
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+1{digits}"
+    return value
+
+
 def send_sms(*, recipient: str, message: str, sms_command: str) -> None:
+    normalized_recipient = _normalize_sms_recipient(recipient)
+    if not normalized_recipient:
+        raise RuntimeError("Android SMS send failed: recipient must not be blank")
     if not which(sms_command):
         raise AndroidFrontendUnavailableError(
             f"Android SMS send failed: executable {sms_command!r} was not found in PATH"
         )
-    proc = subprocess.run([sms_command, "-n", recipient, message], capture_output=True, text=True, check=False)
+    proc = subprocess.run([sms_command, "-n", normalized_recipient, message], capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         stderr = proc.stderr.strip() or proc.stdout.strip() or "no stderr"
         raise RuntimeError(f"Android SMS send failed: {stderr}")
@@ -255,13 +284,15 @@ def send_sms(*, recipient: str, message: str, sms_command: str) -> None:
 
 def queue_sms(*, recipient: str, message: str, outbox_path: Path) -> None:
     outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_recipient = _normalize_sms_recipient(recipient)
     payload = {
-        "recipient": recipient,
+        "recipient": normalized_recipient,
         "message": message,
         "queued_at": datetime.now(timezone.utc).isoformat(),
     }
     with outbox_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    _trim_jsonl_file(outbox_path, max_lines=MAX_ANDROID_OUTBOX_LINES)
 
 
 def flush_sms_outbox(*, outbox_path: Path, state_path: Path, sms_command: str) -> int:
