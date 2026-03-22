@@ -218,9 +218,13 @@ def _dismiss_notification(item: dict[str, Any], *, dismiss_command: str) -> None
     notification_id = _first_text(item.get("id"), item.get("notificationId"))
     if not notification_id:
         return
+    command = [dismiss_command]
+    if notification_id.startswith("-"):
+        command.append("--")
+    command.append(notification_id)
     try:
         _run_command(
-            [dismiss_command, notification_id],
+            command,
             missing_message=f"notification dismiss failed: executable {dismiss_command!r} was not found in PATH",
             error_prefix="notification dismiss failed",
         )

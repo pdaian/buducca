@@ -451,6 +451,37 @@ class RunClientTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
             self.assertEqual(run.call_args_list[1].args[0], ["termux-notification-remove", "41"])
 
+    def test_run_client_collect_notifications_dismisses_negative_ids_with_end_of_options(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            payload = json.dumps(
+                [
+                    {
+                        "packageName": "org.example.chat",
+                        "id": -1,
+                        "title": "Alice",
+                        "content": "hello",
+                    }
+                ]
+            )
+
+            with patch("run_client.which", return_value="/usr/bin/termux"):
+                with patch("run_client.subprocess.run") as run:
+                    run.side_effect = [
+                        Mock(returncode=0, stdout=payload, stderr=""),
+                        Mock(returncode=0, stdout="", stderr=""),
+                    ]
+                    appended = run_client.collect_notifications_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+
+            self.assertEqual(appended, 1)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[1].args[0], ["termux-notification-remove", "--", "-1"])
+
     def test_run_client_collect_notifications_limits_inbox_to_latest_100_lines(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             inbox = Path(td) / "android-events.jsonl"
