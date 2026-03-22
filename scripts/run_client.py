@@ -23,6 +23,8 @@ DEFAULT_REMOTE_HOST_ENV = "BUDUCCA_REMOTE_HOST"
 DEFAULT_REMOTE_DIR_ENV = "BUDUCCA_REMOTE_DIR"
 DEFAULT_REMOTE_DIR = "/srv/buducca/android"
 DEFAULT_SSH_KEY_COMMENT = "buducca-android-sync"
+DEFAULT_NOTIFICATION_DISMISS_COMMAND = "termux-notification-remove"
+MAX_ANDROID_EVENT_LINES = 100
 
 
 class ClientError(RuntimeError):
@@ -37,6 +39,15 @@ def _ensure_jsonl_file(path: Path) -> None:
     _ensure_parent(path)
     if not path.exists():
         path.touch()
+
+
+def _trim_jsonl_file(path: Path, *, max_lines: int) -> None:
+    if max_lines <= 0 or not path.exists():
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= max_lines:
+        return
+    path.write_text("\n".join(lines[-max_lines:]) + "\n", encoding="utf-8")
 
 
 def _config_payload(path: Path) -> dict[str, Any]:
@@ -203,6 +214,20 @@ def _normalize_notification(item: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _dismiss_notification(item: dict[str, Any], *, dismiss_command: str) -> None:
+    notification_id = _first_text(item.get("id"), item.get("notificationId"))
+    if not notification_id:
+        return
+    try:
+        _run_command(
+            [dismiss_command, notification_id],
+            missing_message=f"notification dismiss failed: executable {dismiss_command!r} was not found in PATH",
+            error_prefix="notification dismiss failed",
+        )
+    except ClientError as exc:
+        print(str(exc), file=sys.stderr)
+
+
 def _run_command(command: list[str], *, missing_message: str, error_prefix: str) -> subprocess.CompletedProcess[str]:
     executable = command[0]
     if "/" not in executable and which(executable) is None:
@@ -222,6 +247,7 @@ def collect_notifications_once(
     inbox_path: Path,
     state_path: Path,
     notification_command: str,
+    notification_dismiss_command: str = DEFAULT_NOTIFICATION_DISMISS_COMMAND,
     include_packages: set[str] | None = None,
 ) -> int:
     include_packages = _normalize_include_packages(include_packages)
@@ -240,6 +266,7 @@ def collect_notifications_once(
     previous_keys = _load_seen_keys(state_path)
     current_keys: set[str] = set()
     events: list[dict[str, Any]] = []
+    dismiss_items: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
@@ -255,13 +282,17 @@ def collect_notifications_once(
         normalized = _normalize_notification(item)
         if normalized:
             events.append(normalized)
+            dismiss_items.append(item)
 
     if events:
         _ensure_parent(inbox_path)
         with inbox_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        _trim_jsonl_file(inbox_path, max_lines=MAX_ANDROID_EVENT_LINES)
     _save_seen_keys(state_path, current_keys)
+    for item in dismiss_items:
+        _dismiss_notification(item, dismiss_command=notification_dismiss_command)
     return len(events)
 
 
@@ -393,6 +424,7 @@ def run_client_loop(
     ssh_key: str,
     sms_command: str,
     notification_command: str,
+    notification_dismiss_command: str,
     include_packages: set[str] | None,
     scp_command: str,
     interval_seconds: float,
@@ -406,6 +438,7 @@ def run_client_loop(
             inbox_path=inbox_path,
             state_path=notification_state_path,
             notification_command=notification_command,
+            notification_dismiss_command=notification_dismiss_command,
             include_packages=include_packages,
         )
         sync_once(
@@ -527,6 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--inbox", default=DEFAULT_INBOX)
     collect.add_argument("--state-file", default=DEFAULT_NOTIFICATION_STATE_FILE)
     collect.add_argument("--notification-command", default="termux-notification-list")
+    collect.add_argument("--notification-dismiss-command", default=DEFAULT_NOTIFICATION_DISMISS_COMMAND)
     collect.add_argument("--include-package", action="append", default=[])
     collect_subparsers = collect.add_subparsers(dest="collect_command", required=True)
     collect_subparsers.add_parser("once", help="Collect notifications once")
@@ -557,6 +591,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--ssh-key", default=DEFAULT_SSH_KEY)
     run.add_argument("--sms-command", default="termux-sms-send")
     run.add_argument("--notification-command", default="termux-notification-list")
+    run.add_argument("--notification-dismiss-command", default=DEFAULT_NOTIFICATION_DISMISS_COMMAND)
     run.add_argument("--include-package", action="append", default=[])
     run.add_argument("--scp-command", default="scp")
     run.add_argument("--interval-seconds", type=float, default=2.0)
@@ -601,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
                     inbox_path=Path(args.inbox),
                     state_path=Path(args.state_file),
                     notification_command=args.notification_command,
+                    notification_dismiss_command=args.notification_dismiss_command,
                     include_packages=include_packages,
                 )
                 print(json.dumps({"appended": appended}, ensure_ascii=False))
@@ -612,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
                     inbox_path=Path(args.inbox),
                     state_path=Path(args.state_file),
                     notification_command=args.notification_command,
+                    notification_dismiss_command=args.notification_dismiss_command,
                     include_packages=include_packages,
                 )
                 print(json.dumps({"appended": appended}, ensure_ascii=False))
@@ -663,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
                 ssh_key=args.ssh_key,
                 sms_command=args.sms_command,
                 notification_command=args.notification_command,
+                notification_dismiss_command=args.notification_dismiss_command,
                 include_packages=_normalize_include_packages(args.include_package),
                 scp_command=args.scp_command,
                 interval_seconds=args.interval_seconds,

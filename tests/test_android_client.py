@@ -322,6 +322,75 @@ class RunClientTests(unittest.TestCase):
             self.assertEqual(len(written), 1)
             self.assertEqual(written[0]["package_name"], "org.example.chat")
 
+    def test_run_client_collect_notifications_dismisses_logged_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            payload = json.dumps(
+                [
+                    {
+                        "packageName": "org.example.chat",
+                        "id": 41,
+                        "title": "Alice",
+                        "content": "hello",
+                    }
+                ]
+            )
+
+            with patch("run_client.which", return_value="/usr/bin/termux"):
+                with patch("run_client.subprocess.run") as run:
+                    run.side_effect = [
+                        Mock(returncode=0, stdout=payload, stderr=""),
+                        Mock(returncode=0, stdout="", stderr=""),
+                    ]
+                    appended = run_client.collect_notifications_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+
+            self.assertEqual(appended, 1)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[1].args[0], ["termux-notification-remove", "41"])
+
+    def test_run_client_collect_notifications_limits_inbox_to_latest_100_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "termux-state.json"
+            existing = [
+                json.dumps({"type": "notification", "title": f"old-{index}"}, ensure_ascii=False)
+                for index in range(100)
+            ]
+            inbox.write_text("\n".join(existing) + "\n", encoding="utf-8")
+            payload = json.dumps(
+                [
+                    {
+                        "packageName": "org.example.chat",
+                        "id": 42,
+                        "title": "newest",
+                        "content": "hello",
+                    }
+                ]
+            )
+
+            with patch("run_client.which", return_value="/usr/bin/termux"):
+                with patch("run_client.subprocess.run") as run:
+                    run.side_effect = [
+                        Mock(returncode=0, stdout=payload, stderr=""),
+                        Mock(returncode=0, stdout="", stderr=""),
+                    ]
+                    appended = run_client.collect_notifications_once(
+                        inbox_path=inbox,
+                        state_path=state,
+                        notification_command="termux-notification-list",
+                    )
+
+            self.assertEqual(appended, 1)
+            written = [json.loads(line) for line in inbox.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(written), run_client.MAX_ANDROID_EVENT_LINES)
+            self.assertEqual(written[0]["title"], "old-1")
+            self.assertEqual(written[-1]["title"], "newest")
+
     def test_run_client_sync_once_pushes_pulls_and_flushes_outbox(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             inbox = Path(td) / "android-events.jsonl"
