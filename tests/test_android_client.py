@@ -50,6 +50,33 @@ class AndroidClientTests(unittest.TestCase):
         self.assertEqual(updates[1].sender_id, "notif:org.example.app")
         self.assertIn("[Notification]", updates[1].text or "")
 
+    def test_get_updates_uses_contact_for_sms_notification_sender(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [
+                    {
+                        "type": "notification",
+                        "package_name": "com.google.android.apps.messaging",
+                        "title": "(646) 374-2069",
+                        "body": "tesst",
+                    }
+                ]
+            }
+        )
+        with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/python3"):
+                client = AndroidClient(
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                )
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].sender_id, "(646) 374-2069")
+        self.assertEqual(updates[0].conversation_id, "(646) 374-2069")
+        self.assertEqual(updates[0].sender_contact, "(646) 374-2069")
+
     def test_send_message_replaces_placeholders(self) -> None:
         with patch("messaging_llm_bot.android_client.subprocess.run") as run:
             run.return_value = Mock(returncode=0, stdout="", stderr="")

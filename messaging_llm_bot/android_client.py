@@ -24,6 +24,14 @@ class AndroidFrontendUnavailableError(RuntimeError):
 
 
 class AndroidClient:
+    _SMS_NOTIFICATION_PACKAGES = frozenset(
+        {
+            "com.google.android.apps.messaging",
+            "com.samsung.android.messaging",
+            "com.android.mms",
+        }
+    )
+
     def __init__(self, receive_command: list[str], send_command: list[str]) -> None:
         self.receive_command = receive_command
         self.send_command = send_command
@@ -104,7 +112,11 @@ class AndroidClient:
             title = self._first_text(item.get("title"))
             body = self._first_text(item.get("body"), item.get("text"), item.get("message"))
             text_value = self._compose_notification_text(title=title, body=body, package_name=package_name)
-            sender_id = sender_id or (f"notif:{package_name}" if package_name else "notif:android")
+            notification_sender = self._first_text(item.get("sender_contact"), item.get("contact"), title)
+            if package_name in self._SMS_NOTIFICATION_PACKAGES and notification_sender:
+                sender_id = notification_sender
+            else:
+                sender_id = sender_id or (f"notif:{package_name}" if package_name else "notif:android")
             conversation_id = conversation_id or sender_id
             sender_name = sender_name or package_name or "Android notification"
             sender_contact = sender_contact or sender_name
