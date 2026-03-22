@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError
 
 from assistant_framework.workspace import Workspace
 from collectors.google_calendar import register_collector as register_calendar_collector
@@ -184,6 +185,48 @@ class NewCollectorsTests(unittest.TestCase):
 
             mocked.assert_not_called()
             self.assertEqual(workspace.read_text("reddit/python.top.day.jsonl"), "")
+
+    def test_reddit_retries_blocked_primary_endpoint_with_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Workspace(td)
+            collector = register_reddit_collector({"subreddits": ["python"]})
+            payload = {
+                "data": {
+                    "children": [
+                        {
+                            "data": {
+                                "id": "abc123",
+                                "name": "t3_abc123",
+                                "title": "Fallback worked",
+                                "author": "alice",
+                                "selftext": "",
+                                "url": "https://example.com/post",
+                                "permalink": "/r/python/comments/abc123/fallback_worked/",
+                                "created_utc": 1700000000,
+                                "score": 42,
+                                "upvote_ratio": 0.98,
+                                "num_comments": 7,
+                                "over_18": False,
+                            }
+                        }
+                    ]
+                }
+            }
+
+            from unittest.mock import patch
+
+            def _fake_urlopen(request, timeout=20):
+                if request.full_url.startswith("https://api.reddit.com/"):
+                    raise HTTPError(request.full_url, 403, "Blocked", hdrs=None, fp=None)
+                if request.full_url.startswith("https://old.reddit.com/"):
+                    return _FakeResponse(payload)
+                raise AssertionError(request.full_url)
+
+            with patch("collectors.reddit_top.urlopen", side_effect=_fake_urlopen):
+                collector["run"](workspace)
+
+            output = workspace.read_text("reddit/python.top.day.jsonl")
+            self.assertIn('"title": "Fallback worked"', output)
 
     def test_news_headlines_collects_recent_items_and_balances_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:

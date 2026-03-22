@@ -2,7 +2,7 @@
 
 Collects the public top 100 posts from the last 24 hours for each configured subreddit.
 
-It uses Reddit's public JSON endpoint with the Python standard library. No account, OAuth flow, or third-party package is required.
+It uses Reddit's public JSON endpoints with the Python standard library. No account, OAuth flow, or third-party package is required. The collector prefers `api.reddit.com` and falls back to `old.reddit.com` or `www.reddit.com` if a hostname is blocked.
 
 ## Setup
 1. Add `collectors.reddit_top.subreddits` in your collector config.

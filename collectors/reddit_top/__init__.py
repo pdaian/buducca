@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -19,7 +20,12 @@ OUTPUT_DIR = "reddit"
 STATUS_DIR = "collectors/reddit_top/status"
 FILE_STRUCTURE = ["collectors/reddit_top/__init__.py", "collectors/reddit_top/README.md"]
 GENERATED_FILES = [OUTPUT_DIR, STATUS_DIR, f"collected/normalized/{NAME}.jsonl"]
-USER_AGENT = "buducca-reddit-collector/1.0"
+USER_AGENT = "Mozilla/5.0 (compatible; buducca-reddit-collector/1.0; +https://github.com/)"
+REDDIT_TOP_ENDPOINTS = (
+    "https://api.reddit.com/r/{subreddit}/top.json?{query}",
+    "https://old.reddit.com/r/{subreddit}/top.json?{query}",
+    "https://www.reddit.com/r/{subreddit}/top.json?{query}",
+)
 SUBREDDIT_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -171,12 +177,29 @@ def _load_status(workspace: Workspace, subreddit: str) -> dict[str, Any]:
 
 def _fetch_top_posts(subreddit: str, *, timeout_seconds: float, user_agent: str) -> list[dict[str, Any]]:
     query = urlencode({"t": "day", "limit": 100, "raw_json": 1})
-    request = Request(
-        f"https://www.reddit.com/r/{subreddit}/top.json?{query}",
-        headers={"User-Agent": user_agent, "Accept": "application/json"},
-    )
-    with urlopen(request, timeout=timeout_seconds) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    last_error: Exception | None = None
+    payload: dict[str, Any] | None = None
+
+    for endpoint in REDDIT_TOP_ENDPOINTS:
+        request = Request(endpoint.format(subreddit=subreddit, query=query), headers=headers)
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code != 403:
+                raise
+
+    if payload is None:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"failed to fetch subreddit: {subreddit}")
 
     children = payload.get("data", {}).get("children", [])
     posts: list[dict[str, Any]] = []
