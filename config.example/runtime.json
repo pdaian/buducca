@@ -1,6 +1,7 @@
 {
   "request_timeout_seconds": 300,
   "log_level": "INFO",
+  "max_skill_chain_steps": 12,
   "workspace_dir": "workspace",
   "collector_status_file": "collector_status.json",
   "hourly_file": "hourly",

@@ -48,7 +48,6 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
-_MAX_SKILL_CHAIN_STEPS = 12
 _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
 _TYPING_ACTION_INTERVAL_SECONDS = 4
 _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS = 5.0
@@ -1759,7 +1758,8 @@ class BotRunner:
         main_prompt_block = ""
         if prompt and prompt[-1].get("role") == "user":
             main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
-        for step_index in range(_MAX_SKILL_CHAIN_STEPS):
+        max_skill_chain_steps = self.config.runtime.max_skill_chain_steps
+        for step_index in range(max_skill_chain_steps):
             skill_call = self._try_parse_skill_call(model_reply)
             if not skill_call:
                 return model_reply
@@ -1801,7 +1801,7 @@ class BotRunner:
                 logging.debug(
                     "Skill chain step %s/%s prompt before intermediate LLM call: %s",
                     step_index + 1,
-                    _MAX_SKILL_CHAIN_STEPS,
+                    max_skill_chain_steps,
                     prompt,
                 )
             model_reply = self._strip_think_blocks(
@@ -1819,14 +1819,14 @@ class BotRunner:
                 logging.debug(
                     "Skill chain step %s/%s intermediate LLM response: %s",
                     step_index + 1,
-                    _MAX_SKILL_CHAIN_STEPS,
+                    max_skill_chain_steps,
                     model_reply,
                 )
 
             if skill_call["done"] and requires_llm_response:
                 return model_reply
 
-        logging.warning("Skill chain exceeded max steps (%s)", _MAX_SKILL_CHAIN_STEPS)
+        logging.warning("Skill chain exceeded max steps (%s)", max_skill_chain_steps)
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
 
     def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:

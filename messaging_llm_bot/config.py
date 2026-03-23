@@ -96,6 +96,7 @@ class RuntimeConfig:
     request_timeout_seconds: float = 30.0
     log_level: str = "INFO"
     debug: bool = False
+    max_skill_chain_steps: int = 12
     workspace_dir: str = "workspace"
     collector_status_file: str = "collector_status.json"
     hourly_file: str = "hourly"
@@ -343,6 +344,8 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("llm.system_prompt_timezone must be a valid IANA timezone") from exc
     if config.runtime.request_timeout_seconds <= 0:
         raise ValueError("runtime.request_timeout_seconds must be > 0")
+    if config.runtime.max_skill_chain_steps <= 0:
+        raise ValueError("runtime.max_skill_chain_steps must be > 0")
     if not config.runtime.hourly_file.strip():
         raise ValueError("runtime.hourly_file must be set")
     if not config.runtime.hourly_status_file.strip():
