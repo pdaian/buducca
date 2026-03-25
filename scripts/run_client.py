@@ -246,6 +246,10 @@ def _run_command(command: list[str], *, missing_message: str, error_prefix: str)
     return proc
 
 
+def _log_loop_failure(prefix: str, exc: BaseException) -> None:
+    print(f"{prefix}: {exc}", file=sys.stderr)
+
+
 def collect_notifications_once(
     *,
     inbox_path: Path,
@@ -438,23 +442,29 @@ def run_client_loop(
     _ensure_jsonl_file(inbox_path)
     _ensure_jsonl_file(outbox_path)
     while True:
-        collect_notifications_once(
-            inbox_path=inbox_path,
-            state_path=notification_state_path,
-            notification_command=notification_command,
-            notification_dismiss_command=notification_dismiss_command,
-            include_packages=include_packages,
-        )
-        sync_once(
-            local_inbox=inbox_path,
-            local_outbox=outbox_path,
-            remote_host=remote_host,
-            remote_dir=remote_dir,
-            ssh_key=ssh_key,
-            sms_command=sms_command,
-            outbox_state_path=outbox_state_path,
-            scp_command=scp_command,
-        )
+        try:
+            collect_notifications_once(
+                inbox_path=inbox_path,
+                state_path=notification_state_path,
+                notification_command=notification_command,
+                notification_dismiss_command=notification_dismiss_command,
+                include_packages=include_packages,
+            )
+        except Exception as exc:
+            _log_loop_failure("notification collection failed", exc)
+        try:
+            sync_once(
+                local_inbox=inbox_path,
+                local_outbox=outbox_path,
+                remote_host=remote_host,
+                remote_dir=remote_dir,
+                ssh_key=ssh_key,
+                sms_command=sms_command,
+                outbox_state_path=outbox_state_path,
+                scp_command=scp_command,
+            )
+        except Exception as exc:
+            _log_loop_failure("sync failed", exc)
         time.sleep(interval_seconds)
 
 
@@ -648,14 +658,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.interval_seconds <= 0:
                 raise ClientError("--interval-seconds must be > 0")
             while True:
-                appended = collect_notifications_once(
-                    inbox_path=Path(args.inbox),
-                    state_path=Path(args.state_file),
-                    notification_command=args.notification_command,
-                    notification_dismiss_command=args.notification_dismiss_command,
-                    include_packages=include_packages,
-                )
-                print(json.dumps({"appended": appended}, ensure_ascii=False))
+                try:
+                    appended = collect_notifications_once(
+                        inbox_path=Path(args.inbox),
+                        state_path=Path(args.state_file),
+                        notification_command=args.notification_command,
+                        notification_dismiss_command=args.notification_dismiss_command,
+                        include_packages=include_packages,
+                    )
+                    print(json.dumps({"appended": appended}, ensure_ascii=False))
+                except Exception as exc:
+                    _log_loop_failure("notification collection failed", exc)
                 sys.stdout.flush()
                 time.sleep(args.interval_seconds)
         if args.command == "sync":
@@ -677,18 +690,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.interval_seconds <= 0:
                 raise ClientError("--interval-seconds must be > 0")
             while True:
-                remote_host, remote_dir = _sync_target(args)
-                delivered = sync_once(
-                    local_inbox=Path(args.inbox),
-                    local_outbox=Path(args.outbox),
-                    remote_host=remote_host,
-                    remote_dir=remote_dir,
-                    ssh_key=args.ssh_key,
-                    sms_command=args.sms_command,
-                    outbox_state_path=Path(args.outbox_state_file),
-                    scp_command=args.scp_command,
-                )
-                print(json.dumps({"delivered": delivered}, ensure_ascii=False))
+                try:
+                    remote_host, remote_dir = _sync_target(args)
+                    delivered = sync_once(
+                        local_inbox=Path(args.inbox),
+                        local_outbox=Path(args.outbox),
+                        remote_host=remote_host,
+                        remote_dir=remote_dir,
+                        ssh_key=args.ssh_key,
+                        sms_command=args.sms_command,
+                        outbox_state_path=Path(args.outbox_state_file),
+                        scp_command=args.scp_command,
+                    )
+                    print(json.dumps({"delivered": delivered}, ensure_ascii=False))
+                except Exception as exc:
+                    _log_loop_failure("sync failed", exc)
                 sys.stdout.flush()
                 time.sleep(args.interval_seconds)
         if args.command == "run":

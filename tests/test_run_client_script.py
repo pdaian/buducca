@@ -2,9 +2,10 @@ import importlib.util
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_client.py"
@@ -34,7 +35,7 @@ class RunClientScriptTests(unittest.TestCase):
 
     def test_run_parser_uses_environment_defaults(self) -> None:
         module = _load_module()
-        with unittest.mock.patch.dict(
+        with mock.patch.dict(
             module.os.environ,
             {
                 module.DEFAULT_REMOTE_HOST_ENV: "bot@example.com",
@@ -56,8 +57,8 @@ class RunClientScriptTests(unittest.TestCase):
                 json.dumps({"remote_host": "persisted@example.com", "remote_dir": "/srv/custom/android"}) + "\n",
                 encoding="utf-8",
             )
-            with unittest.mock.patch.object(module, "DEFAULT_SYNC_CONFIG_FILE", str(config_path)):
-                with unittest.mock.patch.dict(
+            with mock.patch.object(module, "DEFAULT_SYNC_CONFIG_FILE", str(config_path)):
+                with mock.patch.dict(
                     module.os.environ,
                     {
                         module.DEFAULT_REMOTE_HOST_ENV: "",
@@ -76,8 +77,8 @@ class RunClientScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             config_path = Path(td) / "client-config.json"
             args = module.argparse.Namespace(remote_host="", remote_dir="")
-            with unittest.mock.patch.object(module, "DEFAULT_SYNC_CONFIG_FILE", str(config_path)):
-                with unittest.mock.patch.dict(
+            with mock.patch.object(module, "DEFAULT_SYNC_CONFIG_FILE", str(config_path)):
+                with mock.patch.dict(
                     module.os.environ,
                     {
                         module.DEFAULT_REMOTE_HOST_ENV: "",
@@ -85,8 +86,8 @@ class RunClientScriptTests(unittest.TestCase):
                     },
                     clear=False,
                 ):
-                    with unittest.mock.patch.object(module.sys.stdin, "isatty", return_value=True):
-                        with unittest.mock.patch("builtins.input", side_effect=["prompted@example.com", ""]):
+                    with mock.patch.object(module.sys.stdin, "isatty", return_value=True):
+                        with mock.patch("builtins.input", side_effect=["prompted@example.com", ""]):
                             remote_host, remote_dir = module._sync_target(args)
 
             persisted = json.loads(config_path.read_text(encoding="utf-8"))
@@ -103,9 +104,9 @@ class RunClientScriptTests(unittest.TestCase):
             outbox = Path(td) / "android-sms-outbox.jsonl"
             state = Path(td) / "android-sms-outbox-state.json"
             ssh_key = Path(td) / "buducca_android_sync"
-            with unittest.mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
-                with unittest.mock.patch.object(module, "generate_ssh_key", return_value="ssh-ed25519 AAAA test") as generate:
-                    with unittest.mock.patch.object(module, "sync_once", return_value=0) as sync_once:
+            with mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
+                with mock.patch.object(module, "generate_ssh_key", return_value="ssh-ed25519 AAAA test") as generate:
+                    with mock.patch.object(module, "sync_once", return_value=0) as sync_once:
                         exit_code = module.main(
                             [
                                 "sync",
@@ -128,6 +129,69 @@ class RunClientScriptTests(unittest.TestCase):
             force=True,
         )
         sync_once.assert_called_once()
+
+    def test_run_client_loop_continues_after_collection_and_sync_failures(self) -> None:
+        module = _load_module()
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            notification_state = Path(td) / "notification-state.json"
+            outbox = Path(td) / "android-sms-outbox.jsonl"
+            outbox_state = Path(td) / "android-sms-outbox-state.json"
+            stderr = StringIO()
+            with mock.patch.object(
+                module,
+                "collect_notifications_once",
+                side_effect=[module.ClientError("network down"), 0],
+            ) as collect:
+                with mock.patch.object(
+                    module,
+                    "sync_once",
+                    side_effect=[module.ClientError("scp aborted"), 0],
+                ) as sync:
+                    with mock.patch.object(module.time, "sleep", side_effect=[None, KeyboardInterrupt]):
+                        with redirect_stderr(stderr):
+                            with self.assertRaises(KeyboardInterrupt):
+                                module.run_client_loop(
+                                    inbox_path=inbox,
+                                    notification_state_path=notification_state,
+                                    outbox_path=outbox,
+                                    outbox_state_path=outbox_state,
+                                    remote_host="bot@example.com",
+                                    remote_dir="/srv/buducca/android",
+                                    ssh_key="/tmp/key",
+                                    sms_command="termux-sms-send",
+                                    notification_command="termux-notification-list",
+                                    notification_dismiss_command=module.DEFAULT_NOTIFICATION_DISMISS_COMMAND,
+                                    include_packages=None,
+                                    scp_command="scp",
+                                    interval_seconds=0.1,
+                                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(collect.call_count, 2)
+        self.assertEqual(sync.call_count, 2)
+        self.assertIn("notification collection failed: network down", rendered)
+        self.assertIn("sync failed: scp aborted", rendered)
+
+    def test_sync_run_mode_logs_failure_and_keeps_looping(self) -> None:
+        module = _load_module()
+        stdout = StringIO()
+        stderr = StringIO()
+        with mock.patch.object(module, "_ensure_ssh_key"):
+            with mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
+                with mock.patch.object(
+                    module,
+                    "sync_once",
+                    side_effect=[module.ClientError("network down"), 3],
+                ) as sync_once:
+                    with mock.patch.object(module.time, "sleep", side_effect=[None, KeyboardInterrupt]):
+                        with redirect_stdout(stdout), redirect_stderr(stderr):
+                            exit_code = module.main(["sync", "run"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(sync_once.call_count, 2)
+        self.assertIn("sync failed: network down", stderr.getvalue())
+        self.assertIn('"delivered": 3', stdout.getvalue())
 
 
 if __name__ == "__main__":
