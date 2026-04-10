@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import mimetypes
@@ -14,6 +15,10 @@ from .interfaces import IncomingAttachment, IncomingMessage
 class TelegramUserClient(BaseTelegramUserClient):
     _MAX_FLOOD_WAIT_RETRIES = 3
     _FILE_TOKEN_PREFIX = "tguser"
+    _RETRYABLE_POLL_ERROR_MARKERS = (
+        "Connection to Telegram failed",
+        "Should not be applying the difference when neither account or secret was diff was active",
+    )
 
     def __init__(self, api_id: int, api_hash: str, session_path: str, dialog_limit: int = 50, message_limit: int = 20) -> None:
         super().__init__(api_id, api_hash, session_path, error_prefix="telegram user mode")
@@ -114,10 +119,34 @@ class TelegramUserClient(BaseTelegramUserClient):
         updates.sort(key=lambda item: item.update_id)
         return updates
 
+    @classmethod
+    def _is_retryable_poll_error(cls, exc: Exception) -> bool:
+        if isinstance(exc, (ConnectionError, OSError)):
+            return True
+        if not isinstance(exc, RuntimeError):
+            return False
+        message = str(exc)
+        return any(marker in message for marker in cls._RETRYABLE_POLL_ERROR_MARKERS)
+
     def get_updates(self, offset: int | None = None, timeout_seconds: int = 30) -> list[IncomingMessage]:
         _ = offset
         _ = timeout_seconds
-        return self._run(self._get_updates_async())
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                return self._run(self._get_updates_async())
+            except Exception as exc:
+                if attempt == 1 or not self._is_retryable_poll_error(exc):
+                    raise
+                last_error = exc
+                logging.warning(
+                    "Telegram user polling failed with a retryable error; resetting Telethon client and retrying once: %s",
+                    exc,
+                )
+                self.close()
+        if last_error is not None:
+            raise last_error
+        return []
 
     async def _run_with_flood_wait_retry(self, operation_name: str, chat_id: int, callback) -> None:
         try:

@@ -107,6 +107,20 @@ class _FakeDialogClient(_FakeClient):
         return None
 
 
+class _TransientFailureDialogClient(_FakeDialogClient):
+    def __init__(self, *args, failure: Exception, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._failure = failure
+        self._failed_once = False
+
+    async def iter_dialogs(self, limit=50):
+        if not self._failed_once:
+            self._failed_once = True
+            raise self._failure
+        async for dialog in super().iter_dialogs(limit=limit):
+            yield dialog
+
+
 class _FakeMediaAttribute:
     def __init__(self, file_name: str | None = None) -> None:
         self.file_name = file_name
@@ -404,6 +418,32 @@ class TelegramUserClientTests(unittest.TestCase):
             self.assertEqual([update.text for update in first_updates], ["hello", "again"])
             self.assertEqual(second_updates, [])
             self.assertEqual(fake_client.connect_calls, 1)
+
+    def test_bot_client_retries_once_after_retryable_telethon_poll_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "telegram_user"
+            sender = type("Sender", (), {"id": 7, "first_name": "Alice", "username": "alice"})()
+            dialog = type("Dialog", (), {"entity": type("Entity", (), {"id": 42})()})()
+            first_client = _TransientFailureDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessage(5, "hello", sender)]},
+                failure=RuntimeError(
+                    "Should not be applying the difference when neither account or secret was diff was active"
+                ),
+            )
+            second_client = _FakeDialogClient(
+                dialogs=[dialog],
+                messages_by_chat={42: [_FakeMessage(5, "hello", sender)]},
+            )
+            clients = iter([first_client, second_client])
+            client = BotTelegramUserClient(api_id=1, api_hash="h", session_path=str(session_path))
+            client._ensure_client = lambda: next(clients)  # type: ignore[assignment]
+
+            updates = client.get_updates()
+
+            self.assertEqual([update.text for update in updates], ["hello"])
+            self.assertEqual(first_client.disconnect_calls, 1)
+            self.assertEqual(second_client.connect_calls, 1)
 
     def test_bot_client_keeps_attachment_download_lazy_until_requested(self) -> None:
         with tempfile.TemporaryDirectory() as td:
