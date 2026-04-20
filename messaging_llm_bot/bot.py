@@ -93,6 +93,7 @@ class FrontendWorkerState:
     name: str
     poll_interval_seconds: float
     thread: threading.Thread | None = None
+    dispatch_threads: set[threading.Thread] | None = None
     polls: int = 0
     updates_handled: int = 0
     last_started_at: str | None = None
@@ -788,6 +789,10 @@ class BotRunner:
             thread = state.thread
             if thread is not None and thread.is_alive():
                 thread.join(timeout=1.0)
+            dispatch_threads = list(state.dispatch_threads or [])
+            for dispatch_thread in dispatch_threads:
+                if dispatch_thread.is_alive():
+                    dispatch_thread.join(timeout=1.0)
 
     def _raise_worker_failure_if_any(self) -> None:
         for state in self._frontend_workers.values():
@@ -869,7 +874,51 @@ class BotRunner:
 
     def _handle_updates_with_lock(self, updates: list[IncomingMessage]) -> None:
         for update in updates:
+            self._dispatch_update(update)
+
+    def _dispatch_update(self, update: IncomingMessage) -> None:
+        backend = getattr(update, "backend", "telegram")
+        state = self._frontend_workers.get(backend)
+        worker = threading.Thread(
+            target=self._run_dispatched_update,
+            args=(update,),
+            daemon=True,
+            name=f"{backend}-update",
+        )
+        if state is not None:
+            with self._frontend_state_lock:
+                if state.dispatch_threads is None:
+                    state.dispatch_threads = set()
+                state.dispatch_threads.add(worker)
+        worker.start()
+
+    def _run_dispatched_update(self, update: IncomingMessage) -> None:
+        backend = getattr(update, "backend", "telegram")
+        state = self._frontend_workers.get(backend)
+        current_thread = threading.current_thread()
+        try:
             self._handle_update(update)
+        except Exception as exc:
+            error_at = datetime.now(timezone.utc).isoformat()
+            with self._frontend_state_lock:
+                if state is not None:
+                    state.last_error_at = error_at
+                    state.last_error = str(exc) or exc.__class__.__name__
+            self._write_frontend_error_file(backend, exc, error_at=error_at)
+            logging.exception("Frontend update handling failed: frontend=%s", backend)
+        except BaseException as exc:
+            error_at = datetime.now(timezone.utc).isoformat()
+            with self._frontend_state_lock:
+                if state is not None:
+                    state.last_error_at = error_at
+                    state.last_error = str(exc) or exc.__class__.__name__
+                    state.fatal_exception = exc
+            self._stop_event.set()
+        finally:
+            if state is not None:
+                with self._frontend_state_lock:
+                    if state.dispatch_threads is not None:
+                        state.dispatch_threads.discard(current_thread)
 
     def _set_frontend_disabled(self, frontend: str, *, disabled: bool = True, error: str | None = None) -> None:
         state = self._frontend_workers.get(frontend)

@@ -298,6 +298,38 @@ class BotTests(unittest.TestCase):
         self.assertEqual(llm.calls, 2)
         self.assertEqual(llm.max_active, 2)
 
+    def test_handle_updates_dispatches_remaining_messages_while_other_conversations_are_busy(self) -> None:
+        runtime = RuntimeConfig(max_concurrent_requests=2)
+        bot = self.make_bot(runtime=runtime)
+        bot.telegram = DummyTelegram()
+        llm = BlockingConcurrencyLLM()
+        bot.llm = llm
+        updates = [
+            IncomingMessage(update_id=1, backend="telegram", conversation_id="1", sender_id="1", text="first"),
+            IncomingMessage(update_id=2, backend="telegram", conversation_id="2", sender_id="2", text="second"),
+            IncomingMessage(update_id=3, backend="telegram", conversation_id="1", sender_id="1", text="third"),
+        ]
+
+        dispatcher = threading.Thread(target=bot._handle_updates_with_lock, args=(updates,))
+        dispatcher.start()
+
+        deadline = time.time() + 0.5
+        while llm.calls < 2 and time.time() < deadline:
+            time.sleep(0.01)
+
+        dispatcher.join(timeout=0.2)
+
+        self.assertFalse(dispatcher.is_alive())
+        self.assertEqual(llm.calls, 2)
+
+        llm.release.set()
+
+        deadline = time.time() + 0.5
+        while llm.calls < 3 and time.time() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(llm.calls, 3)
+
     def test_read_only_frontend_logs_as_collector_without_reply(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(
