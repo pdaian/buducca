@@ -2629,6 +2629,41 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.llm.messages[1]["role"], "user")
         self.assertNotIn("hi", bot.llm.messages[1]["content"])
 
+    def test_clear_command_resets_recent_handled_query_cache_for_next_update(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = SequentialLLM(["first", "second"])
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=1,
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+            )
+        )
+        bot._handle_message(1, "/clear")
+        bot._handle_update(
+            IncomingMessage(
+                update_id=2,
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 2)
+        self.assertEqual(
+            bot.telegram.sent,
+            [
+                (1, "first"),
+                (1, "Chat context cleared."),
+                (1, "second"),
+            ],
+        )
+
     def test_skill_command_lists_available_skills_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"

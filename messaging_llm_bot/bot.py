@@ -1175,6 +1175,15 @@ class BotRunner:
     def _clear_conversation_history(self, conversation_key: Any) -> None:
         self._history.pop(conversation_key, None)
 
+    def _clear_recent_handled_queries(self, backend: str, conversation_id: str) -> None:
+        keys_to_remove = [
+            key
+            for key in self._recent_handled_queries
+            if key[0] == backend and key[1] == conversation_id
+        ]
+        for key in keys_to_remove:
+            self._recent_handled_queries.pop(key, None)
+
     def _poll_due_reminders_once(self) -> None:
         reminders_text = self._workspace.read_text(REMINDERS_FILE, default="")
         if not reminders_text.strip():
@@ -3346,6 +3355,7 @@ class BotRunner:
             reply = self._build_status_message()
         elif command_text.lower() == "/clear":
             self._clear_conversation_history(conversation_key)
+            self._clear_recent_handled_queries(backend, conversation_id)
             reply = "Chat context cleared."
         elif command_text.lower() == "/now":
             reply = self._build_now_command_overview()
