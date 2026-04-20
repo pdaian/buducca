@@ -44,7 +44,7 @@ from .telegram_client import TelegramClient
 from .telegram_user_client import TelegramUserClient
 from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.IGNORECASE | re.DOTALL)
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100

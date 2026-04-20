@@ -45,6 +45,37 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(reply, "first\nsecond")
 
+    def test_generate_reply_strips_unterminated_think_block_from_string_content(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "<think>looping forever\nstill thinking"}}]})
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "")
+
+    def test_generate_reply_strips_think_text_from_content_parts(self) -> None:
+        http = StubHttpClient(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "<think>private reasoning"},
+                                {"type": "text", "text": "answer"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "answer")
+
     def test_generate_reply_disables_thinking_when_requested(self) -> None:
         http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
         cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")

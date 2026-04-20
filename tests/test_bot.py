@@ -1873,6 +1873,28 @@ class BotTests(unittest.TestCase):
             "I couldn't produce a usable reply for that request. Please try again.",
         )
 
+    def test_handle_message_skips_unterminated_think_reply_after_filtering(self) -> None:
+        cfg = BotConfig(
+            signal=SignalConfig(account="+15551230000", allowed_sender_ids=["+15551230000"]),
+            llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+            runtime=RuntimeConfig(),
+        )
+        bot = BotRunner(cfg)
+        bot.signal = DummySignal()
+        bot.llm = DummyLLM("<think>private reasoning that never closes")
+
+        handled = bot._handle_message("signal", "+15551230000", "+15551230000", "hi")
+
+        self.assertTrue(handled)
+        self.assertEqual(
+            bot.signal.sent,
+            [("+15551230000", "I couldn't produce a usable reply for that request. Please try again.")],
+        )
+        self.assertEqual(
+            bot._history["signal:+15551230000"][1]["content"],
+            "I couldn't produce a usable reply for that request. Please try again.",
+        )
+
 
     def test_frontend_history_files_created_and_written(self) -> None:
         with tempfile.TemporaryDirectory() as td:

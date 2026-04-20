@@ -9,6 +9,7 @@ from .config import LLMConfig
 from .http import HttpClient
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
+_THINK_BLOCK_RE = re.compile(r"(?is)<think>.*?(?:</think>|$)")
 
 
 class OpenAICompatibleClient:
@@ -50,21 +51,24 @@ class OpenAICompatibleClient:
             raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
         content = message.get("content")
         if isinstance(content, str):
-            return content.strip()
+            return self._sanitize_reply_text(content)
         if isinstance(content, list):
             parts: list[str] = []
             for item in content:
                 if not isinstance(item, dict):
                     continue
-                if item.get("type") != "text":
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type != "text":
                     continue
                 text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
+                if isinstance(text, str):
+                    sanitized = self._sanitize_reply_text(text)
+                    if sanitized:
+                        parts.append(sanitized)
             return "\n".join(parts).strip()
         refusal = message.get("refusal")
         if isinstance(refusal, str):
-            return refusal.strip()
+            return self._sanitize_reply_text(refusal)
         return ""
 
     @staticmethod
@@ -74,3 +78,7 @@ class OpenAICompatibleClient:
             if isinstance(content, str) and _NOTHINK_RE.search(content):
                 return True
         return False
+
+    @staticmethod
+    def _sanitize_reply_text(text: str) -> str:
+        return _THINK_BLOCK_RE.sub("", text).strip()
