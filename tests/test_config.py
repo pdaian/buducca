@@ -107,6 +107,18 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(path)
 
+    def test_runtime_max_concurrent_requests_must_be_positive(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+            "runtime": {"max_concurrent_requests": 0},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(path)
+
     def test_runtime_max_skill_chain_steps_defaults_to_twelve(self) -> None:
         data = {
             "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},

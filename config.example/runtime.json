@@ -1,5 +1,6 @@
 {
   "request_timeout_seconds": 300,
+  "max_concurrent_requests": 1,
   "log_level": "INFO",
   "max_skill_chain_steps": 12,
   "workspace_dir": "workspace",

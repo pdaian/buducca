@@ -111,6 +111,27 @@ class TimeoutLLM:
         raise RequestTimeoutError("timed out")
 
 
+class BlockingConcurrencyLLM:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.calls = 0
+        self.lock = threading.Lock()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def generate_reply(self, messages, *, disable_thinking=False):
+        with self.lock:
+            self.calls += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.entered.set()
+        self.release.wait(timeout=1.0)
+        with self.lock:
+            self.active -= 1
+        return "hello"
+
+
 
 
 class PollingTelegram:
@@ -226,6 +247,56 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.telegram.sent, [(1, "hello")])
         self.assertEqual(bot.telegram.typing, [1])
         self.assertEqual(len(bot._history[1]), 2)
+
+    def test_same_conversation_requests_are_serialized(self) -> None:
+        runtime = RuntimeConfig(max_concurrent_requests=2)
+        bot = self.make_bot(runtime=runtime)
+        bot.telegram = DummyTelegram()
+        llm = BlockingConcurrencyLLM()
+        bot.llm = llm
+
+        first = threading.Thread(target=bot._handle_message, args=(1, "first"))
+        second = threading.Thread(target=bot._handle_message, args=(1, "second"))
+        first.start()
+        self.assertTrue(llm.entered.wait(timeout=0.5))
+        second.start()
+        time.sleep(0.1)
+
+        self.assertEqual(llm.calls, 1)
+
+        llm.release.set()
+        first.join(timeout=1.0)
+        second.join(timeout=1.0)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(llm.max_active, 1)
+
+    def test_different_conversations_can_run_concurrently(self) -> None:
+        runtime = RuntimeConfig(max_concurrent_requests=2)
+        bot = self.make_bot(runtime=runtime)
+        bot.telegram = DummyTelegram()
+        llm = BlockingConcurrencyLLM()
+        bot.llm = llm
+
+        first = threading.Thread(target=bot._handle_message, args=(1, "first"))
+        second = threading.Thread(target=bot._handle_message, args=(2, "second"))
+        first.start()
+        self.assertTrue(llm.entered.wait(timeout=0.5))
+        second.start()
+
+        deadline = time.time() + 0.5
+        while llm.calls < 2 and time.time() < deadline:
+            time.sleep(0.01)
+
+        llm.release.set()
+        first.join(timeout=1.0)
+        second.join(timeout=1.0)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(llm.calls, 2)
+        self.assertEqual(llm.max_active, 2)
 
     def test_read_only_frontend_logs_as_collector_without_reply(self) -> None:
         with tempfile.TemporaryDirectory() as td:

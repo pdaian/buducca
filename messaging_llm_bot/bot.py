@@ -185,9 +185,11 @@ class BotRunner:
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
         self._skills = self._load_runtime_skills()
-        self._current_evidence = []
         self._recent_handled_queries: dict[tuple[str, str, str], tuple[str | None, str]] = {}
-        self._processing_lock = threading.RLock()
+        self._request_slots = threading.BoundedSemaphore(self.config.runtime.max_concurrent_requests)
+        self._conversation_locks: dict[str, threading.RLock] = {}
+        self._conversation_locks_guard = threading.Lock()
+        self._request_state = threading.local()
         self._frontend_state_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._frontend_workers = self._build_frontend_workers()
@@ -238,6 +240,41 @@ class BotRunner:
         if not self.config.runtime.enable_message_send_skill:
             skills.pop("message_send", None)
         return skills
+
+    def _conversation_scope_key(self, backend: str, conversation_id: str) -> str:
+        return f"{backend}:{conversation_id}"
+
+    def _conversation_lock(self, scope_key: str) -> threading.RLock:
+        with self._conversation_locks_guard:
+            lock = self._conversation_locks.get(scope_key)
+            if lock is None:
+                lock = threading.RLock()
+                self._conversation_locks[scope_key] = lock
+            return lock
+
+    @contextmanager
+    def _request_context(self, scope_key: str):
+        with self._conversation_lock(scope_key):
+            with self._request_slots:
+                self._request_state.evidence = []
+                self._request_state.trace_steps = []
+                try:
+                    yield
+                finally:
+                    self._request_state.evidence = []
+                    self._request_state.trace_steps = []
+
+    def _set_request_evidence(self, evidence: list[Any]) -> None:
+        self._request_state.evidence = evidence
+
+    def _get_request_evidence(self) -> list[Any]:
+        return list(getattr(self._request_state, "evidence", []))
+
+    def _set_trace_steps(self, steps: list[dict[str, Any]]) -> None:
+        self._request_state.trace_steps = steps
+
+    def _get_trace_steps(self) -> list[dict[str, Any]]:
+        return list(getattr(self._request_state, "trace_steps", []))
 
     def _refresh_skills(self) -> None:
         self._skills = self._load_runtime_skills()
@@ -687,10 +724,9 @@ class BotRunner:
             while True:
                 self._raise_worker_failure_if_any()
                 try:
-                    with self._processing_lock:
-                        self._poll_due_structured_schedule_once()
-                        self._poll_due_reminders_once()
-                        self._poll_due_hourly_once()
+                    self._poll_due_structured_schedule_once()
+                    self._poll_due_reminders_once()
+                    self._poll_due_hourly_once()
                 except RequestTimeoutError:
                     logging.debug("Long-poll request timed out; retrying")
                 except Exception:
@@ -832,9 +868,8 @@ class BotRunner:
         raise ValueError(f"Unknown frontend: {frontend}")
 
     def _handle_updates_with_lock(self, updates: list[IncomingMessage]) -> None:
-        with self._processing_lock:
-            for update in updates:
-                self._handle_update(update)
+        for update in updates:
+            self._handle_update(update)
 
     def _set_frontend_disabled(self, frontend: str, *, disabled: bool = True, error: str | None = None) -> None:
         state = self._frontend_workers.get(frontend)
@@ -878,14 +913,13 @@ class BotRunner:
         return lines
 
     def _poll_frontends_once(self) -> None:
-        with self._processing_lock:
-            self._poll_due_structured_schedule_once()
-            self._poll_due_reminders_once()
-            self._poll_due_hourly_once()
-            self._poll_telegram_once()
-            self._poll_signal_once()
-            self._poll_whatsapp_once()
-            self._poll_android_once()
+        self._poll_due_structured_schedule_once()
+        self._poll_due_reminders_once()
+        self._poll_due_hourly_once()
+        self._poll_telegram_once()
+        self._poll_signal_once()
+        self._poll_whatsapp_once()
+        self._poll_android_once()
 
     def _poll_telegram_once(self) -> int:
         if not self.telegram or not self.config.telegram:
@@ -936,11 +970,10 @@ class BotRunner:
         self._telegram_conflict_logged_at = None
         self._telegram_retry_after = None
         self._telegram_conflict_backoff_seconds = _TELEGRAM_CONFLICT_INITIAL_BACKOFF_SECONDS
-        with self._processing_lock:
-            for update in updates:
-                self._telegram_offset = update.update_id + 1
-                self._offset = self._telegram_offset
-                self._handle_update(update)
+        for update in updates:
+            self._telegram_offset = update.update_id + 1
+            self._offset = self._telegram_offset
+            self._handle_update(update)
         return len(updates)
 
     def _poll_signal_once(self) -> int:
@@ -1026,7 +1059,8 @@ class BotRunner:
         sender_name: str | None = None,
         sender_contact: str | None = None,
     ) -> list[dict[str, str]]:
-        self._current_evidence = search_workspace(self._workspace, text)
+        evidence = search_workspace(self._workspace, text)
+        self._set_request_evidence(evidence)
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[conversation_key])
         structured_memory_context = build_structured_memory_context(self._workspace)
@@ -1062,7 +1096,7 @@ class BotRunner:
             ]
         )
         user_parts = [structured_memory_context, sender_context, main_prompt_context]
-        evidence_context = format_evidence_context(self._current_evidence)
+        evidence_context = format_evidence_context(evidence)
         if evidence_context:
             user_parts.append(evidence_context)
         user_content = "\n\n".join(part for part in user_parts if part)
@@ -1210,24 +1244,25 @@ class BotRunner:
             conversation_id,
         )
         try:
-            with self._typing_indicator(backend, conversation_id):
-                prompt = self._build_messages(
-                    conversation_key,
-                    reminder_text,
-                    backend=backend,
-                    conversation_id=conversation_id,
-                    sender_id=sender_id,
-                    sender_name=sender_name,
-                    sender_contact=sender_contact,
-                )
-                model_reply = self._strip_think_blocks(
-                    self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                    source="llm",
-                )
-                reply = self._coerce_reply_text(
-                    self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                    context=f"scheduled reminder id={record.get('id', '')}",
-                )
+            with self._request_context(self._conversation_scope_key(backend, conversation_id)):
+                with self._typing_indicator(backend, conversation_id):
+                    prompt = self._build_messages(
+                        conversation_key,
+                        reminder_text,
+                        backend=backend,
+                        conversation_id=conversation_id,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        sender_contact=sender_contact,
+                    )
+                    model_reply = self._strip_think_blocks(
+                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                        source="llm",
+                    )
+                    reply = self._coerce_reply_text(
+                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                        context=f"scheduled reminder id={record.get('id', '')}",
+                    )
         except RequestTimeoutError:
             logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
             return False
@@ -1312,24 +1347,25 @@ class BotRunner:
 
         logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
         try:
-            with self._typing_indicator(backend, conversation_id):
-                prompt = self._build_messages(
-                    scheduler_conversation_key,
-                    hourly_prompt,
-                    backend="hourly",
-                    conversation_id=slot.isoformat(),
-                    sender_id=sender_id,
-                    sender_name=sender_name,
-                    sender_contact=sender_contact,
-                )
-                model_reply = self._strip_think_blocks(
-                    self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                    source="llm",
-                )
-                reply = self._coerce_reply_text(
-                    self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                    context=f"hourly slot={slot.isoformat()}",
-                )
+            with self._request_context(self._conversation_scope_key("hourly", slot.isoformat())):
+                with self._typing_indicator(backend, conversation_id):
+                    prompt = self._build_messages(
+                        scheduler_conversation_key,
+                        hourly_prompt,
+                        backend="hourly",
+                        conversation_id=slot.isoformat(),
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        sender_contact=sender_contact,
+                    )
+                    model_reply = self._strip_think_blocks(
+                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                        source="llm",
+                    )
+                    reply = self._coerce_reply_text(
+                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                        context=f"hourly slot={slot.isoformat()}",
+                    )
         except RequestTimeoutError:
             logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
             self._clear_conversation_history(scheduler_conversation_key)
@@ -1754,7 +1790,8 @@ class BotRunner:
         disable_thinking: bool = False,
     ) -> str:
         model_reply = initial_model_reply
-        self._last_trace_steps: list[dict[str, Any]] = []
+        trace_steps: list[dict[str, Any]] = []
+        self._set_trace_steps(trace_steps)
         main_prompt_block = ""
         if prompt and prompt[-1].get("role") == "user":
             main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
@@ -1769,7 +1806,7 @@ class BotRunner:
             raw_skill_result = self._strip_think_blocks(
                 self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
             )
-            self._last_trace_steps.append(
+            trace_steps.append(
                 {
                     "step": step_index + 1,
                     "model_reply": model_reply,
@@ -3005,7 +3042,10 @@ class BotRunner:
         self.config.contacts.append(ContactConfig(name=alias, platform=platform, recipient=recipient))
 
     def _handle_update(self, update: IncomingMessage) -> None:
-        with self._processing_lock:
+        backend = getattr(update, "backend", "telegram")
+        conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
+        scope_key = self._conversation_scope_key(backend, conversation_id)
+        with self._request_context(scope_key):
             self._handle_update_locked(update)
 
     def _handle_update_locked(self, update: IncomingMessage) -> None:
@@ -3063,7 +3103,7 @@ class BotRunner:
                     logged_at=sent_at,
                 )
                 return
-            was_handled = self._handle_message(
+            was_handled = self._handle_message_locked(
                 backend,
                 conversation_id,
                 sender_id,
@@ -3100,7 +3140,7 @@ class BotRunner:
                 return
             if not self._is_authorized_frontend_sender(backend, conversation_id, sender_id):
                 return
-            was_handled = self._handle_message(
+            was_handled = self._handle_message_locked(
                 backend,
                 conversation_id,
                 sender_id,
@@ -3156,7 +3196,7 @@ class BotRunner:
             return
 
         transcript_text = f"[Voice note transcript]\n{transcript}"
-        was_handled = self._handle_message(
+        was_handled = self._handle_message_locked(
             backend,
             conversation_id,
             sender_id,
@@ -3205,7 +3245,18 @@ class BotRunner:
         sent_at: str | None = None,
         event_id: str | None = None,
     ) -> bool:
-        with self._processing_lock:
+        if len(args) == 2:
+            backend = "telegram"
+            conversation_id = str(args[0])
+        elif len(args) in {4, 6}:
+            backend = str(args[0])
+            conversation_id = str(args[1])
+        else:
+            raise TypeError(
+                "_handle_message expects (chat_id, text), (backend, conversation_id, sender_id, text), "
+                "or (backend, conversation_id, sender_id, text, sender_name, sender_contact)"
+            )
+        with self._request_context(self._conversation_scope_key(backend, conversation_id)):
             return self._handle_message_locked(
                 *args,
                 conversation_name=conversation_name,
@@ -3286,8 +3337,8 @@ class BotRunner:
             "evidence": [],
             "steps": [],
         }
-        self._current_evidence = []
-        self._last_trace_steps = []
+        self._set_request_evidence([])
+        self._set_trace_steps([])
         text, disable_thinking = self._extract_nothink_directive(text)
         command_text = text.strip()
         self._refresh_skills()
@@ -3316,7 +3367,7 @@ class BotRunner:
                 trace_payload["last_prompt"] = prompt
                 trace_payload["evidence"] = [
                     {"path": item.path, "snippet": item.snippet, "score": item.score}
-                    for item in self._current_evidence
+                    for item in self._get_request_evidence()
                 ]
                 try:
                     model_reply = self._strip_think_blocks(
@@ -3328,7 +3379,7 @@ class BotRunner:
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"{backend} conversation={conversation_id}",
                     )
-                    trace_payload["steps"] = getattr(self, "_last_trace_steps", [])
+                    trace_payload["steps"] = self._get_trace_steps()
                     if trace_payload["steps"]:
                         trace_payload["last_action"] = trace_payload["steps"][-1].get("skill_call")
                         trace_payload["last_skill_result"] = trace_payload["steps"][-1].get("skill_result")
@@ -3364,7 +3415,7 @@ class BotRunner:
             )
 
         if self.config.runtime.enable_reply_citations:
-            reply = append_sources(reply, self._current_evidence)
+            reply = append_sources(reply, self._get_request_evidence())
         trace_payload["final_reply"] = reply
         write_trace(self._workspace, trace_payload)
         for chunk in self._split_reply(reply):
