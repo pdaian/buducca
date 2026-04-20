@@ -2539,7 +2539,7 @@ class BotRunner:
             return False
         cached_event_id, cached_text = cached
         if event_id and cached_event_id:
-            return cached_event_id == event_id or cached_text == normalized_text
+            return cached_event_id == event_id
         if event_id:
             return False
         return cached_text == normalized_text

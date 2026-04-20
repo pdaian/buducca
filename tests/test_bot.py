@@ -2298,6 +2298,33 @@ class BotTests(unittest.TestCase):
             recent_lines = [line for line in (Path(td) / "telegram.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(recent_lines), 1)
 
+    def test_same_text_follow_up_with_new_event_id_reaches_llm(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = SequentialLLM(["first", "second"])
+
+        bot._handle_update(
+            IncomingMessage(
+                update_id=41,
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+            )
+        )
+        bot._handle_update(
+            IncomingMessage(
+                update_id=42,
+                backend="telegram",
+                conversation_id="1",
+                sender_id="1",
+                text="same text",
+            )
+        )
+
+        self.assertEqual(bot.llm.calls, 2)
+        self.assertEqual(bot.telegram.sent, [(1, "first"), (1, "second")])
+
     def test_sender_context_is_added_to_llm_prompt(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()
