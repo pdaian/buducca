@@ -144,6 +144,32 @@ class LLMClientTests(unittest.TestCase):
         )
         self.assertEqual([call[1]["model"] for call in http.calls], ["m1", "m2", "m1"])
 
+    def test_chain_runner_affinity_reuses_same_runner_across_calls(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+                LLMRunnerConfig(base_url="http://10.0.0.2:8000/v1", api_key="k2", model="m2", model_tag="beta"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with client.chain_runner_affinity():
+            client.generate_reply([{"role": "user", "content": "hi"}])
+            client.generate_reply([{"role": "user", "content": "again"}])
+
+        self.assertEqual(
+            [call[0] for call in http.calls],
+            [
+                "http://10.0.0.1:8000/v1/chat/completions",
+                "http://10.0.0.1:8000/v1/chat/completions",
+            ],
+        )
+
+        client.generate_reply([{"role": "user", "content": "outside"}])
+
+        self.assertEqual(http.calls[-1][0], "http://10.0.0.2:8000/v1/chat/completions")
+
     def test_generate_reply_exposes_runner_footer(self) -> None:
         http = StubHttpClient(
             {
@@ -165,6 +191,38 @@ class LLMClientTests(unittest.TestCase):
         self.assertIn("IP: 10.0.0.9 | model: fast-a | ", footer)
         self.assertIn("tok/s", footer)
         self.assertIn("25 tok", footer)
+
+    def test_chain_runner_affinity_switches_runner_after_mid_chain_failure(self) -> None:
+        http = SequencedHttpClient(
+            [
+                {"choices": [{"message": {"content": "first"}}]},
+                RuntimeError("primary unavailable"),
+                {"choices": [{"message": {"content": "second"}}]},
+                {"choices": [{"message": {"content": "third"}}]},
+            ]
+        )
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+                LLMRunnerConfig(base_url="http://10.0.0.2:8000/v1", api_key="k2", model="m2", model_tag="beta"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with client.chain_runner_affinity():
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "hi"}]), "first")
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "follow up"}]), "second")
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "final"}]), "third")
+
+        self.assertEqual(
+            [call[0] for call in http.calls],
+            [
+                "http://10.0.0.1:8000/v1/chat/completions",
+                "http://10.0.0.1:8000/v1/chat/completions",
+                "http://10.0.0.2:8000/v1/chat/completions",
+                "http://10.0.0.2:8000/v1/chat/completions",
+            ],
+        )
 
     def test_generate_reply_fails_over_to_next_runner_when_first_runner_errors(self) -> None:
         http = SequencedHttpClient(

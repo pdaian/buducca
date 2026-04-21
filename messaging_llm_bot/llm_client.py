@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import re
 import threading
@@ -54,12 +55,15 @@ class OpenAICompatibleClient:
                 len(runner_attempts),
             )
             try:
-                return self._generate_reply_with_runner(
+                reply = self._generate_reply_with_runner(
                     runner_index,
                     runner,
                     materialized_messages,
                     disable_thinking=disable_thinking,
                 )
+                if getattr(self._thread_state, "chain_runner_affinity_active", False):
+                    self._thread_state.chain_runner_index = runner_index
+                return reply
             except Exception as exc:
                 last_error = exc
                 if attempt_number >= len(runner_attempts):
@@ -102,20 +106,32 @@ class OpenAICompatibleClient:
                 )
         return statuses
 
-    def _select_runner(self) -> tuple[int, LLMRunnerConfig]:
-        with self._selection_lock:
-            if len(self._runners) == 1:
-                return 0, self._runners[0]
-            runner_index = self._next_runner_index % len(self._runners)
-            self._next_runner_index += 1
-            return runner_index, self._runners[runner_index]
+    @contextmanager
+    def chain_runner_affinity(self):
+        previous_active = getattr(self._thread_state, "chain_runner_affinity_active", False)
+        previous_runner_index = getattr(self._thread_state, "chain_runner_index", None)
+        self._thread_state.chain_runner_affinity_active = True
+        self._thread_state.chain_runner_index = None
+        try:
+            yield
+        finally:
+            self._thread_state.chain_runner_affinity_active = previous_active
+            self._thread_state.chain_runner_index = previous_runner_index
 
     def _select_runners_for_attempt(self) -> list[tuple[int, LLMRunnerConfig]]:
         with self._selection_lock:
             if not self._runners:
                 return []
-            start_index = self._next_runner_index % len(self._runners)
-            self._next_runner_index += 1
+            pinned_index = getattr(self._thread_state, "chain_runner_index", None)
+            if (
+                getattr(self._thread_state, "chain_runner_affinity_active", False)
+                and isinstance(pinned_index, int)
+                and 0 <= pinned_index < len(self._runners)
+            ):
+                start_index = pinned_index
+            else:
+                start_index = self._next_runner_index % len(self._runners)
+                self._next_runner_index += 1
             return [
                 (runner_index, self._runners[runner_index])
                 for runner_index in (

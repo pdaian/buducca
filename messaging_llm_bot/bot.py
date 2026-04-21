@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1319,14 +1319,16 @@ class BotRunner:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                     )
-                    model_reply = self._strip_think_blocks(
-                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                        source="llm",
-                    )
-                    reply = self._coerce_reply_text(
-                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                        context=f"scheduled reminder id={record.get('id', '')}",
-                    )
+                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
+                    with runner_affinity():
+                        model_reply = self._strip_think_blocks(
+                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                            source="llm",
+                        )
+                        reply = self._coerce_reply_text(
+                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                            context=f"scheduled reminder id={record.get('id', '')}",
+                        )
         except RequestTimeoutError:
             logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
             return False
@@ -1422,14 +1424,16 @@ class BotRunner:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                     )
-                    model_reply = self._strip_think_blocks(
-                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                        source="llm",
-                    )
-                    reply = self._coerce_reply_text(
-                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                        context=f"hourly slot={slot.isoformat()}",
-                    )
+                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
+                    with runner_affinity():
+                        model_reply = self._strip_think_blocks(
+                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                            source="llm",
+                        )
+                        reply = self._coerce_reply_text(
+                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                            context=f"hourly slot={slot.isoformat()}",
+                        )
         except RequestTimeoutError:
             logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
             self._clear_conversation_history(scheduler_conversation_key)
@@ -3466,16 +3470,18 @@ class BotRunner:
                     for item in self._get_request_evidence()
                 ]
                 try:
-                    model_reply = self._strip_think_blocks(
-                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                        source="llm",
-                    )
-                    llm_footer = getattr(self.llm, "pop_last_reply_footer", lambda: "")()
-                    trace_payload["initial_model_reply"] = model_reply
-                    reply = self._coerce_reply_text(
-                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                        context=f"{backend} conversation={conversation_id}",
-                    )
+                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
+                    with runner_affinity():
+                        model_reply = self._strip_think_blocks(
+                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                            source="llm",
+                        )
+                        llm_footer = getattr(self.llm, "pop_last_reply_footer", lambda: "")()
+                        trace_payload["initial_model_reply"] = model_reply
+                        reply = self._coerce_reply_text(
+                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                            context=f"{backend} conversation={conversation_id}",
+                        )
                     trace_payload["steps"] = self._get_trace_steps()
                     if trace_payload["steps"]:
                         trace_payload["last_action"] = trace_payload["steps"][-1].get("skill_call")
