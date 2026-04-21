@@ -60,6 +60,11 @@ _SKILL_PASSTHROUGH_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 _CONTACT_HANDLE_RE = re.compile(r"@\w[\w.]*")
 _CONTACT_ANGLE_RE = re.compile(r"<([^>]+)>")
 _MAIN_PROMPT_MARKER = "<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<"
+_LEAKED_PROMPT_MARKERS = (
+    "Please make the requested changes directly in the repository files.",
+    "Keep the solution minimal, correct, and production-ready.",
+    "At the end, provide a concise summary of what changed.",
+)
 _PLAN_UPDATE_SCHEMA = '\n'.join(
     [
         "{",
@@ -1989,13 +1994,23 @@ class BotRunner:
         if isinstance(reply, str):
             normalized = reply.strip()
             if normalized:
+                if self._looks_like_leaked_prompt_reply(normalized):
+                    logging.warning("Discarding leaked internal prompt text in %s; using fallback message", context)
+                    return _EMPTY_REPLY_FALLBACK
                 return normalized
         elif reply is not None:
             normalized = str(reply).strip()
             if normalized:
+                if self._looks_like_leaked_prompt_reply(normalized):
+                    logging.warning("Discarding leaked internal prompt text in %s; using fallback message", context)
+                    return _EMPTY_REPLY_FALLBACK
                 return normalized
         logging.warning("Empty reply produced in %s; using fallback message", context)
         return _EMPTY_REPLY_FALLBACK
+
+    @staticmethod
+    def _looks_like_leaked_prompt_reply(reply: str) -> bool:
+        return sum(marker in reply for marker in _LEAKED_PROMPT_MARKERS) >= 2
 
     def _read_collector_status(self) -> dict:
         status_path = Path(self.config.runtime.workspace_dir) / self.config.runtime.collector_status_file
@@ -3519,7 +3534,7 @@ class BotRunner:
 
         if self.config.runtime.enable_reply_citations:
             reply = append_sources(reply, self._get_request_evidence())
-        if llm_footer:
+        if llm_footer and reply != _EMPTY_REPLY_FALLBACK:
             reply = f"{reply}\n\n{llm_footer}"
         trace_payload["final_reply"] = reply
         write_trace(self._workspace, trace_payload)

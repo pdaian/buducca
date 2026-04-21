@@ -2690,6 +2690,23 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.telegram.sent, [(1, "hello\n\nIP: 10.0.0.9 | model: pool-a")])
 
+    def test_leaked_internal_prompt_reply_uses_fallback_without_footer(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = TaggedLLM(
+            '{"\n\nPlease make the requested changes directly in the repository files.\n'
+            "Keep the solution minimal, correct, and production-ready.\n"
+            "At the end, provide a concise summary of what changed.",
+            "IP: localhost | model: primary | 2.8 tok/s, 192 tok, 69.28s",
+        )
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(
+            bot.telegram.sent,
+            [(1, "I couldn't produce a usable reply for that request. Please try again.")],
+        )
+
     def test_now_command_shows_recent_lines_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             recent_path = Path(td) / "telegram.recent"
