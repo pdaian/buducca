@@ -134,7 +134,12 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual([call[1]["model"] for call in http.calls], ["m1", "m2", "m1"])
 
     def test_generate_reply_exposes_runner_footer(self) -> None:
-        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        http = StubHttpClient(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"completion_tokens": 25, "total_tokens": 40},
+            }
+        )
         cfg = LLMConfig(
             runners=[
                 LLMRunnerConfig(base_url="http://10.0.0.9:8000/v1", api_key="k", model="m", model_tag="fast-a"),
@@ -145,13 +150,16 @@ class LLMClientTests(unittest.TestCase):
         reply = client.generate_reply([{"role": "user", "content": "hi"}])
 
         self.assertEqual(reply, "ok")
-        self.assertEqual(client.pop_last_reply_footer(), "IP: 10.0.0.9 | model: fast-a")
+        footer = client.pop_last_reply_footer()
+        self.assertIn("IP: 10.0.0.9 | model: fast-a | ", footer)
+        self.assertIn("tok/s", footer)
+        self.assertIn("25 tok", footer)
 
     def test_generate_reply_fails_over_to_next_runner_when_first_runner_errors(self) -> None:
         http = SequencedHttpClient(
             [
                 RuntimeError("primary unavailable"),
-                {"choices": [{"message": {"content": "ok"}}]},
+                {"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 12}},
             ]
         )
         cfg = LLMConfig(
@@ -173,8 +181,31 @@ class LLMClientTests(unittest.TestCase):
                 "http://10.0.0.2:8000/v1/chat/completions",
             ],
         )
-        self.assertEqual(client.pop_last_reply_footer(), "IP: 10.0.0.2 | model: beta")
+        footer = client.pop_last_reply_footer()
+        self.assertIn("IP: 10.0.0.2 | model: beta | ", footer)
+        self.assertIn("tok/s", footer)
         self.assertTrue(any("trying next runner" in line for line in logs.output))
+
+    def test_generate_reply_footer_falls_back_to_duration_when_usage_missing(self) -> None:
+        class SlowHttpClient:
+            def post_json(self, url, payload, headers=None):
+                time.sleep(0.01)
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.9:8000/v1", api_key="k", model="m", model_tag="fast-a"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=SlowHttpClient())
+
+        reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "ok")
+        footer = client.pop_last_reply_footer()
+        self.assertIn("IP: 10.0.0.9 | model: fast-a | ", footer)
+        self.assertIn("s", footer)
+        self.assertNotIn("tok/s", footer)
 
     def test_generate_reply_raises_after_all_runners_fail(self) -> None:
         http = SequencedHttpClient(

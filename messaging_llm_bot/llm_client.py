@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .config import LLMConfig, LLMRunnerConfig, _effective_llm_runners
@@ -149,7 +149,7 @@ class OpenAICompatibleClient:
                 message = data["choices"][0]["message"]
             except (KeyError, IndexError, AttributeError) as err:
                 raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
-            self._thread_state.reply_footer = self._format_reply_footer(runner)
+            self._thread_state.reply_footer = self._format_reply_footer(runner, data=data, duration_ms=duration_ms)
             content = message.get("content")
             if isinstance(content, str):
                 return self._sanitize_reply_text(content)
@@ -189,8 +189,46 @@ class OpenAICompatibleClient:
     def _runner_ip(runner: LLMRunnerConfig) -> str:
         return urlparse(runner.base_url).hostname or "unknown"
 
-    def _format_reply_footer(self, runner: LLMRunnerConfig) -> str:
-        return f"IP: {self._runner_ip(runner)} | model: {runner.model_tag or runner.model}"
+    def _format_reply_footer(self, runner: LLMRunnerConfig, *, data: dict[str, Any], duration_ms: float) -> str:
+        segments = [
+            f"IP: {self._runner_ip(runner)}",
+            f"model: {runner.model_tag or runner.model}",
+        ]
+        performance = self._format_performance_metrics(data, duration_ms)
+        if performance:
+            segments.append(performance)
+        return " | ".join(segments)
+
+    @staticmethod
+    def _format_performance_metrics(data: dict[str, Any], duration_ms: float) -> str:
+        duration_seconds = max(duration_ms / 1000.0, 0.0)
+        usage = data.get("usage")
+        completion_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, "completion_tokens")
+        total_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, "total_tokens")
+        output_tokens = completion_tokens if completion_tokens and completion_tokens > 0 else total_tokens
+        if output_tokens and output_tokens > 0 and duration_seconds > 0:
+            return f"{output_tokens / duration_seconds:.1f} tok/s, {output_tokens} tok, {duration_seconds:.2f}s"
+        if duration_seconds > 0:
+            return f"{duration_seconds:.2f}s"
+        return ""
+
+    @staticmethod
+    def _extract_usage_token_count(usage: Any, field: str) -> int | None:
+        if not isinstance(usage, dict):
+            return None
+        value = usage.get(field)
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _messages_request_no_think(messages: Iterable[dict[str, str]]) -> bool:
