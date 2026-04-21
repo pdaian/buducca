@@ -104,6 +104,7 @@ class RunClientScriptTests(unittest.TestCase):
             outbox = Path(td) / "android-sms-outbox.jsonl"
             state = Path(td) / "android-sms-outbox-state.json"
             ssh_key = Path(td) / "buducca_android_sync"
+            client_uid_file = Path(td) / "client-uid"
             with mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
                 with mock.patch.object(module, "generate_ssh_key", return_value="ssh-ed25519 AAAA test") as generate:
                     with mock.patch.object(module, "sync_once", return_value=0) as sync_once:
@@ -118,6 +119,8 @@ class RunClientScriptTests(unittest.TestCase):
                                 str(state),
                                 "--ssh-key",
                                 str(ssh_key),
+                                "--client-uid-file",
+                                str(client_uid_file),
                                 "once",
                             ]
                         )
@@ -129,6 +132,7 @@ class RunClientScriptTests(unittest.TestCase):
             force=True,
         )
         sync_once.assert_called_once()
+        self.assertTrue(sync_once.call_args.kwargs["client_uid"])
 
     def test_run_client_loop_continues_after_collection_and_sync_failures(self) -> None:
         module = _load_module()
@@ -159,6 +163,7 @@ class RunClientScriptTests(unittest.TestCase):
                                     remote_host="bot@example.com",
                                     remote_dir="/srv/buducca/android",
                                     ssh_key="/tmp/key",
+                                    client_uid="phone-a",
                                     sms_command="termux-sms-send",
                                     notification_command="termux-notification-list",
                                     notification_dismiss_command=module.DEFAULT_NOTIFICATION_DISMISS_COMMAND,
@@ -177,16 +182,19 @@ class RunClientScriptTests(unittest.TestCase):
         module = _load_module()
         stdout = StringIO()
         stderr = StringIO()
-        with mock.patch.object(module, "_ensure_ssh_key"):
-            with mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
-                with mock.patch.object(
-                    module,
-                    "sync_once",
-                    side_effect=[module.ClientError("network down"), 3],
-                ) as sync_once:
-                    with mock.patch.object(module.time, "sleep", side_effect=[None, KeyboardInterrupt]):
-                        with redirect_stdout(stdout), redirect_stderr(stderr):
-                            exit_code = module.main(["sync", "run"])
+        with tempfile.TemporaryDirectory() as td:
+            client_uid_file = Path(td) / "client-uid"
+            with mock.patch.object(module, "DEFAULT_CLIENT_UID_FILE", str(client_uid_file)):
+                with mock.patch.object(module, "_ensure_ssh_key"):
+                    with mock.patch.object(module, "_sync_target", return_value=("bot@example.com", "/srv/buducca/android")):
+                        with mock.patch.object(
+                            module,
+                            "sync_once",
+                            side_effect=[module.ClientError("network down"), 3],
+                        ) as sync_once:
+                            with mock.patch.object(module.time, "sleep", side_effect=[None, KeyboardInterrupt]):
+                                with redirect_stdout(stdout), redirect_stderr(stderr):
+                                    exit_code = module.main(["sync", "run"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(sync_once.call_count, 2)

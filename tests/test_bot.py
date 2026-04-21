@@ -464,6 +464,47 @@ class BotTests(unittest.TestCase):
             recent_lines = [line for line in (Path(td) / "android.messages.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(recent_lines), 1)
 
+    def test_android_recent_keeps_same_message_from_different_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                android=AndroidConfig(
+                    account="android",
+                    read_only=True,
+                    store_unanswered_messages=True,
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                ),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=1,
+                    event_id="android-client:phone-a:stable",
+                    backend="android",
+                    conversation_id="android-client:phone-a:+15550001",
+                    sender_id="+15550001",
+                    text="collect me",
+                    sent_at="2026-03-18T09:01:00-04:00",
+                )
+            )
+            bot._handle_update(
+                IncomingMessage(
+                    update_id=2,
+                    event_id="android-client:phone-b:stable",
+                    backend="android",
+                    conversation_id="android-client:phone-b:+15550001",
+                    sender_id="+15550001",
+                    text="collect me",
+                    sent_at="2026-03-18T09:01:00-04:00",
+                )
+            )
+
+            recent_lines = [line for line in (Path(td) / "android.messages.recent").read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(recent_lines), 2)
+
     def test_replied_message_logs_agenta_query(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = BotConfig(

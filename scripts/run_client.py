@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import which
@@ -19,6 +20,7 @@ DEFAULT_OUTBOX = str(DEFAULT_SYNC_DIR / "android-sms-outbox.jsonl")
 DEFAULT_OUTBOX_STATE_FILE = str(DEFAULT_SYNC_DIR / "android-sms-outbox-state.json")
 DEFAULT_SSH_KEY = str(Path.home() / ".ssh" / "buducca_android_sync")
 DEFAULT_SYNC_CONFIG_FILE = str(DEFAULT_SYNC_DIR / "client-config.json")
+DEFAULT_CLIENT_UID_FILE = str(DEFAULT_SYNC_DIR / "client-uid")
 DEFAULT_REMOTE_HOST_ENV = "BUDUCCA_REMOTE_HOST"
 DEFAULT_REMOTE_DIR_ENV = "BUDUCCA_REMOTE_DIR"
 DEFAULT_REMOTE_DIR = "/srv/buducca/android"
@@ -97,6 +99,26 @@ def _load_seen_keys(path: Path) -> set[str]:
 def _save_seen_keys(path: Path, keys: set[str]) -> None:
     _ensure_parent(path)
     path.write_text(json.dumps({"active_keys": sorted(keys)}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _load_client_uid(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return value if value else ""
+
+
+def _get_or_create_client_uid(path: Path) -> str:
+    existing = _load_client_uid(path)
+    if existing:
+        return existing
+    _ensure_parent(path)
+    client_uid = uuid4().hex
+    path.write_text(client_uid + "\n", encoding="utf-8")
+    return client_uid
 
 
 def _load_sync_config(path: Path | None = None) -> dict[str, str]:
@@ -257,6 +279,7 @@ def collect_notifications_once(
     notification_command: str,
     notification_dismiss_command: str = DEFAULT_NOTIFICATION_DISMISS_COMMAND,
     include_packages: set[str] | None = None,
+    client_uid: str | None = None,
 ) -> int:
     include_packages = _normalize_include_packages(include_packages)
     proc = _run_command(
@@ -289,6 +312,8 @@ def collect_notifications_once(
             continue
         normalized = _normalize_notification(item)
         if normalized:
+            if client_uid:
+                normalized["client_uid"] = client_uid
             events.append(normalized)
             dismiss_items.append(item)
 
@@ -397,6 +422,7 @@ def sync_once(
     *,
     local_inbox: Path,
     local_outbox: Path,
+    client_uid: str,
     remote_host: str,
     remote_dir: str,
     ssh_key: str,
@@ -406,8 +432,10 @@ def sync_once(
 ) -> int:
     _ensure_jsonl_file(local_inbox)
     _ensure_jsonl_file(local_outbox)
-    remote_inbox = f"{remote_host}:{remote_dir.rstrip('/')}/{local_inbox.name}"
-    remote_outbox = f"{remote_host}:{remote_dir.rstrip('/')}/{local_outbox.name}"
+    remote_inbox_name = _client_scoped_name(local_inbox.name, client_uid)
+    remote_outbox_name = _client_scoped_name(local_outbox.name, client_uid)
+    remote_inbox = f"{remote_host}:{remote_dir.rstrip('/')}/{remote_inbox_name}"
+    remote_outbox = f"{remote_host}:{remote_dir.rstrip('/')}/{remote_outbox_name}"
     _run_command(
         [scp_command, "-q", "-i", ssh_key, str(local_inbox), remote_inbox],
         missing_message=f"sync failed: executable {scp_command!r} was not found in PATH",
@@ -421,6 +449,13 @@ def sync_once(
     return flush_sms_outbox(outbox_path=local_outbox, state_path=outbox_state_path, sms_command=sms_command)
 
 
+def _client_scoped_name(name: str, client_uid: str) -> str:
+    path = Path(name)
+    suffix = "".join(path.suffixes)
+    base_name = path.name[: -len(suffix)] if suffix else path.name
+    return f"{base_name}.{client_uid}{suffix}"
+
+
 def run_client_loop(
     *,
     inbox_path: Path,
@@ -430,6 +465,7 @@ def run_client_loop(
     remote_host: str,
     remote_dir: str,
     ssh_key: str,
+    client_uid: str,
     sms_command: str,
     notification_command: str,
     notification_dismiss_command: str,
@@ -449,6 +485,7 @@ def run_client_loop(
                 notification_command=notification_command,
                 notification_dismiss_command=notification_dismiss_command,
                 include_packages=include_packages,
+                client_uid=client_uid,
             )
         except Exception as exc:
             _log_loop_failure("notification collection failed", exc)
@@ -456,6 +493,7 @@ def run_client_loop(
             sync_once(
                 local_inbox=inbox_path,
                 local_outbox=outbox_path,
+                client_uid=client_uid,
                 remote_host=remote_host,
                 remote_dir=remote_dir,
                 ssh_key=ssh_key,
@@ -521,6 +559,7 @@ def _setup_summary_lines() -> list[str]:
     remote_host = _default_remote_host() or "<server>"
     remote_dir = _default_remote_dir()
     ssh_key_exists = Path(DEFAULT_SSH_KEY).exists()
+    client_uid = _load_client_uid(Path(DEFAULT_CLIENT_UID_FILE)) or "<missing>"
     return [
         "BUDUCCA Android client setup",
         "",
@@ -531,6 +570,7 @@ def _setup_summary_lines() -> list[str]:
         f"- SMS outbox state: {DEFAULT_OUTBOX_STATE_FILE}",
         f"- SSH key: {DEFAULT_SSH_KEY} ({'present' if ssh_key_exists else 'missing'})",
         f"- persisted sync config: {DEFAULT_SYNC_CONFIG_FILE}",
+        f"- client uid: {DEFAULT_CLIENT_UID_FILE} ({client_uid})",
         "",
         "Sync target:",
         f"- export {DEFAULT_REMOTE_HOST_ENV}={remote_host}",
@@ -588,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--remote-host", default=_default_remote_host())
     sync.add_argument("--remote-dir", default=_default_remote_dir())
     sync.add_argument("--ssh-key", default=DEFAULT_SSH_KEY)
+    sync.add_argument("--client-uid-file", default=DEFAULT_CLIENT_UID_FILE)
     sync.add_argument("--sms-command", default="termux-sms-send")
     sync.add_argument("--scp-command", default="scp")
     sync_subparsers = sync.add_subparsers(dest="sync_command", required=True)
@@ -603,6 +644,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--remote-host", default=_default_remote_host())
     run.add_argument("--remote-dir", default=_default_remote_dir())
     run.add_argument("--ssh-key", default=DEFAULT_SSH_KEY)
+    run.add_argument("--client-uid-file", default=DEFAULT_CLIENT_UID_FILE)
     run.add_argument("--sms-command", default="termux-sms-send")
     run.add_argument("--notification-command", default="termux-notification-list")
     run.add_argument("--notification-dismiss-command", default=DEFAULT_NOTIFICATION_DISMISS_COMMAND)
@@ -673,11 +715,13 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(args.interval_seconds)
         if args.command == "sync":
             _ensure_ssh_key(Path(args.ssh_key))
+            client_uid = _get_or_create_client_uid(Path(args.client_uid_file))
             if args.sync_command == "once":
                 remote_host, remote_dir = _sync_target(args)
                 delivered = sync_once(
                     local_inbox=Path(args.inbox),
                     local_outbox=Path(args.outbox),
+                    client_uid=client_uid,
                     remote_host=remote_host,
                     remote_dir=remote_dir,
                     ssh_key=args.ssh_key,
@@ -695,6 +739,7 @@ def main(argv: list[str] | None = None) -> int:
                     delivered = sync_once(
                         local_inbox=Path(args.inbox),
                         local_outbox=Path(args.outbox),
+                        client_uid=client_uid,
                         remote_host=remote_host,
                         remote_dir=remote_dir,
                         ssh_key=args.ssh_key,
@@ -709,6 +754,7 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(args.interval_seconds)
         if args.command == "run":
             _ensure_ssh_key(Path(args.ssh_key))
+            client_uid = _get_or_create_client_uid(Path(args.client_uid_file))
             remote_host, remote_dir = _sync_target(args)
             run_client_loop(
                 inbox_path=Path(args.inbox),
@@ -718,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
                 remote_host=remote_host,
                 remote_dir=remote_dir,
                 ssh_key=args.ssh_key,
+                client_uid=client_uid,
                 sms_command=args.sms_command,
                 notification_command=args.notification_command,
                 notification_dismiss_command=args.notification_dismiss_command,

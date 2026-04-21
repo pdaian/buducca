@@ -227,6 +227,8 @@ class BotRunner:
             "-m",
             "messaging_llm_bot.android_client",
             "send",
+            "--client-uid",
+            "{client_uid}",
             "--recipient",
             "{recipient}",
             "--message",
@@ -3056,7 +3058,7 @@ class BotRunner:
         if backend == "whatsapp":
             return conversation_id or sender_id
         if backend == "android":
-            return sender_id or conversation_id
+            return conversation_id or sender_id
         return None
 
     def _contact_aliases_for_update(

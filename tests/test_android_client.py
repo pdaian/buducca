@@ -109,6 +109,34 @@ class AndroidClientTests(unittest.TestCase):
         self.assertEqual(len(first_updates), 1)
         self.assertEqual(first_updates[0].event_id, second_updates[0].event_id)
 
+    def test_get_updates_namespaces_event_and_conversation_by_client_uid(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [
+                    {
+                        "client_uid": "phone-a",
+                        "type": "sms",
+                        "sender_id": "+15550001",
+                        "conversation_id": "+15550001",
+                        "event_id": "42",
+                        "body": "hello",
+                    }
+                ]
+            }
+        )
+        with patch("messaging_llm_bot.android_client.subprocess.run") as run:
+            run.return_value = Mock(returncode=0, stdout=payload, stderr="")
+            with patch("messaging_llm_bot.android_client.which", return_value="/usr/bin/python3"):
+                client = AndroidClient(
+                    receive_command=["python3", "recv.py"],
+                    send_command=["python3", "send.py", "{recipient}", "{message}"],
+                )
+                updates = client.get_updates()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].conversation_id, "android-client:phone-a:+15550001")
+        self.assertEqual(updates[0].event_id, "android-client:phone-a:42")
+
     def test_send_message_replaces_placeholders(self) -> None:
         with patch("messaging_llm_bot.android_client.subprocess.run") as run:
             run.return_value = Mock(returncode=0, stdout="", stderr="")
@@ -305,6 +333,28 @@ class AndroidClientTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(stdout.getvalue().strip(), '{"messages": []}')
+
+    def test_main_receive_consolidates_client_scoped_inboxes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "android-events.jsonl"
+            state = Path(td) / "android-state.json"
+            (Path(td) / "android-events.phone-a.jsonl").write_text(
+                json.dumps({"type": "sms", "sender_id": "+15550001", "body": "hello"}) + "\n",
+                encoding="utf-8",
+            )
+            (Path(td) / "android-events.phone-b.jsonl").write_text(
+                json.dumps({"type": "sms", "sender_id": "+15550002", "body": "hi"}) + "\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["receive", "--inbox", str(inbox), "--state-file", str(state)])
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(len(payload["messages"]), 2)
+            self.assertEqual({item["client_uid"] for item in payload["messages"]}, {"phone-a", "phone-b"})
 
     def test_termux_notification_collector_appends_only_new_notifications(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -565,6 +615,7 @@ class RunClientTests(unittest.TestCase):
                     delivered = run_client.sync_once(
                         local_inbox=inbox,
                         local_outbox=outbox,
+                        client_uid="phone-a",
                         remote_host="server",
                         remote_dir="/srv/android",
                         ssh_key="/tmp/key",
@@ -575,6 +626,8 @@ class RunClientTests(unittest.TestCase):
 
             self.assertEqual(delivered, 1)
             self.assertEqual(run.call_count, 3)
+            self.assertEqual(run.call_args_list[0].args[0][-1], "server:/srv/android/android-events.phone-a.jsonl")
+            self.assertEqual(run.call_args_list[1].args[0][4], "server:/srv/android/android-sms-outbox.phone-a.jsonl")
 
 
 if __name__ == "__main__":

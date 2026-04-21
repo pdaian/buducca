@@ -20,6 +20,7 @@ DEFAULT_ANDROID_OUTBOX = "data/android-sms-outbox.jsonl"
 DEFAULT_ANDROID_OUTBOX_STATE_FILE = "data/android-sms-outbox-state.json"
 DEFAULT_ANDROID_SSH_KEY = "data/android-sync-ed25519"
 MAX_ANDROID_OUTBOX_LINES = 50
+ANDROID_CLIENT_CONVERSATION_PREFIX = "android-client:"
 
 
 class AndroidFrontendUnavailableError(RuntimeError):
@@ -64,7 +65,11 @@ class AndroidClient:
 
     def send_message(self, recipient: str, text: str) -> None:
         self._validate(self.send_command, name="send")
-        command = [part.replace("{recipient}", recipient).replace("{message}", text) for part in self.send_command]
+        client_uid, normalized_recipient = self._split_client_conversation_id(recipient)
+        command = [
+            part.replace("{client_uid}", client_uid).replace("{recipient}", normalized_recipient).replace("{message}", text)
+            for part in self.send_command
+        ]
         try:
             proc = subprocess.run(command, capture_output=True, text=True, check=False)
         except FileNotFoundError as exc:
@@ -109,6 +114,7 @@ class AndroidClient:
         sender_contact = self._first_text(item.get("sender_contact"), sender_name, sender_id)
         sent_at = self._first_text(item.get("sent_at"), item.get("timestamp"), item.get("posted_at"))
         event_id = self._first_text(item.get("event_id"), item.get("id"))
+        client_uid = self._first_text(item.get("client_uid"), item.get("device_uid"), item.get("uid"))
 
         if channel == "notification":
             package_name = self._first_text(item.get("package_name"), item.get("package"))
@@ -130,11 +136,14 @@ class AndroidClient:
 
         if not text_value or not conversation_id or not sender_id:
             return None
+        conversation_id = self._compose_client_conversation_id(client_uid, conversation_id)
+        event_id = self._namespace_event_id(client_uid, event_id)
 
         return IncomingMessage(
             update_id=self._next_update_id(),
             event_id=event_id or self._fallback_event_id(
                 channel=channel,
+                client_uid=client_uid,
                 conversation_id=conversation_id,
                 sender_id=sender_id,
                 text=text_value,
@@ -156,6 +165,7 @@ class AndroidClient:
     def _fallback_event_id(
         *,
         channel: str,
+        client_uid: str | None,
         conversation_id: str,
         sender_id: str,
         text: str,
@@ -166,6 +176,7 @@ class AndroidClient:
             (
                 "android",
                 channel,
+                client_uid or "",
                 conversation_id,
                 sender_id,
                 sent_at or "",
@@ -174,6 +185,28 @@ class AndroidClient:
             )
         )
         return f"android:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+    @staticmethod
+    def _compose_client_conversation_id(client_uid: str | None, conversation_id: str) -> str:
+        if not client_uid:
+            return conversation_id
+        return f"{ANDROID_CLIENT_CONVERSATION_PREFIX}{client_uid}:{conversation_id}"
+
+    @staticmethod
+    def _split_client_conversation_id(conversation_id: str) -> tuple[str, str]:
+        if not conversation_id.startswith(ANDROID_CLIENT_CONVERSATION_PREFIX):
+            return "", conversation_id
+        payload = conversation_id[len(ANDROID_CLIENT_CONVERSATION_PREFIX) :]
+        client_uid, separator, raw_conversation_id = payload.partition(":")
+        if not separator or not client_uid or not raw_conversation_id:
+            return "", conversation_id
+        return client_uid, raw_conversation_id
+
+    @staticmethod
+    def _namespace_event_id(client_uid: str | None, event_id: str | None) -> str | None:
+        if not client_uid or not event_id:
+            return event_id
+        return f"android-client:{client_uid}:{event_id}"
 
     def _next_update_id(self) -> int:
         self._update_counter += 1
@@ -221,6 +254,27 @@ def _load_offset(path: Path) -> int:
 def _save_offset(path: Path, offset: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"offset": max(0, offset)}) + "\n", encoding="utf-8")
+
+
+def _load_offsets(path: Path, *, legacy_file_name: str) -> dict[str, int]:
+    payload = _state_payload(path)
+    offsets = payload.get("offsets")
+    if isinstance(offsets, dict):
+        return {
+            str(key): int(value)
+            for key, value in offsets.items()
+            if isinstance(key, str) and isinstance(value, int) and value >= 0
+        }
+    offset = payload.get("offset")
+    if isinstance(offset, int) and offset >= 0:
+        return {legacy_file_name: offset}
+    return {}
+
+
+def _save_offsets(path: Path, offsets: dict[str, int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"offsets": {key: value for key, value in sorted(offsets.items()) if value >= 0}}
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
 def _trim_jsonl_file(path: Path, *, max_lines: int) -> None:
@@ -278,11 +332,56 @@ def _jsonl_entries_with_offsets(path: Path, *, start_offset: int) -> list[tuple[
     return entries
 
 
+def _client_scoped_jsonl_path(path: Path, client_uid: str | None) -> Path:
+    if not client_uid:
+        return path
+    suffix = "".join(path.suffixes)
+    base_name = path.name[: -len(suffix)] if suffix else path.name
+    return path.with_name(f"{base_name}.{client_uid}{suffix}")
+
+
+def _client_uid_from_scoped_jsonl_path(path: Path, *, base_path: Path) -> str | None:
+    suffix = "".join(base_path.suffixes)
+    base_name = base_path.name[: -len(suffix)] if suffix else base_path.name
+    if path.name == base_path.name:
+        return None
+    prefix = f"{base_name}."
+    if not path.name.startswith(prefix):
+        return None
+    end_index = len(path.name) - len(suffix) if suffix else len(path.name)
+    client_uid = path.name[len(prefix) : end_index]
+    return client_uid or None
+
+
+def _iter_client_inbox_paths(inbox_path: Path) -> list[tuple[str, Path, str | None]]:
+    paths: list[tuple[str, Path, str | None]] = []
+    if inbox_path.exists():
+        paths.append((inbox_path.name, inbox_path, None))
+    suffix = "".join(inbox_path.suffixes)
+    base_name = inbox_path.name[: -len(suffix)] if suffix else inbox_path.name
+    pattern = f"{base_name}.*{suffix}" if suffix else f"{base_name}.*"
+    for candidate in sorted(inbox_path.parent.glob(pattern)):
+        if not candidate.is_file() or candidate == inbox_path:
+            continue
+        client_uid = _client_uid_from_scoped_jsonl_path(candidate, base_path=inbox_path)
+        paths.append((candidate.name, candidate, client_uid))
+    return paths
+
+
 def receive_events(*, inbox_path: Path, state_path: Path) -> dict[str, list[dict[str, Any]]]:
-    offset = _load_offset(state_path)
-    messages, new_offset = _jsonl_messages(inbox_path, start_offset=offset)
-    _save_offset(state_path, new_offset)
-    return {"messages": messages}
+    offsets = _load_offsets(state_path, legacy_file_name=inbox_path.name)
+    all_messages: list[dict[str, Any]] = []
+    next_offsets = dict(offsets)
+    for key, client_inbox_path, client_uid in _iter_client_inbox_paths(inbox_path):
+        messages, new_offset = _jsonl_messages(client_inbox_path, start_offset=offsets.get(key, 0))
+        next_offsets[key] = new_offset
+        for message in messages:
+            if client_uid and "client_uid" not in message:
+                message = dict(message)
+                message["client_uid"] = client_uid
+            all_messages.append(message)
+    _save_offsets(state_path, next_offsets)
+    return {"messages": all_messages}
 
 
 def _normalize_sms_recipient(recipient: str) -> str:
@@ -314,17 +413,18 @@ def send_sms(*, recipient: str, message: str, sms_command: str) -> None:
         raise RuntimeError(f"Android SMS send failed: {stderr}")
 
 
-def queue_sms(*, recipient: str, message: str, outbox_path: Path) -> None:
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+def queue_sms(*, recipient: str, message: str, outbox_path: Path, client_uid: str | None = None) -> None:
+    resolved_outbox_path = _client_scoped_jsonl_path(outbox_path, client_uid)
+    resolved_outbox_path.parent.mkdir(parents=True, exist_ok=True)
     normalized_recipient = _normalize_sms_recipient(recipient)
     payload = {
         "recipient": normalized_recipient,
         "message": message,
         "queued_at": datetime.now(timezone.utc).isoformat(),
     }
-    with outbox_path.open("a", encoding="utf-8") as handle:
+    with resolved_outbox_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    _trim_jsonl_file(outbox_path, max_lines=MAX_ANDROID_OUTBOX_LINES)
+    _trim_jsonl_file(resolved_outbox_path, max_lines=MAX_ANDROID_OUTBOX_LINES)
 
 
 def flush_sms_outbox(*, outbox_path: Path, state_path: Path, sms_command: str) -> int:
@@ -390,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--message", required=True)
     send.add_argument("--sms-command", default="termux-sms-send")
     send.add_argument("--outbox", default="")
+    send.add_argument("--client-uid", default="")
 
     flush_outbox = subparsers.add_parser("flush-outbox", help="Send queued SMS requests from a JSONL outbox")
     flush_outbox.add_argument("--outbox", default=DEFAULT_ANDROID_OUTBOX)
@@ -412,7 +513,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "send":
             if args.outbox:
-                queue_sms(recipient=args.recipient, message=args.message, outbox_path=Path(args.outbox))
+                queue_sms(
+                    recipient=args.recipient,
+                    message=args.message,
+                    outbox_path=Path(args.outbox),
+                    client_uid=(args.client_uid or "").strip() or None,
+                )
             else:
                 send_sms(recipient=args.recipient, message=args.message, sms_command=args.sms_command)
             return 0
