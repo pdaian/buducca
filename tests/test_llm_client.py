@@ -192,6 +192,45 @@ class LLMClientTests(unittest.TestCase):
         self.assertIn("tok/s", footer)
         self.assertIn("25 tok", footer)
 
+    def test_generate_reply_continues_when_finish_reason_is_length(self) -> None:
+        http = SequencedHttpClient(
+            [
+                {
+                    "choices": [{"message": {"content": "Hello wor"}, "finish_reason": "length"}],
+                    "usage": {"completion_tokens": 3, "total_tokens": 12},
+                },
+                {
+                    "choices": [{"message": {"content": "ld"}, "finish_reason": "stop"}],
+                    "usage": {"completion_tokens": 2, "total_tokens": 8},
+                },
+            ]
+        )
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.9:8000/v1", api_key="k", model="m", model_tag="fast-a"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with self.assertLogs(level="WARNING") as logs:
+            reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "Hello world")
+        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(http.calls[1][1]["messages"][-2:], [
+            {"role": "assistant", "content": "Hello wor"},
+            {
+                "role": "user",
+                "content": (
+                    "Continue exactly from where you stopped. Do not repeat prior text, restart the answer, "
+                    "or add commentary about continuing. Output only the remaining continuation."
+                ),
+            },
+        ])
+        footer = client.pop_last_reply_footer()
+        self.assertIn("5 tok", footer)
+        self.assertTrue(any("LLM completion truncated:" in line for line in logs.output))
+
     def test_chain_runner_affinity_switches_runner_after_mid_chain_failure(self) -> None:
         http = SequencedHttpClient(
             [

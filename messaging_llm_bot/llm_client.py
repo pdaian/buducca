@@ -15,6 +15,11 @@ from .http import HttpClient
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 _THINK_BLOCK_RE = re.compile(r"(?is)<think>.*?(?:</think>|$)")
+_CONTINUATION_PROMPT = (
+    "Continue exactly from where you stopped. Do not repeat prior text, restart the answer, "
+    "or add commentary about continuing. Output only the remaining continuation."
+)
+_MAX_CONTINUATION_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -147,63 +152,130 @@ class OpenAICompatibleClient:
         *,
         disable_thinking: bool,
     ) -> str:
-        payload = {
-            "model": runner.model,
-            "messages": messages,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-        }
-        if disable_thinking or self._messages_request_no_think(messages):
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {"Authorization": f"Bearer {runner.api_key}"}
         endpoint = runner.endpoint_path
         if not endpoint.startswith("/"):
             endpoint = "/" + endpoint
         url = runner.base_url.rstrip("/") + endpoint
-        started = time.perf_counter()
-        request_key = self._register_request(runner_index)
+        continuation_messages = list(messages)
+        aggregated_reply = ""
+        total_duration_ms = 0.0
+        aggregated_usage: dict[str, int] = {}
 
-        if self.debug:
-            logging.debug("LLM request URL: %s", url)
-            logging.debug("LLM request payload: %s", payload)
+        for continuation_attempt in range(_MAX_CONTINUATION_ATTEMPTS + 1):
+            payload = {
+                "model": runner.model,
+                "messages": continuation_messages,
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+            }
+            if disable_thinking or self._messages_request_no_think(continuation_messages):
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+            started = time.perf_counter()
+            request_key = self._register_request(runner_index)
 
-        try:
-            data = self.http_client.post_json(url, payload, headers=headers)
+            if self.debug:
+                logging.debug("LLM request URL: %s", url)
+                logging.debug("LLM request payload: %s", payload)
+
+            try:
+                data = self.http_client.post_json(url, payload, headers=headers)
+            finally:
+                self._unregister_request(runner_index, request_key)
+
             duration_ms = (time.perf_counter() - started) * 1000
+            total_duration_ms += duration_ms
             if self.debug:
                 logging.debug("LLM response payload: %s", data)
                 logging.debug("LLM request completed in %.2fms", duration_ms)
 
-            try:
-                message = data["choices"][0]["message"]
-            except (KeyError, IndexError, AttributeError) as err:
-                raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
+            choice = self._extract_primary_choice(data)
             with self._selection_lock:
                 self._last_success_at[runner_index] = datetime.now(timezone.utc).isoformat()
-            self._thread_state.reply_footer = self._format_reply_footer(runner, data=data, duration_ms=duration_ms)
-            content = message.get("content")
-            if isinstance(content, str):
-                return self._sanitize_reply_text(content)
-            if isinstance(content, list):
-                parts: list[str] = []
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    item_type = str(item.get("type") or "").strip().lower()
-                    if item_type != "text":
-                        continue
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        sanitized = self._sanitize_reply_text(text)
-                        if sanitized:
-                            parts.append(sanitized)
-                return "\n".join(parts).strip()
-            refusal = message.get("refusal")
-            if isinstance(refusal, str):
-                return self._sanitize_reply_text(refusal)
+            self._merge_usage_counts(aggregated_usage, data.get("usage"))
+            reply_part = self._extract_reply_text(choice.get("message"))
+            if reply_part:
+                aggregated_reply += reply_part
+
+            finish_reason = str(choice.get("finish_reason") or "").strip().lower()
+            if not self._should_continue_after_finish_reason(finish_reason, reply_part):
+                self._thread_state.reply_footer = self._format_reply_footer(
+                    runner,
+                    data={"usage": aggregated_usage},
+                    duration_ms=total_duration_ms,
+                )
+                return aggregated_reply
+
+            logging.warning(
+                "LLM completion truncated: url=%s model=%s finish_reason=%s continuation_attempt=%s/%s",
+                runner.base_url,
+                runner.model_tag or runner.model,
+                finish_reason or "unknown",
+                continuation_attempt + 1,
+                _MAX_CONTINUATION_ATTEMPTS,
+            )
+            continuation_messages = [
+                *messages,
+                {"role": "assistant", "content": aggregated_reply},
+                {"role": "user", "content": _CONTINUATION_PROMPT},
+            ]
+
+        self._thread_state.reply_footer = self._format_reply_footer(
+            runner,
+            data={"usage": aggregated_usage},
+            duration_ms=total_duration_ms,
+        )
+        return aggregated_reply
+
+    @staticmethod
+    def _extract_primary_choice(data: dict[str, Any]) -> dict[str, Any]:
+        try:
+            choice = data["choices"][0]
+        except (KeyError, IndexError, AttributeError) as err:
+            raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
+        if not isinstance(choice, dict):
+            raise RuntimeError(f"Malformed response from LLM endpoint: {data}")
+        return choice
+
+    @classmethod
+    def _extract_reply_text(cls, message: Any) -> str:
+        if not isinstance(message, dict):
             return ""
-        finally:
-            self._unregister_request(runner_index, request_key)
+        content = message.get("content")
+        if isinstance(content, str):
+            return cls._sanitize_reply_text(content)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type != "text":
+                    continue
+                text = item.get("text")
+                if isinstance(text, str):
+                    sanitized = cls._sanitize_reply_text(text)
+                    if sanitized:
+                        parts.append(sanitized)
+            return "\n".join(parts).strip()
+        refusal = message.get("refusal")
+        if isinstance(refusal, str):
+            return cls._sanitize_reply_text(refusal)
+        return ""
+
+    @staticmethod
+    def _should_continue_after_finish_reason(finish_reason: str, reply_part: str) -> bool:
+        return bool(reply_part.strip()) and finish_reason in {"length", "max_tokens"}
+
+    @staticmethod
+    def _merge_usage_counts(destination: dict[str, int], usage: Any) -> None:
+        if not isinstance(usage, dict):
+            return
+        for field in ("completion_tokens", "prompt_tokens", "total_tokens"):
+            value = OpenAICompatibleClient._extract_usage_token_count(usage, field)
+            if value is None:
+                continue
+            destination[field] = destination.get(field, 0) + value
 
     def _register_request(self, runner_index: int) -> int:
         with self._selection_lock:
