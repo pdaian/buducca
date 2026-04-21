@@ -87,6 +87,29 @@ class DummyLLM:
         return self.reply
 
 
+class TaggedLLM(DummyLLM):
+    def __init__(self, reply: str, footer: str) -> None:
+        super().__init__(reply)
+        self.footer = footer
+
+    def pop_last_reply_footer(self) -> str:
+        return self.footer
+
+
+class StatusAwareLLM(DummyLLM):
+    def get_runner_statuses(self):
+        return [
+            SimpleNamespace(
+                index=0,
+                ip="10.0.0.1",
+                model="mistral",
+                model_tag="pool-a",
+                concurrent_requests=2,
+                pending_for_seconds=[1.2, 3.4],
+            )
+        ]
+
+
 class SequentialLLM:
     def __init__(self, replies) -> None:
         self.replies = list(replies)
@@ -809,7 +832,7 @@ class BotTests(unittest.TestCase):
                     bot._handle_update(update)
                     bot._handle_update(
                         IncomingMessage(
-                            update_id=2,
+                            update_id=1,
                             backend=backend,
                             conversation_id=update.conversation_id,
                             sender_id=sender_id,
@@ -2561,6 +2584,43 @@ class BotTests(unittest.TestCase):
         self.assertIn("updates_handled: 7", sent)
         self.assertIn("collectors: no status data yet", sent)
 
+    def test_status_command_includes_llm_runner_state(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = StatusAwareLLM("should-not-be-used")
+
+        bot._handle_message(1, "/status")
+
+        sent = bot.telegram.sent[0][1]
+        self.assertIn("llm_runner:0", sent)
+        self.assertIn("ip: 10.0.0.1", sent)
+        self.assertIn("model_tag: pool-a", sent)
+        self.assertIn("concurrent_requests: 2", sent)
+        self.assertIn("pending_for: 1.2s, 3.4s", sent)
+
+    def test_status_command_bypasses_request_blocking(self) -> None:
+        runtime = RuntimeConfig(max_concurrent_requests=1)
+        bot = self.make_bot(runtime=runtime)
+        bot.telegram = DummyTelegram()
+        llm = BlockingConcurrencyLLM()
+        bot.llm = llm
+
+        worker = threading.Thread(target=bot._handle_message, args=(1, "first"))
+        worker.start()
+        self.assertTrue(llm.entered.wait(timeout=0.5))
+
+        status_thread = threading.Thread(target=bot._handle_message, args=(1, "/status"))
+        status_thread.start()
+        status_thread.join(timeout=0.5)
+
+        self.assertFalse(status_thread.is_alive())
+        self.assertEqual(llm.calls, 1)
+        self.assertTrue(any("Agent status" in text for _, text in bot.telegram.sent))
+
+        llm.release.set()
+        worker.join(timeout=1.0)
+        self.assertFalse(worker.is_alive())
+
     def test_plan_command_shows_injected_plan_payload_shapes_without_llm(self) -> None:
         bot = self.make_bot()
         bot.telegram = DummyTelegram()
@@ -2577,6 +2637,15 @@ class BotTests(unittest.TestCase):
         self.assertIn('"questions": [', sent)
         self.assertIn('"id": "snake_case"', sent)
         self.assertIn("not JSON Schema documents", sent)
+
+    def test_llm_reply_appends_runner_footer(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = TaggedLLM("hello", "IP: 10.0.0.9 | model: pool-a")
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(bot.telegram.sent, [(1, "hello\n\nIP: 10.0.0.9 | model: pool-a")])
 
     def test_now_command_shows_recent_lines_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:

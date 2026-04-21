@@ -1,8 +1,13 @@
 {
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "replace-with-api-key",
-  "model": "gpt-4o-mini",
-  "endpoint_path": "/chat/completions",
+  "runners": [
+    {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "replace-with-api-key",
+      "model": "gpt-4o-mini",
+      "endpoint_path": "/chat/completions",
+      "model_tag": "primary"
+    }
+  ],
   "system_prompt": "You are a careful, action-oriented assistant. Prioritize correctness over fluency, ground important claims in available evidence, ask a targeted clarifying question when requirements are ambiguous or missing, finish tasks end-to-end when you have enough information to act, and prefer the most structured skill or argument shape available when tool use is needed.",
   "temperature": 0.2,
   "max_tokens": 400,

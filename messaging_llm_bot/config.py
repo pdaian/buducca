@@ -72,11 +72,21 @@ class ContactConfig:
 
 
 @dataclass
-class LLMConfig:
-    base_url: str
-    api_key: str
-    model: str
+class LLMRunnerConfig:
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
     endpoint_path: str = "/chat/completions"
+    model_tag: str = ""
+
+
+@dataclass
+class LLMConfig:
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    endpoint_path: str = "/chat/completions"
+    runners: list[LLMRunnerConfig] = field(default_factory=list)
     system_prompt: str = (
         "You are a careful, action-oriented assistant. Prioritize correctness over fluency, "
         "ground important claims in available evidence, ask a targeted clarifying question when "
@@ -193,6 +203,37 @@ def _load_contacts(raw: Any) -> list[ContactConfig]:
             )
         )
     return contacts
+
+
+def _load_llm_config(raw: Any) -> LLMConfig:
+    if not isinstance(raw, dict):
+        raise ValueError("llm must be a JSON object")
+
+    payload = _strip_comment_keys(raw)
+    runners_raw = payload.pop("runners", [])
+    llm = LLMConfig(**payload)
+    if runners_raw is None:
+        return llm
+    if not isinstance(runners_raw, list):
+        raise ValueError("llm.runners must be a list when set")
+    llm.runners = [LLMRunnerConfig(**_strip_comment_keys(item)) for item in runners_raw if isinstance(item, dict)]
+    if len(llm.runners) != len(runners_raw):
+        raise ValueError("llm.runners must contain only JSON objects")
+    return llm
+
+
+def _effective_llm_runners(config: LLMConfig) -> list[LLMRunnerConfig]:
+    if config.runners:
+        return config.runners
+    return [
+        LLMRunnerConfig(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model=config.model,
+            endpoint_path=config.endpoint_path,
+            model_tag=config.model,
+        )
+    ]
 
 
 def _resolve_workspace_root(runtime: RuntimeConfig, *, config_path: Path) -> Path:
@@ -329,12 +370,17 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
 
     if not config.llm:
         raise ValueError("llm must be set")
-    if not config.llm.base_url.strip():
-        raise ValueError("llm.base_url must be set")
-    if not config.llm.api_key.strip():
-        raise ValueError("llm.api_key must be set")
-    if not config.llm.model.strip():
-        raise ValueError("llm.model must be set")
+    runners = _effective_llm_runners(config.llm)
+    if not runners:
+        raise ValueError("llm must configure at least one runner")
+    for index, runner in enumerate(runners):
+        prefix = f"llm.runners[{index}]"
+        if not runner.base_url.strip():
+            raise ValueError(f"{prefix}.base_url must be set")
+        if not runner.api_key.strip():
+            raise ValueError(f"{prefix}.api_key must be set")
+        if not runner.model.strip():
+            raise ValueError(f"{prefix}.model must be set")
     if config.llm.history_messages < 0:
         raise ValueError("llm.history_messages must be >= 0")
     if not config.llm.system_prompt_timezone.strip():
@@ -380,7 +426,7 @@ def load_config(path: str | Path) -> BotConfig:
     whatsapp = WhatsAppConfig(**_strip_comment_keys(whatsapp_raw)) if isinstance(whatsapp_raw, dict) else None
     android = AndroidConfig(**_strip_comment_keys(android_raw)) if isinstance(android_raw, dict) else None
     try:
-        llm = LLMConfig(**_strip_comment_keys(raw["llm"]))
+        llm = _load_llm_config(raw["llm"])
     except KeyError as exc:
         raise ValueError("Missing required top-level section: llm") from exc
     runtime_raw = raw.get("runtime", {})

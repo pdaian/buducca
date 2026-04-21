@@ -265,6 +265,10 @@ class BotRunner:
                     self._request_state.evidence = []
                     self._request_state.trace_steps = []
 
+    @staticmethod
+    def _is_status_command(text: str) -> bool:
+        return text.strip().lower() == "/status"
+
     def _set_request_evidence(self, evidence: list[Any]) -> None:
         self._request_state.evidence = evidence
 
@@ -2007,8 +2011,23 @@ class BotRunner:
             f"- bot_uptime_seconds: {uptime_seconds}",
             f"- handled_messages: {self._handled_messages_count}",
             f"- active_chats_in_memory: {len(self._history)}",
+            f"- max_concurrent_requests: {self.config.runtime.max_concurrent_requests}",
         ]
         lines.extend(self._frontend_status_lines())
+        runner_statuses = getattr(self.llm, "get_runner_statuses", lambda: [])()
+        lines.append(f"- llm_runner_count: {len(runner_statuses)}")
+        for status in runner_statuses:
+            pending = ", ".join(f"{seconds:.1f}s" for seconds in status.pending_for_seconds) if status.pending_for_seconds else "none"
+            lines.extend(
+                [
+                    f"llm_runner:{status.index}",
+                    f"  - ip: {status.ip}",
+                    f"  - model: {status.model}",
+                    f"  - model_tag: {status.model_tag}",
+                    f"  - concurrent_requests: {status.concurrent_requests}",
+                    f"  - pending_for: {pending}",
+                ]
+            )
 
         status = self._read_collector_status()
         if not status:
@@ -3102,6 +3121,9 @@ class BotRunner:
     def _handle_update(self, update: IncomingMessage) -> None:
         backend = getattr(update, "backend", "telegram")
         conversation_id = getattr(update, "conversation_id", "") or str(getattr(update, "chat_id", ""))
+        if self._is_status_command(getattr(update, "text", "") or ""):
+            self._handle_update_locked(update)
+            return
         scope_key = self._conversation_scope_key(backend, conversation_id)
         with self._request_context(scope_key):
             self._handle_update_locked(update)
@@ -3314,6 +3336,17 @@ class BotRunner:
                 "_handle_message expects (chat_id, text), (backend, conversation_id, sender_id, text), "
                 "or (backend, conversation_id, sender_id, text, sender_name, sender_contact)"
             )
+        if len(args) == 2:
+            text = str(args[1])
+        else:
+            text = str(args[3])
+        if self._is_status_command(text):
+            return self._handle_message_locked(
+                *args,
+                conversation_name=conversation_name,
+                sent_at=sent_at,
+                event_id=event_id,
+            )
         with self._request_context(self._conversation_scope_key(backend, conversation_id)):
             return self._handle_message_locked(
                 *args,
@@ -3395,6 +3428,7 @@ class BotRunner:
             "evidence": [],
             "steps": [],
         }
+        llm_footer = ""
         self._set_request_evidence([])
         self._set_trace_steps([])
         text, disable_thinking = self._extract_nothink_directive(text)
@@ -3433,6 +3467,7 @@ class BotRunner:
                         self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                         source="llm",
                     )
+                    llm_footer = getattr(self.llm, "pop_last_reply_footer", lambda: "")()
                     trace_payload["initial_model_reply"] = model_reply
                     reply = self._coerce_reply_text(
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
@@ -3475,6 +3510,8 @@ class BotRunner:
 
         if self.config.runtime.enable_reply_citations:
             reply = append_sources(reply, self._get_request_evidence())
+        if llm_footer:
+            reply = f"{reply}\n\n{llm_footer}"
         trace_payload["final_reply"] = reply
         write_trace(self._workspace, trace_payload)
         for chunk in self._split_reply(reply):

@@ -182,6 +182,40 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(path)
 
+    def test_llm_runners_list_is_valid_without_top_level_runner_fields(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "runners": [
+                    {"base_url": "http://10.0.0.1:8000/v1", "api_key": "k1", "model": "m1", "model_tag": "a"},
+                    {"base_url": "http://10.0.0.2:8000/v1", "api_key": "k2", "model": "m2", "model_tag": "b"},
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_config(path)
+            self.assertEqual(len(config.llm.runners), 2)
+            self.assertEqual(config.llm.runners[0].base_url, "http://10.0.0.1:8000/v1")
+            self.assertEqual(config.llm.runners[1].model_tag, "b")
+
+    def test_llm_runners_entries_must_be_complete(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "runners": [
+                    {"base_url": "http://10.0.0.1:8000/v1", "api_key": "k1", "model": ""}
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                load_config(path)
+            self.assertEqual(str(ctx.exception), "llm.runners[0].model must be set")
+
 
     def test_signal_group_sender_override_ids_load(self) -> None:
         data = {
