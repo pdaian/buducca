@@ -43,6 +43,17 @@ class LLMClientTests(unittest.TestCase):
         self.assertTrue(any("LLM response payload" in line for line in logs.output))
         self.assertTrue(any("LLM request completed in" in line for line in logs.output))
 
+    def test_generate_reply_logs_runner_request_at_info_level(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with self.assertLogs(level="INFO") as logs:
+            reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "ok")
+        self.assertTrue(any("LLM runner request: url=https://api.openai.com/v1 model=m attempt=1/1" in line for line in logs.output))
+
     def test_generate_reply_handles_malformed_response(self) -> None:
         http = StubHttpClient({"choices": []})
         cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
@@ -185,6 +196,7 @@ class LLMClientTests(unittest.TestCase):
         self.assertIn("IP: 10.0.0.2 | model: beta | ", footer)
         self.assertIn("tok/s", footer)
         self.assertTrue(any("trying next runner" in line for line in logs.output))
+        self.assertTrue(any("reason=RuntimeError: primary unavailable" in line for line in logs.output))
 
     def test_generate_reply_footer_falls_back_to_duration_when_usage_missing(self) -> None:
         class SlowHttpClient:
@@ -262,10 +274,15 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(statuses[0].concurrent_requests, 1)
         self.assertEqual(len(statuses[0].pending_for_seconds), 1)
         self.assertGreater(statuses[0].pending_for_seconds[0], 0)
+        self.assertIsNone(statuses[0].last_success_at)
 
         http.release.set()
         thread.join(timeout=1.0)
         self.assertFalse(thread.is_alive())
+
+        statuses = client.get_runner_statuses()
+        self.assertEqual(statuses[0].concurrent_requests, 0)
+        self.assertIsNotNone(statuses[0].last_success_at)
 
 
 if __name__ == "__main__":

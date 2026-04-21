@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ class RunnerStatus:
     model_tag: str
     concurrent_requests: int
     pending_for_seconds: list[float]
+    last_success_at: str | None
 
 
 class OpenAICompatibleClient:
@@ -34,6 +36,7 @@ class OpenAICompatibleClient:
         self._selection_lock = threading.Lock()
         self._next_runner_index = 0
         self._active_requests: dict[int, dict[int, float]] = {index: {} for index in range(len(self._runners))}
+        self._last_success_at: dict[int, str | None] = {index: None for index in range(len(self._runners))}
         self._request_id = 0
         self._thread_state = threading.local()
 
@@ -43,6 +46,13 @@ class OpenAICompatibleClient:
         runner_attempts = self._select_runners_for_attempt()
         last_error: Exception | None = None
         for attempt_number, (runner_index, runner) in enumerate(runner_attempts, start=1):
+            logging.info(
+                "LLM runner request: url=%s model=%s attempt=%s/%s",
+                runner.base_url,
+                runner.model_tag or runner.model,
+                attempt_number,
+                len(runner_attempts),
+            )
             try:
                 return self._generate_reply_with_runner(
                     runner_index,
@@ -55,11 +65,13 @@ class OpenAICompatibleClient:
                 if attempt_number >= len(runner_attempts):
                     raise
                 logging.warning(
-                    "LLM runner failed: url=%s model=%s attempt=%s/%s; trying next runner",
+                    "LLM runner failed: url=%s model=%s attempt=%s/%s reason=%s: %s; trying next runner",
                     runner.base_url,
                     runner.model_tag or runner.model,
                     attempt_number,
                     len(runner_attempts),
+                    type(exc).__name__,
+                    exc,
                 )
         if last_error is not None:
             raise last_error
@@ -85,6 +97,7 @@ class OpenAICompatibleClient:
                         model_tag=runner.model_tag or runner.model,
                         concurrent_requests=len(active),
                         pending_for_seconds=pending,
+                        last_success_at=self._last_success_at[index],
                     )
                 )
         return statuses
@@ -149,6 +162,8 @@ class OpenAICompatibleClient:
                 message = data["choices"][0]["message"]
             except (KeyError, IndexError, AttributeError) as err:
                 raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
+            with self._selection_lock:
+                self._last_success_at[runner_index] = datetime.now(timezone.utc).isoformat()
             self._thread_state.reply_footer = self._format_reply_footer(runner, data=data, duration_ms=duration_ms)
             content = message.get("content")
             if isinstance(content, str):

@@ -106,6 +106,7 @@ class StatusAwareLLM(DummyLLM):
                 model_tag="pool-a",
                 concurrent_requests=2,
                 pending_for_seconds=[1.2, 3.4],
+                last_success_at="2026-04-21T12:34:56+00:00",
             )
         ]
 
@@ -2638,6 +2639,7 @@ class BotTests(unittest.TestCase):
         self.assertIn("model_tag: pool-a", sent)
         self.assertIn("concurrent_requests: 2", sent)
         self.assertIn("pending_for: 1.2s, 3.4s", sent)
+        self.assertIn("last_success_at: 2026-04-21T12:34:56+00:00", sent)
 
     def test_status_command_bypasses_request_blocking(self) -> None:
         runtime = RuntimeConfig(max_concurrent_requests=1)

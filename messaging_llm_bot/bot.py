@@ -2028,6 +2028,7 @@ class BotRunner:
                     f"  - model_tag: {status.model_tag}",
                     f"  - concurrent_requests: {status.concurrent_requests}",
                     f"  - pending_for: {pending}",
+                    f"  - last_success_at: {status.last_success_at or 'never'}",
                 ]
             )
 
