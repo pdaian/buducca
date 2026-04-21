@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
@@ -123,6 +124,17 @@ class SequentialLLM:
         if not self.replies:
             raise RuntimeError("no more replies")
         return self.replies.pop(0)
+
+
+class RoutingAwareLLM(DummyLLM):
+    def __init__(self, reply: str) -> None:
+        super().__init__(reply)
+        self.forced_runner_indices = []
+
+    @contextmanager
+    def force_runner(self, runner_index: int):
+        self.forced_runner_indices.append(runner_index)
+        yield
 
 
 class BrokenLLM:
@@ -1282,6 +1294,38 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(bot.llm.disable_thinking, [True])
         self.assertNotIn("/nothink", bot.llm.messages[-1]["content"])
+        self.assertEqual(bot._history[1][0]["content"], "summarize this")
+
+    def test_frontend_runner_directive_routes_to_requested_runner_and_strips_marker(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = RoutingAwareLLM("ok")
+
+        bot._handle_message(1, "/1 summarize this")
+
+        self.assertEqual(bot.llm.forced_runner_indices, [1])
+        self.assertNotIn("/1", bot.llm.messages[-1]["content"])
+        self.assertEqual(bot._history[1][0]["content"], "summarize this")
+
+    def test_frontend_runner_directive_can_be_combined_with_nothink(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+
+        class InspectingRoutingLLM(RoutingAwareLLM):
+            def __init__(self) -> None:
+                super().__init__("ok")
+                self.disable_thinking = []
+
+            def generate_reply(self, messages, *, disable_thinking=False):
+                self.disable_thinking.append(disable_thinking)
+                return super().generate_reply(messages, disable_thinking=disable_thinking)
+
+        bot.llm = InspectingRoutingLLM()
+
+        bot._handle_message(1, "/nothink /0 summarize this")
+
+        self.assertEqual(bot.llm.forced_runner_indices, [0])
+        self.assertEqual(bot.llm.disable_thinking, [True])
         self.assertEqual(bot._history[1][0]["content"], "summarize this")
 
     def test_hourly_nothink_disables_backend_thinking_and_strips_marker(self) -> None:

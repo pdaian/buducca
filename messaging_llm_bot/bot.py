@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import traceback
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -46,6 +46,7 @@ from .whatsapp_client import WhatsAppClient, WhatsAppFrontendUnavailableError
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.IGNORECASE | re.DOTALL)
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
+_RUNNER_DIRECTIVE_RE = re.compile(r"^/(\d+)$")
 _MAX_SKILL_PARSE_CHARS = 20_000
 _MAX_SKILL_PARSE_BRACE_ATTEMPTS = 100
 _RESULT_HEADER_RE = re.compile(r"^\d+\.\s")
@@ -1855,6 +1856,27 @@ class BotRunner:
         normalized = re.sub(r" *\n *", "\n", normalized)
         return normalized.strip(), True
 
+    @staticmethod
+    def _extract_llm_directives(text: str) -> tuple[str, bool, int | None]:
+        disable_thinking = False
+        forced_runner_index: int | None = None
+        remaining = text.strip()
+        while remaining:
+            token, separator, rest = remaining.partition(" ")
+            normalized_token = token.strip().lower()
+            if normalized_token == "/nothink":
+                disable_thinking = True
+            else:
+                runner_match = _RUNNER_DIRECTIVE_RE.fullmatch(token.strip())
+                if runner_match is None:
+                    break
+                forced_runner_index = int(runner_match.group(1))
+            if not separator:
+                remaining = ""
+                break
+            remaining = rest.lstrip()
+        return remaining, disable_thinking, forced_runner_index
+
     def _resolve_llm_reply(
         self,
         prompt: list[dict[str, str]],
@@ -3453,7 +3475,7 @@ class BotRunner:
         llm_footer = ""
         self._set_request_evidence([])
         self._set_trace_steps([])
-        text, disable_thinking = self._extract_nothink_directive(text)
+        text, disable_thinking, forced_runner_index = self._extract_llm_directives(text)
         command_text = text.strip()
         self._refresh_skills()
         if command_text.lower() == "/status":
@@ -3486,7 +3508,11 @@ class BotRunner:
                 ]
                 try:
                     runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
-                    with runner_affinity():
+                    force_runner = getattr(self.llm, "force_runner", None)
+                    with ExitStack() as stack:
+                        stack.enter_context(runner_affinity())
+                        if forced_runner_index is not None and callable(force_runner):
+                            stack.enter_context(force_runner(forced_runner_index))
                         model_reply = self._strip_think_blocks(
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
@@ -3511,6 +3537,23 @@ class BotRunner:
                         "The language model request timed out "
                         f"after {self.config.runtime.request_timeout_seconds:g}s. "
                         "Increase runtime.request_timeout_seconds in config.json if your model needs more time.",
+                    )
+                    return False
+                except RuntimeError as exc:
+                    if str(exc).startswith("Requested runner /"):
+                        logging.warning("Invalid runner directive for %s conversation=%s: %s", backend, conversation_id, exc)
+                        trace_payload["error"] = "invalid_runner"
+                        write_trace(self._workspace, trace_payload)
+                        self._send_message(backend, conversation_id, str(exc))
+                        return False
+                    logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
+                    trace_payload["error"] = "internal_error"
+                    write_trace(self._workspace, trace_payload)
+                    self._send_message(
+                        backend,
+                        conversation_id,
+                        "I ran into an internal error while handling that request. "
+                        "Please try again.",
                     )
                     return False
                 except Exception:

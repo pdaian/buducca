@@ -123,10 +123,24 @@ class OpenAICompatibleClient:
             self._thread_state.chain_runner_affinity_active = previous_active
             self._thread_state.chain_runner_index = previous_runner_index
 
+    @contextmanager
+    def force_runner(self, runner_index: int):
+        previous_runner_index = getattr(self._thread_state, "forced_runner_index", None)
+        self._thread_state.forced_runner_index = runner_index
+        try:
+            yield
+        finally:
+            self._thread_state.forced_runner_index = previous_runner_index
+
     def _select_runners_for_attempt(self) -> list[tuple[int, LLMRunnerConfig]]:
         with self._selection_lock:
             if not self._runners:
                 return []
+            forced_index = getattr(self._thread_state, "forced_runner_index", None)
+            if forced_index is not None:
+                if not isinstance(forced_index, int) or not 0 <= forced_index < len(self._runners):
+                    raise RuntimeError(f"Requested runner /{forced_index} is not configured")
+                return [(forced_index, self._runners[forced_index])]
             pinned_index = getattr(self._thread_state, "chain_runner_index", None)
             if (
                 getattr(self._thread_state, "chain_runner_affinity_active", False)

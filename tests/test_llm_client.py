@@ -170,6 +170,43 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(http.calls[-1][0], "http://10.0.0.2:8000/v1/chat/completions")
 
+    def test_force_runner_routes_directly_to_requested_runner(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+                LLMRunnerConfig(base_url="http://10.0.0.2:8000/v1", api_key="k2", model="m2", model_tag="beta"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with client.force_runner(1):
+            client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(
+            [call[0] for call in http.calls],
+            ["http://10.0.0.2:8000/v1/chat/completions"],
+        )
+
+        client.generate_reply([{"role": "user", "content": "outside"}])
+
+        self.assertEqual(http.calls[-1][0], "http://10.0.0.1:8000/v1/chat/completions")
+
+    def test_force_runner_rejects_unconfigured_runner_index(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with client.force_runner(1):
+            with self.assertRaisesRegex(RuntimeError, r"Requested runner /1 is not configured"):
+                client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(http.calls, [])
+
     def test_generate_reply_exposes_runner_footer(self) -> None:
         http = StubHttpClient(
             {
