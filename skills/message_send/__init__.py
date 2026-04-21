@@ -89,6 +89,9 @@ def _coerce_message(args: dict[str, Any]) -> str:
     message = str(args.get("message") or args.get("text") or "").strip()
     if not message:
         raise ValueError("Missing required arg `message`.")
+    reply_footer = str(args.get("_reply_footer") or "").strip()
+    if reply_footer:
+        message = f"{message}\n\n{reply_footer}"
     return message
 
 

@@ -139,6 +139,48 @@ class MessageSendSkillTests(unittest.TestCase):
             self.assertEqual(signal_sent, [("+15551234567", "ping")])
             self.assertEqual(whatsapp_sent, [("+15557654321", "ping")])
 
+    def test_appends_reply_footer_to_sent_message(self) -> None:
+        sent: list[tuple[int, str]] = []
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, http_client) -> None:
+                self.bot_token = bot_token
+                self.http_client = http_client
+
+            def send_message(self, chat_id: int, text: str) -> None:
+                sent.append((chat_id, text))
+
+        class FakeHttpClient:
+            def __init__(self, timeout_seconds: float) -> None:
+                self.timeout_seconds = timeout_seconds
+
+        self.module.TelegramClient = FakeTelegramClient
+        self.module.HttpClient = FakeHttpClient
+
+        with tempfile.TemporaryDirectory() as td:
+            config = base_config()
+            config["telegram"] = {
+                "bot_token": "123:test",
+                "mode": "bot",
+                "allowed_chat_ids": [],
+            }
+            workspace = Workspace(Path(td) / "workspace")
+            config_path = workspace.resolve("config.json")
+            write_config(config_path, config)
+            result = self.module.run(
+                workspace,
+                {
+                    "backend": "telegram",
+                    "recipient": 123456789,
+                    "message": "hello",
+                    "_reply_footer": "IP: 10.0.0.9 | model: pool-a",
+                    "config_path": str(config_path),
+                },
+            )
+
+            self.assertEqual(result, "telegram: sent to 123456789.")
+            self.assertEqual(sent, [(123456789, "hello\n\nIP: 10.0.0.9 | model: pool-a")])
+
     def test_rejects_read_only_backend(self) -> None:
         class FakeSignalClient:
             def __init__(self, **kwargs) -> None:

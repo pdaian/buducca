@@ -201,6 +201,12 @@ class BotRunner:
         self._stop_event = threading.Event()
         self._frontend_workers = self._build_frontend_workers()
 
+    def _set_active_reply_footer(self, footer: str) -> None:
+        self._request_state.reply_footer = footer
+
+    def _get_active_reply_footer(self) -> str:
+        return str(getattr(self._request_state, "reply_footer", "") or "")
+
     @property
     def _debug_enabled(self) -> bool:
         return self.config.runtime.debug or self.config.runtime.log_level.upper() == "DEBUG"
@@ -1313,6 +1319,7 @@ class BotRunner:
             backend,
             conversation_id,
         )
+        self._set_active_reply_footer("")
         try:
             with self._request_context(self._conversation_scope_key(backend, conversation_id)):
                 with self._typing_indicator(backend, conversation_id):
@@ -1331,6 +1338,7 @@ class BotRunner:
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
                         )
+                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
                         reply = self._coerce_reply_text(
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                             context=f"scheduled reminder id={record.get('id', '')}",
@@ -1349,6 +1357,9 @@ class BotRunner:
                 "content": self._summarize_skill_result_for_context("web_search", reply),
             }
         )
+        reply_footer = self._get_active_reply_footer()
+        if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
+            reply = f"{reply}\n\n{reply_footer}"
 
         try:
             for chunk in self._split_reply(reply):
@@ -1418,6 +1429,7 @@ class BotRunner:
         scheduler_conversation_key = self._history_key("hourly", slot.isoformat())
 
         logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
+        self._set_active_reply_footer("")
         try:
             with self._request_context(self._conversation_scope_key("hourly", slot.isoformat())):
                 with self._typing_indicator(backend, conversation_id):
@@ -1436,6 +1448,7 @@ class BotRunner:
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
                         )
+                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
                         reply = self._coerce_reply_text(
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                             context=f"hourly slot={slot.isoformat()}",
@@ -1449,6 +1462,9 @@ class BotRunner:
             self._clear_conversation_history(scheduler_conversation_key)
             return False
         self._clear_conversation_history(scheduler_conversation_key)
+        reply_footer = self._get_active_reply_footer()
+        if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
+            reply = f"{reply}\n\n{reply_footer}"
 
         normalized_reply = reply.strip()
         if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY and target:
@@ -1940,6 +1956,7 @@ class BotRunner:
                 self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                 source="llm",
             )
+            self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
             if summarized_skill_result != raw_skill_result:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
@@ -1966,6 +1983,11 @@ class BotRunner:
         if skill is None:
             available = ", ".join(sorted(self._skills)) or "(none)"
             return f"Unknown skill '{name}'. Available skills: {available}"
+        if name == "message_send" and "_reply_footer" not in args:
+            reply_footer = self._get_active_reply_footer()
+            if reply_footer:
+                args = dict(args)
+                args["_reply_footer"] = reply_footer
 
         action = skill.build_action(args) if skill.build_action else None
         if action is not None:
@@ -3472,7 +3494,7 @@ class BotRunner:
             "evidence": [],
             "steps": [],
         }
-        llm_footer = ""
+        self._set_active_reply_footer("")
         self._set_request_evidence([])
         self._set_trace_steps([])
         text, disable_thinking, forced_runner_index = self._extract_llm_directives(text)
@@ -3517,7 +3539,7 @@ class BotRunner:
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
                         )
-                        llm_footer = getattr(self.llm, "pop_last_reply_footer", lambda: "")()
+                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
                         trace_payload["initial_model_reply"] = model_reply
                         reply = self._coerce_reply_text(
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
@@ -3577,8 +3599,9 @@ class BotRunner:
 
         if self.config.runtime.enable_reply_citations:
             reply = append_sources(reply, self._get_request_evidence())
-        if llm_footer and reply != _EMPTY_REPLY_FALLBACK:
-            reply = f"{reply}\n\n{llm_footer}"
+        reply_footer = self._get_active_reply_footer()
+        if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
+            reply = f"{reply}\n\n{reply_footer}"
         trace_payload["final_reply"] = reply
         write_trace(self._workspace, trace_payload)
         for chunk in self._split_reply(reply):
