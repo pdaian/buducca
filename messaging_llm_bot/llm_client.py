@@ -40,14 +40,91 @@ class OpenAICompatibleClient:
     def generate_reply(self, messages: Iterable[dict[str, str]], *, disable_thinking: bool = False) -> str:
         materialized_messages = list(messages)
         self._thread_state.reply_footer = ""
-        runner_index, runner = self._select_runner()
+        runner_attempts = self._select_runners_for_attempt()
+        last_error: Exception | None = None
+        for attempt_number, (runner_index, runner) in enumerate(runner_attempts, start=1):
+            try:
+                return self._generate_reply_with_runner(
+                    runner_index,
+                    runner,
+                    materialized_messages,
+                    disable_thinking=disable_thinking,
+                )
+            except Exception as exc:
+                last_error = exc
+                if attempt_number >= len(runner_attempts):
+                    raise
+                logging.warning(
+                    "LLM runner failed: url=%s model=%s attempt=%s/%s; trying next runner",
+                    runner.base_url,
+                    runner.model_tag or runner.model,
+                    attempt_number,
+                    len(runner_attempts),
+                )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No LLM runners configured")
+
+    def pop_last_reply_footer(self) -> str:
+        footer = getattr(self._thread_state, "reply_footer", "")
+        self._thread_state.reply_footer = ""
+        return footer
+
+    def get_runner_statuses(self) -> list[RunnerStatus]:
+        now = time.monotonic()
+        with self._selection_lock:
+            statuses: list[RunnerStatus] = []
+            for index, runner in enumerate(self._runners):
+                active = self._active_requests[index]
+                pending = sorted(now - started for started in active.values())
+                statuses.append(
+                    RunnerStatus(
+                        index=index,
+                        ip=self._runner_ip(runner),
+                        model=runner.model,
+                        model_tag=runner.model_tag or runner.model,
+                        concurrent_requests=len(active),
+                        pending_for_seconds=pending,
+                    )
+                )
+        return statuses
+
+    def _select_runner(self) -> tuple[int, LLMRunnerConfig]:
+        with self._selection_lock:
+            if len(self._runners) == 1:
+                return 0, self._runners[0]
+            runner_index = self._next_runner_index % len(self._runners)
+            self._next_runner_index += 1
+            return runner_index, self._runners[runner_index]
+
+    def _select_runners_for_attempt(self) -> list[tuple[int, LLMRunnerConfig]]:
+        with self._selection_lock:
+            if not self._runners:
+                return []
+            start_index = self._next_runner_index % len(self._runners)
+            self._next_runner_index += 1
+            return [
+                (runner_index, self._runners[runner_index])
+                for runner_index in (
+                    (start_index + offset) % len(self._runners) for offset in range(len(self._runners))
+                )
+            ]
+
+    def _generate_reply_with_runner(
+        self,
+        runner_index: int,
+        runner: LLMRunnerConfig,
+        messages: list[dict[str, str]],
+        *,
+        disable_thinking: bool,
+    ) -> str:
         payload = {
             "model": runner.model,
-            "messages": materialized_messages,
+            "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
-        if disable_thinking or self._messages_request_no_think(materialized_messages):
+        if disable_thinking or self._messages_request_no_think(messages):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {"Authorization": f"Bearer {runner.api_key}"}
         endpoint = runner.endpoint_path
@@ -96,38 +173,6 @@ class OpenAICompatibleClient:
             return ""
         finally:
             self._unregister_request(runner_index, request_key)
-
-    def pop_last_reply_footer(self) -> str:
-        footer = getattr(self._thread_state, "reply_footer", "")
-        self._thread_state.reply_footer = ""
-        return footer
-
-    def get_runner_statuses(self) -> list[RunnerStatus]:
-        now = time.monotonic()
-        with self._selection_lock:
-            statuses: list[RunnerStatus] = []
-            for index, runner in enumerate(self._runners):
-                active = self._active_requests[index]
-                pending = sorted(now - started for started in active.values())
-                statuses.append(
-                    RunnerStatus(
-                        index=index,
-                        ip=self._runner_ip(runner),
-                        model=runner.model,
-                        model_tag=runner.model_tag or runner.model,
-                        concurrent_requests=len(active),
-                        pending_for_seconds=pending,
-                    )
-                )
-        return statuses
-
-    def _select_runner(self) -> tuple[int, LLMRunnerConfig]:
-        with self._selection_lock:
-            if len(self._runners) == 1:
-                return 0, self._runners[0]
-            runner_index = self._next_runner_index % len(self._runners)
-            self._next_runner_index += 1
-            return runner_index, self._runners[runner_index]
 
     def _register_request(self, runner_index: int) -> int:
         with self._selection_lock:

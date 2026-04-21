@@ -16,6 +16,19 @@ class StubHttpClient:
         return self.response
 
 
+class SequencedHttpClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post_json(self, url, payload, headers=None):
+        self.calls.append((url, payload, headers))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 class LLMClientTests(unittest.TestCase):
     def test_generate_reply_logs_verbose_data_when_debug_enabled(self) -> None:
         http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
@@ -133,6 +146,58 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(reply, "ok")
         self.assertEqual(client.pop_last_reply_footer(), "IP: 10.0.0.9 | model: fast-a")
+
+    def test_generate_reply_fails_over_to_next_runner_when_first_runner_errors(self) -> None:
+        http = SequencedHttpClient(
+            [
+                RuntimeError("primary unavailable"),
+                {"choices": [{"message": {"content": "ok"}}]},
+            ]
+        )
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+                LLMRunnerConfig(base_url="http://10.0.0.2:8000/v1", api_key="k2", model="m2", model_tag="beta"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with self.assertLogs(level="WARNING") as logs:
+            reply = client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(reply, "ok")
+        self.assertEqual(
+            [call[0] for call in http.calls],
+            [
+                "http://10.0.0.1:8000/v1/chat/completions",
+                "http://10.0.0.2:8000/v1/chat/completions",
+            ],
+        )
+        self.assertEqual(client.pop_last_reply_footer(), "IP: 10.0.0.2 | model: beta")
+        self.assertTrue(any("trying next runner" in line for line in logs.output))
+
+    def test_generate_reply_raises_after_all_runners_fail(self) -> None:
+        http = SequencedHttpClient(
+            [
+                RuntimeError("primary unavailable"),
+                RuntimeError("secondary unavailable"),
+            ]
+        )
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(base_url="http://10.0.0.1:8000/v1", api_key="k1", model="m1", model_tag="alpha"),
+                LLMRunnerConfig(base_url="http://10.0.0.2:8000/v1", api_key="k2", model="m2", model_tag="beta"),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        with self.assertLogs(level="WARNING") as logs:
+            with self.assertRaisesRegex(RuntimeError, "secondary unavailable"):
+                client.generate_reply([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(client.pop_last_reply_footer(), "")
+        self.assertEqual(sum("trying next runner" in line for line in logs.output), 1)
 
     def test_get_runner_statuses_reports_inflight_requests(self) -> None:
         class BlockingHttpClient:
