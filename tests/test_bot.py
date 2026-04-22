@@ -3214,6 +3214,8 @@ class BotTests(unittest.TestCase):
 
             system_prompt = bot.llm.messages[0]["content"]
             self.assertIn("For file-based personal assistant tasks, prefer the file skill", system_prompt)
+            self.assertIn("There is no separate `read_file` skill", system_prompt)
+            self.assertIn("If you do not know the exact path yet, use `search_files` first", system_prompt)
             self.assertIn("Configured file skill actions: read, append.", system_prompt)
             self.assertIn("File organization guidance: Store everything under assistant/.", system_prompt)
 

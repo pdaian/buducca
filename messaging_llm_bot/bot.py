@@ -666,6 +666,8 @@ class BotRunner:
                 skill_rules.extend(
                     [
                         "For file-based personal assistant tasks, prefer the file skill instead of expecting task-specific skills.",
+                        "There is no separate `read_file` skill: read files with the `file` skill using args.action=`read`.",
+                        "If you do not know the exact path yet, use `search_files` first, then call `file` with the confirmed path.",
                         f"Configured file skill actions: {configured_actions}.",
                         "Use args.action exactly as configured and include concrete file paths under the workspace.",
                         f"File organization guidance: {self.config.llm.file_task_layout_prompt.strip()}",
