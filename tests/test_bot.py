@@ -3712,6 +3712,39 @@ class BotTests(unittest.TestCase):
             },
         )
 
+    def test_skill_call_parses_gemma_tool_call_with_channel_block_prefix(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '<|channel>thought\n<channel|><|tool_call>call:taskwarrior{action:"list",filter:["buna"]}<tool_call|>'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "taskwarrior",
+                "args": {"action": "list", "filter": ["buna"]},
+                "done": False,
+            },
+        )
+
+    def test_skill_call_parses_gemma_tool_call_with_trailing_footer(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '<|tool_call>call:taskwarrior{action:"list",filter:["buna"]}<tool_call|>\n\n'
+            "IP: 192.168.110.221 | model: gamingpc-gemma-4-26bmoe | 0.5 tok/s, 24 tok, 45.12s"
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "taskwarrior",
+                "args": {"action": "list", "filter": ["buna"]},
+                "done": False,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "messaging_llm_bot.bot.json.JSONDecoder.raw_decode"

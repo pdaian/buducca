@@ -1774,8 +1774,8 @@ class BotRunner:
 
     @classmethod
     def _parse_gemma_tool_call(cls, reply: str) -> dict[str, Any] | None:
-        match = re.fullmatch(
-            r"<\|tool_call\>\s*call:([A-Za-z0-9_-]+)\s*(\{.*\})\s*<tool_call\|>",
+        match = re.search(
+            r"<\|tool_call\>\s*call:([A-Za-z0-9_-]+)\s*(\{.*?\})\s*<tool_call\|>",
             reply,
             re.DOTALL,
         )
