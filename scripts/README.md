@@ -2,6 +2,22 @@
 
 Standalone helper scripts that are intended to be copied or run directly live here.
 
+## Frontend updater
+
+Use [`update_frontends.py`](/tmp/codex-run-q8sgoi2w/working/scripts/update_frontends.py) to update any installed messaging frontend packages the host can detect across supported package managers.
+
+Preview the commands first:
+
+```bash
+python3 scripts/update_frontends.py --dry-run
+```
+
+Limit the run to specific frontends when needed:
+
+```bash
+python3 scripts/update_frontends.py signal telegram
+```
+
 ## Android Termux client
 
 Use [`run_client.py`](/tmp/codex-run-5rrgtwgf/working/scripts/run_client.py) on the Android device.
