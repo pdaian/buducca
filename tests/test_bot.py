@@ -3680,6 +3680,38 @@ class BotTests(unittest.TestCase):
             },
         )
 
+    def test_skill_call_parses_gemma_tool_call_format(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '<|tool_call>call:taskwarrior{action:list,filter:[]}<tool_call|>'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "taskwarrior",
+                "args": {"action": "list", "filter": []},
+                "done": False,
+            },
+        )
+
+    def test_skill_call_parses_gemma_tool_call_with_nested_done(self) -> None:
+        bot = self.make_bot()
+
+        parsed = bot._try_parse_skill_call(
+            '<|tool_call>call:web_search{query:"status",max_results:5,done:true}<tool_call|>'
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "name": "web_search",
+                "args": {"query": "status", "max_results": 5},
+                "done": True,
+            },
+        )
+
     def test_skill_call_parse_short_circuits_when_skill_call_not_mentioned(self) -> None:
         bot = self.make_bot()
         decoder_path = "messaging_llm_bot.bot.json.JSONDecoder.raw_decode"

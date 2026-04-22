@@ -1673,11 +1673,16 @@ class BotRunner:
         payload: Any | None = None
         payload_text = reply.strip()
         skill_key_markers = [f'"{name}"' for name in self._skills]
+        gemma_skill_call = self._parse_gemma_tool_call(payload_text)
+        if gemma_skill_call is not None:
+            return gemma_skill_call
         if (
             "skill_call" not in payload_text
             and '"args"' not in payload_text
             and '"name"' not in payload_text
             and '"done"' not in payload_text
+            and "<|tool_call>" not in payload_text
+            and "call:" not in payload_text
             and not any(marker in payload_text for marker in skill_key_markers)
         ):
             return None
@@ -1766,6 +1771,162 @@ class BotRunner:
         if not isinstance(done, bool):
             done = False
         return {"name": skill_name, "args": args, "done": done}
+
+    @classmethod
+    def _parse_gemma_tool_call(cls, reply: str) -> dict[str, Any] | None:
+        match = re.fullmatch(
+            r"<\|tool_call\>\s*call:([A-Za-z0-9_-]+)\s*(\{.*\})\s*<tool_call\|>",
+            reply,
+            re.DOTALL,
+        )
+        if match is None:
+            return None
+
+        skill_name = match.group(1)
+        try:
+            args, end_index = cls._parse_gemma_value(match.group(2), 0)
+        except ValueError:
+            return None
+        if not isinstance(args, dict):
+            return None
+        remainder = match.group(2)[end_index:].strip()
+        if remainder:
+            return None
+
+        nested_done = args.pop("done", False)
+        done = nested_done if isinstance(nested_done, bool) else False
+        return {"name": skill_name, "args": args, "done": done}
+
+    @classmethod
+    def _parse_gemma_value(cls, text: str, index: int) -> tuple[Any, int]:
+        index = cls._skip_gemma_whitespace(text, index)
+        if index >= len(text):
+            raise ValueError("Missing Gemma value")
+
+        char = text[index]
+        if char == "{":
+            return cls._parse_gemma_object(text, index)
+        if char == "[":
+            return cls._parse_gemma_array(text, index)
+        if char == '"':
+            return cls._parse_gemma_string(text, index)
+        return cls._parse_gemma_atom(text, index)
+
+    @staticmethod
+    def _skip_gemma_whitespace(text: str, index: int) -> int:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        return index
+
+    @classmethod
+    def _parse_gemma_object(cls, text: str, index: int) -> tuple[dict[str, Any], int]:
+        if text[index] != "{":
+            raise ValueError("Expected Gemma object")
+
+        index += 1
+        result: dict[str, Any] = {}
+        while True:
+            index = cls._skip_gemma_whitespace(text, index)
+            if index >= len(text):
+                raise ValueError("Unterminated Gemma object")
+            if text[index] == "}":
+                return result, index + 1
+
+            key, index = cls._parse_gemma_key(text, index)
+            index = cls._skip_gemma_whitespace(text, index)
+            if index >= len(text) or text[index] != ":":
+                raise ValueError("Expected ':' after Gemma object key")
+            index += 1
+            value, index = cls._parse_gemma_value(text, index)
+            result[key] = value
+
+            index = cls._skip_gemma_whitespace(text, index)
+            if index >= len(text):
+                raise ValueError("Unterminated Gemma object")
+            if text[index] == "}":
+                return result, index + 1
+            if text[index] != ",":
+                raise ValueError("Expected ',' between Gemma object items")
+            index += 1
+
+    @classmethod
+    def _parse_gemma_array(cls, text: str, index: int) -> tuple[list[Any], int]:
+        if text[index] != "[":
+            raise ValueError("Expected Gemma array")
+
+        index += 1
+        result: list[Any] = []
+        while True:
+            index = cls._skip_gemma_whitespace(text, index)
+            if index >= len(text):
+                raise ValueError("Unterminated Gemma array")
+            if text[index] == "]":
+                return result, index + 1
+
+            value, index = cls._parse_gemma_value(text, index)
+            result.append(value)
+
+            index = cls._skip_gemma_whitespace(text, index)
+            if index >= len(text):
+                raise ValueError("Unterminated Gemma array")
+            if text[index] == "]":
+                return result, index + 1
+            if text[index] != ",":
+                raise ValueError("Expected ',' between Gemma array items")
+            index += 1
+
+    @classmethod
+    def _parse_gemma_key(cls, text: str, index: int) -> tuple[str, int]:
+        index = cls._skip_gemma_whitespace(text, index)
+        if index >= len(text):
+            raise ValueError("Missing Gemma object key")
+        if text[index] == '"':
+            return cls._parse_gemma_string(text, index)
+
+        start = index
+        while index < len(text) and re.match(r"[A-Za-z0-9_.-]", text[index]):
+            index += 1
+        if start == index:
+            raise ValueError("Invalid Gemma object key")
+        return text[start:index], index
+
+    @staticmethod
+    def _parse_gemma_string(text: str, index: int) -> tuple[str, int]:
+        if text[index] != '"':
+            raise ValueError("Expected Gemma string")
+
+        end = index + 1
+        escaped = False
+        while end < len(text):
+            char = text[end]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                return json.loads(text[index : end + 1]), end + 1
+            end += 1
+        raise ValueError("Unterminated Gemma string")
+
+    @staticmethod
+    def _parse_gemma_atom(text: str, index: int) -> tuple[Any, int]:
+        start = index
+        while index < len(text) and text[index] not in ",]}":
+            index += 1
+        token = text[start:index].strip()
+        if not token:
+            raise ValueError("Missing Gemma atom")
+        if token == "true":
+            return True, index
+        if token == "false":
+            return False, index
+        if token == "null":
+            return None, index
+        if re.fullmatch(r"-?\d+", token):
+            return int(token), index
+        if re.fullmatch(r"-?\d+\.\d+", token):
+            return float(token), index
+        return token, index
 
     @staticmethod
     def _recover_truncated_json_object(payload_text: str) -> str | None:
