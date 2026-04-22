@@ -1461,12 +1461,12 @@ class BotRunner:
             logging.exception("Hourly routine failed slot=%s", slot.isoformat())
             self._clear_conversation_history(scheduler_conversation_key)
             return False
-        self._clear_conversation_history(scheduler_conversation_key)
-        reply_footer = self._get_active_reply_footer()
-        if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
-            reply = f"{reply}\n\n{reply_footer}"
-
         normalized_reply = reply.strip()
+        self._clear_conversation_history(scheduler_conversation_key)
+        if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY:
+            reply_footer = self._get_active_reply_footer()
+            if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
+                reply = f"{reply}\n\n{reply_footer}"
         if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY and target:
             try:
                 for chunk in self._split_reply(reply):

@@ -1228,6 +1228,31 @@ class BotTests(unittest.TestCase):
 
             self.assertEqual(bot.telegram.sent, [(123, "daily summary\n\nIP: 10.0.0.9 | model: pool-a")])
 
+    def test_hourly_task_no_action_with_runner_footer_is_not_sent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            bot.llm = TaggedLLM("NO_ACTION", "IP: localhost | model: primary | 1.1 tok/s, 472 tok, 424.44s")
+            bot._append_frontend_log(
+                backend="telegram",
+                direction="incoming",
+                conversation_id="123",
+                sender_id="123",
+                text="hi",
+                logged_at="2026-03-10T13:05:00+00:00",
+            )
+            Path(td, "hourly").write_text("only act at six", encoding="utf-8")
+            bot._current_hourly_slot = lambda: datetime.fromisoformat("2026-03-10T13:00:00-04:00")
+
+            bot._poll_due_hourly_once()
+
+            self.assertEqual(bot.telegram.sent, [])
+
     def test_hourly_task_prompt_keeps_hourly_context_compact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
