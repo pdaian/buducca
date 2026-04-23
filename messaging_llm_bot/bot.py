@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import traceback
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1334,18 +1334,16 @@ class BotRunner:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                     )
-                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
-                    with runner_affinity():
-                        self._set_active_skill_chain_length(0)
-                        model_reply = self._strip_think_blocks(
-                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                            source="llm",
-                        )
-                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
-                        reply = self._coerce_reply_text(
-                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                            context=f"scheduled reminder id={record.get('id', '')}",
-                        )
+                    self._set_active_skill_chain_length(0)
+                    model_reply = self._strip_think_blocks(
+                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                        source="llm",
+                    )
+                    self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+                    reply = self._coerce_reply_text(
+                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                        context=f"scheduled reminder id={record.get('id', '')}",
+                    )
         except RequestTimeoutError:
             logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
             return False
@@ -1445,18 +1443,16 @@ class BotRunner:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                     )
-                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
-                    with runner_affinity():
-                        self._set_active_skill_chain_length(0)
-                        model_reply = self._strip_think_blocks(
-                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                            source="llm",
-                        )
-                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
-                        reply = self._coerce_reply_text(
-                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                            context=f"hourly slot={slot.isoformat()}",
-                        )
+                    self._set_active_skill_chain_length(0)
+                    model_reply = self._strip_think_blocks(
+                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
+                        source="llm",
+                    )
+                    self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+                    reply = self._coerce_reply_text(
+                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                        context=f"hourly slot={slot.isoformat()}",
+                    )
         except RequestTimeoutError:
             logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
             self._clear_conversation_history(scheduler_conversation_key)
@@ -3700,10 +3696,8 @@ class BotRunner:
                     for item in self._get_request_evidence()
                 ]
                 try:
-                    runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
                     force_runner = getattr(self.llm, "force_runner", None)
                     with ExitStack() as stack:
-                        stack.enter_context(runner_affinity())
                         if forced_runner_index is not None and callable(force_runner):
                             stack.enter_context(force_runner(forced_runner_index))
                         self._set_active_skill_chain_length(0)

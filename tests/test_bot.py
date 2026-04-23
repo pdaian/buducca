@@ -137,6 +137,13 @@ class RoutingAwareLLM(DummyLLM):
         yield
 
 
+class AffinityRejectingLLM(DummyLLM):
+    @contextmanager
+    def chain_runner_affinity(self):
+        raise AssertionError("conversation handling should not pin LLM runner affinity")
+        yield
+
+
 class BrokenLLM:
     def generate_reply(self, messages, *, disable_thinking=False):
         raise RuntimeError("llm parse failed")
@@ -283,6 +290,15 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.telegram.sent, [(1, "hello")])
         self.assertEqual(bot.telegram.typing, [1])
         self.assertEqual(len(bot._history[1]), 2)
+
+    def test_handle_message_does_not_pin_llm_runner_affinity(self) -> None:
+        bot = self.make_bot()
+        bot.telegram = DummyTelegram()
+        bot.llm = AffinityRejectingLLM("hello")
+
+        bot._handle_message(1, "hi")
+
+        self.assertEqual(bot.telegram.sent, [(1, "hello")])
 
     def test_same_conversation_requests_are_serialized(self) -> None:
         runtime = RuntimeConfig(max_concurrent_requests=2)
