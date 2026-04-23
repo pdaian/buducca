@@ -225,7 +225,7 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(reply, "ok")
         footer = client.pop_last_reply_footer()
-        self.assertIn("IP: 10.0.0.9 | model: fast-a | ", footer)
+        self.assertIn("IP: 10.0.0.9 | model: fast-a (chain: 0) | ", footer)
         self.assertIn("tok/s", footer)
         self.assertIn("25 tok", footer)
 
@@ -248,6 +248,7 @@ class LLMClientTests(unittest.TestCase):
             ]
         )
         client = OpenAICompatibleClient(config=cfg, http_client=http)
+        client.set_active_skill_chain_length(2)
 
         with self.assertLogs(level="WARNING") as logs:
             reply = client.generate_reply([{"role": "user", "content": "hi"}])
@@ -327,7 +328,7 @@ class LLMClientTests(unittest.TestCase):
             ],
         )
         footer = client.pop_last_reply_footer()
-        self.assertIn("IP: 10.0.0.2 | model: beta | ", footer)
+        self.assertIn("IP: 10.0.0.2 | model: beta (chain: 2) | ", footer)
         self.assertIn("tok/s", footer)
         self.assertTrue(any("trying next runner" in line for line in logs.output))
         self.assertTrue(any("reason=RuntimeError: primary unavailable" in line for line in logs.output))
@@ -349,7 +350,7 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(reply, "ok")
         footer = client.pop_last_reply_footer()
-        self.assertIn("IP: 10.0.0.9 | model: fast-a | ", footer)
+        self.assertIn("IP: 10.0.0.9 | model: fast-a (chain: 0) | ", footer)
         self.assertIn("s", footer)
         self.assertNotIn("tok/s", footer)
 

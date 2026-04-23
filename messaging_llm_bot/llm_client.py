@@ -91,6 +91,9 @@ class OpenAICompatibleClient:
         self._thread_state.reply_footer = ""
         return footer
 
+    def set_active_skill_chain_length(self, length: int) -> None:
+        self._thread_state.skill_chain_length = max(0, int(length))
+
     def get_runner_statuses(self) -> list[RunnerStatus]:
         now = time.monotonic()
         with self._selection_lock:
@@ -307,9 +310,10 @@ class OpenAICompatibleClient:
         return urlparse(runner.base_url).hostname or "unknown"
 
     def _format_reply_footer(self, runner: LLMRunnerConfig, *, data: dict[str, Any], duration_ms: float) -> str:
+        skill_chain_length = max(0, int(getattr(self._thread_state, "skill_chain_length", 0) or 0))
         segments = [
             f"IP: {self._runner_ip(runner)}",
-            f"model: {runner.model_tag or runner.model}",
+            f"model: {runner.model_tag or runner.model} (chain: {skill_chain_length})",
         ]
         performance = self._format_performance_metrics(data, duration_ms)
         if performance:

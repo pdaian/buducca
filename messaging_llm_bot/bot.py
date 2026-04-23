@@ -1336,6 +1336,7 @@ class BotRunner:
                     )
                     runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
                     with runner_affinity():
+                        self._set_active_skill_chain_length(0)
                         model_reply = self._strip_think_blocks(
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
@@ -1446,6 +1447,7 @@ class BotRunner:
                     )
                     runner_affinity = getattr(self.llm, "chain_runner_affinity", nullcontext)
                     with runner_affinity():
+                        self._set_active_skill_chain_length(0)
                         model_reply = self._strip_think_blocks(
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",
@@ -2115,6 +2117,7 @@ class BotRunner:
                     max_skill_chain_steps,
                     prompt,
                 )
+            self._set_active_skill_chain_length(step_index + 1)
             model_reply = self._strip_think_blocks(
                 self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                 source="llm",
@@ -2140,6 +2143,11 @@ class BotRunner:
 
         logging.warning("Skill chain exceeded max steps (%s)", max_skill_chain_steps)
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
+
+    def _set_active_skill_chain_length(self, length: int) -> None:
+        setter = getattr(self.llm, "set_active_skill_chain_length", None)
+        if callable(setter):
+            setter(length)
 
     def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:
         skill = self._skills.get(name)
@@ -3698,6 +3706,7 @@ class BotRunner:
                         stack.enter_context(runner_affinity())
                         if forced_runner_index is not None and callable(force_runner):
                             stack.enter_context(force_runner(forced_runner_index))
+                        self._set_active_skill_chain_length(0)
                         model_reply = self._strip_think_blocks(
                             self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
                             source="llm",

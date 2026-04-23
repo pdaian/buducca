@@ -3399,6 +3399,47 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.llm.calls, 2)
             self.assertIn("Skill `echo` returned:\necho:step1", bot.llm.messages[-1]["content"])
 
+    def test_skill_call_chain_footer_includes_completed_chain_length(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "echo.py").write_text(
+                'NAME = "echo"\nDESCRIPTION = "Echoes user text."\n\n'
+                'def run(workspace, args):\n    return "echo:" + args.get("text", "")\n'
+                'def register():\n    return {"name": NAME, "description": DESCRIPTION, "run": run}\n',
+                encoding="utf-8",
+            )
+
+            class FooterAwareLLM:
+                def __init__(self) -> None:
+                    self.calls = 0
+                    self.messages = None
+                    self.skill_chain_length = 0
+                    self.footer = ""
+
+                def set_active_skill_chain_length(self, length: int) -> None:
+                    self.skill_chain_length = length
+
+                def generate_reply(self, messages, *, disable_thinking=False):
+                    self.calls += 1
+                    self.messages = messages
+                    self.footer = f"IP: 10.0.0.9 | model: pool-a (chain: {self.skill_chain_length})"
+                    if self.calls == 1:
+                        return '{"skill_call": {"name": "echo", "args": {"text": "step1"}, "done": false}}'
+                    return "final"
+
+                def pop_last_reply_footer(self) -> str:
+                    return self.footer
+
+            runtime = RuntimeConfig(workspace_dir=td, skills_dir=str(skills_dir))
+            bot = self.make_bot(runtime=runtime)
+            bot.telegram = DummyTelegram()
+            bot.llm = FooterAwareLLM()
+
+            bot._handle_message(1, "run multi-step")
+
+            self.assertEqual(bot.telegram.sent, [(1, "final\n\nIP: 10.0.0.9 | model: pool-a (chain: 1)")])
+
     def test_skill_call_chain_preserves_main_prompt_block_in_follow_up_prompt(self) -> None:
         bot = self.make_bot()
         bot.llm = SequentialLLM(
