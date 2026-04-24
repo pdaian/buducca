@@ -1220,6 +1220,7 @@ class BotRunner:
                     [
                         "[Recurring routine]",
                         f"- routine_id: {record.get('id', '')}",
+                        f"- kind: {record.get('kind', 'routine')}",
                         f"- title: {record.get('title', '')}",
                         str(record.get("instructions", "")).strip(),
                     ]
@@ -1518,6 +1519,7 @@ class BotRunner:
             f"If nothing should happen for this hour, reply with exactly {_HOURLY_NO_ACTION_REPLY}.",
             "Avoid duplicate side effects for the same hour. If evidence is insufficient for a mutating action, prefer no action or a read-first step over guessing.",
             "For external messages, reminders, or other visible side effects, require a clear instruction in the hourly file or workspace evidence before acting.",
+            "Do not create or update routines unless the hourly instructions explicitly ask for it.",
             "",
             f"Instructions from workspace/{self.config.runtime.hourly_file}:",
             hourly_text,

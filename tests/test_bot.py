@@ -1316,6 +1316,7 @@ class BotTests(unittest.TestCase):
             self.assertNotIn("- Remember the hourly summary format.", hourly_prompt)
             self.assertIn("Avoid duplicate side effects for the same hour.", hourly_prompt)
             self.assertIn("require a clear instruction in the hourly file or workspace evidence before acting.", hourly_prompt)
+            self.assertIn("Do not create or update routines unless the hourly instructions explicitly ask for it.", hourly_prompt)
 
     def test_hourly_task_uses_isolated_context_and_does_not_mutate_chat_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1501,6 +1502,42 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.telegram.sent, [(123, "[Scheduled task]\n- task_id: rent\n- kind: task\n- title: Pay rent")])
             payload = json.loads(Path(td, "assistant", "tasks", "rent.json").read_text(encoding="utf-8"))
             self.assertIn("last_notified_at", payload)
+
+    def test_structured_routine_scheduler_includes_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = BotConfig(
+                telegram=TelegramConfig(bot_token="t"),
+                llm=LLMConfig(base_url="u", api_key="k", model="m", history_messages=2),
+                runtime=RuntimeConfig(workspace_dir=td),
+            )
+            bot = BotRunner(cfg)
+            bot.telegram = DummyTelegram()
+            Path(td, "assistant", "routines").mkdir(parents=True, exist_ok=True)
+            Path(td, "assistant", "routines", "daily-updates-to-phil.json").write_text(
+                json.dumps(
+                    {
+                        "id": "daily-updates-to-phil",
+                        "title": "Daily Updates to Phil",
+                        "instructions": "",
+                        "enabled": True,
+                        "schedule": {"frequency": "daily", "interval": 1, "hour": 9, "minute": 0, "timezone": "UTC"},
+                        "next_run_at": "2026-03-09T12:00:00+00:00",
+                        "notify_target": {"backend": "telegram", "conversation_id": "123"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bot._poll_due_structured_schedule_once()
+
+            self.assertEqual(
+                bot.telegram.sent,
+                [(123, "[Recurring routine]\n- routine_id: daily-updates-to-phil\n- kind: routine\n- title: Daily Updates to Phil")],
+            )
+            payload = json.loads(
+                Path(td, "assistant", "routines", "daily-updates-to-phil.json").read_text(encoding="utf-8")
+            )
+            self.assertIn("last_run_at", payload)
 
     def test_workspace_evidence_is_cited_and_traced(self) -> None:
         with tempfile.TemporaryDirectory() as td:
