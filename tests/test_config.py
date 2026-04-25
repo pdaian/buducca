@@ -437,6 +437,26 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.contacts[0].recipient, 123)
             self.assertEqual(config.contacts[-1].platform, "whatsapp")
 
+    def test_contacts_load_from_cp1252_top_level_service_map(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {"base_url": "https://x", "api_key": "k", "model": "m"},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            workspace.mkdir()
+            (workspace / "telegram.contacts").write_bytes(
+                json.dumps({"Jos\u00e9": {"recipient": 123, "description": "Caf\u00e9"}}).encode("cp1252")
+            )
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_config(path)
+
+            self.assertEqual(len(config.contacts), 1)
+            self.assertEqual(config.contacts[0].name, "Jos\u00e9")
+            self.assertEqual(config.contacts[0].description, "Caf\u00e9")
+
     def test_directory_config_loads_localized_sections(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config_dir = Path(td) / "config"

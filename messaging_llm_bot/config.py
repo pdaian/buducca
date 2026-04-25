@@ -144,12 +144,25 @@ WORKSPACE_CONTACT_MAP_FILES = {
 }
 
 
+def _decode_json_bytes(path: Path, raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as utf8_exc:
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return raw.decode("utf-16")
+        try:
+            return raw.decode("cp1252")
+        except UnicodeDecodeError:
+            raise ValueError(f"Config file {path} is not valid UTF-8, UTF-16, or Windows-1252 text") from utf8_exc
+
+
 def _read_json(path: Path) -> Any:
     try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        raw = path.read_bytes()
     except FileNotFoundError as exc:
         raise ValueError(f"Config file not found: {path}") from exc
+    try:
+        return json.loads(_decode_json_bytes(path, raw))
     except json.JSONDecodeError as exc:
         line = exc.doc.splitlines()[exc.lineno - 1] if exc.doc else ""
         pointer = " " * max(exc.colno - 1, 0) + "^"
