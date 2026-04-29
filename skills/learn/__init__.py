@@ -7,9 +7,9 @@ from assistant_framework.workspace import Workspace
 
 NAME = "learn"
 DESCRIPTION = (
-    "Save a durable one-line general learning to the workspace learnings file so future prompts can reuse it."
+    "Save a durable one-line fact or preference for future prompts, such as user preferences, identity details, relationships, recurring plans, or other reusable context."
 )
-ARGS_SCHEMA = "{ learning: string }"
+ARGS_SCHEMA = "{ learning: string, text?: string, line?: string, message?: string }"
 
 _LEARNINGS_FILE = "learnings"
 

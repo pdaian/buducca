@@ -3227,6 +3227,10 @@ class BotTests(unittest.TestCase):
             self.assertIn("- Timezone is America/New_York.", system_prompt)
             self.assertNotIn("Birthday on May 5.", system_prompt)
             self.assertIn("prefer over-learning to under-learning", system_prompt)
+            self.assertIn(
+                "Use the learn skill aggressively for stable context such as preferences, identity details, relationships, ongoing projects, recurring logistics, and long-lived constraints.",
+                system_prompt,
+            )
             self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
             self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
             self.assertIn("Do not mention source paths unless they materially help the answer", system_prompt)

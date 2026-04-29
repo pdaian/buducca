@@ -20,6 +20,12 @@ class LearnSkillTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_learn_module()
 
+    def test_prompt_surface_metadata_is_concrete(self) -> None:
+        self.assertIn("preferences", self.module.DESCRIPTION)
+        self.assertIn("identity details", self.module.DESCRIPTION)
+        self.assertIn("learning: string", self.module.ARGS_SCHEMA)
+        self.assertIn("text?: string", self.module.ARGS_SCHEMA)
+
     def test_missing_learning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Workspace(td)

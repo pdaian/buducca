@@ -655,6 +655,7 @@ class BotRunner:
                 "For research tasks, you may chain multiple skill calls (for example repeated web_search queries) before finalizing.",
                 "Inspect obvious workspace evidence before calling broader search or mutation skills when a cheap read can answer the question.",
                 "If you discover durable user preferences or reusable facts, save them with the learn skill as a concise one-line learning; prefer over-learning to under-learning.",
+                "Use the learn skill aggressively for stable context such as preferences, identity details, relationships, ongoing projects, recurring logistics, and long-lived constraints.",
                 "When a tool call fails, returns malformed output, or comes back empty, say what happened and either retry with a smaller next step or ask for what is missing.",
                 "Incoming attachments are saved under workspace/attachments/YYYY-MM-DD/.",
                 "Saved filenames include the sending platform, sender name, and Unix timestamp; PDFs also get a sibling .ocr.txt file when local extraction or OCR succeeds.",
