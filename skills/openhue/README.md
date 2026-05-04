@@ -24,13 +24,15 @@ The skill defaults to:
 - `list_command`: `openhue lights list --format json`
 - `set_command_template`: `openhue lights {action} --id {id}`
 
+Command overrides are executed directly as argument lists, not through a shell. String commands are parsed with `shlex`; pass a JSON array when an argument must be kept exactly as written.
+
 You can override with args per call:
 ```json
 {
   "action": "on",
   "lights": ["Kitchen"],
   "list_command": "my-openhue-wrapper list --json",
-  "set_command_template": "my-openhue-wrapper set --action {action} --id {id}"
+  "set_command_template": ["my-openhue-wrapper", "set", "--action", "{action}", "--id", "{id}"]
 }
 ```
 
@@ -43,9 +45,9 @@ Or via environment variables:
 {
   action: "list" | "on" | "off" | "toggle";
   lights?: string[];
-  brightness?: number;
-  transition_ms?: number;
-  list_command?: string;
-  set_command_template?: string;
+  brightness?: number; // 1-254
+  transition_ms?: number; // >= 0
+  list_command?: string | string[];
+  set_command_template?: string | string[];
 }
 ```

@@ -22,6 +22,9 @@ class Workspace:
             raise ValueError(f"Path escapes workspace: {relative_path}")
         return target
 
+    def _relative_to_root(self, path: Path) -> str:
+        return str(path.resolve().relative_to(self._resolved_root))
+
     def read_text(self, relative_path: str, default: str = "") -> str:
         file_path = self.resolve(relative_path)
         if not file_path.exists():
@@ -51,7 +54,12 @@ class Workspace:
     def archive_text(self, relative_path: str, content: str, *, reason: str = "") -> str:
         if not content:
             return ""
-        archive_file = (self.data_root() / "archives" / relative_path).resolve()
+        archive_root = (self.data_root() / "archives").resolve()
+        archive_file = (archive_root / relative_path).resolve()
+        try:
+            archive_file.relative_to(archive_root)
+        except ValueError as exc:
+            raise ValueError(f"Archive path escapes archive root: {relative_path}") from exc
         archive_file.parent.mkdir(parents=True, exist_ok=True)
         stamped_reason = f" reason={reason}" if reason else ""
         header = f"# archived_at={datetime.now(timezone.utc).isoformat()}{stamped_reason}\n"
@@ -87,7 +95,7 @@ class Workspace:
         destination = self.resolve(destination_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.rename(destination)
-        return str(destination.relative_to(self.root))
+        return self._relative_to_root(destination)
 
     def copy_path(self, source_path: str, destination_path: str) -> str:
         source = self.resolve(source_path)
@@ -102,7 +110,7 @@ class Workspace:
             shutil.copytree(source, destination)
         else:
             shutil.copy2(source, destination)
-        return str(destination.relative_to(self.root))
+        return self._relative_to_root(destination)
 
     def move_file_to_dir(self, relative_path: str, destination_dir: str) -> str:
         source = self.resolve(relative_path)
@@ -115,4 +123,4 @@ class Workspace:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         destination = target_dir / source.name
-        return self.move_path(relative_path, str(destination.relative_to(self.root)))
+        return self.move_path(relative_path, self._relative_to_root(destination))

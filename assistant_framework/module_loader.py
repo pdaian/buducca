@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+
+
+def _path_fingerprint(path: Path) -> str:
+    return hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
 
 
 def _module_name_for_path(path: Path, *, kind: str) -> str:
@@ -14,9 +19,9 @@ def _module_name_for_path(path: Path, *, kind: str) -> str:
     ]
     if path.name == "__init__.py":
         package_name = sanitized_parts[-2] if len(sanitized_parts) >= 2 else path.parent.name
-        return f"_codex_{kind}_{package_name}_{abs(hash(str(resolved.parent)))}"
-    stem = sanitized_parts[-1].rsplit(".", 1)[0]
-    return f"_codex_{kind}_{stem}_{abs(hash(str(resolved)))}"
+        return f"_codex_{kind}_{package_name}_{_path_fingerprint(resolved.parent)}"
+    stem = "".join(ch if ch.isalnum() else "_" for ch in path.stem)
+    return f"_codex_{kind}_{stem}_{_path_fingerprint(resolved)}"
 
 
 def load_module_from_file(path: Path, *, kind: str) -> ModuleType:

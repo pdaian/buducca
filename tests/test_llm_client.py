@@ -328,7 +328,7 @@ class LLMClientTests(unittest.TestCase):
             ],
         )
         footer = client.pop_last_reply_footer()
-        self.assertIn("IP: 10.0.0.2 | model: beta (chain: 2) | ", footer)
+        self.assertIn("IP: 10.0.0.2 | model: beta (chain: 0) | ", footer)
         self.assertIn("tok/s", footer)
         self.assertTrue(any("trying next runner" in line for line in logs.output))
         self.assertTrue(any("reason=RuntimeError: primary unavailable" in line for line in logs.output))

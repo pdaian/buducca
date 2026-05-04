@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from assistant_framework.collectors import CollectorManager
+from assistant_framework.module_loader import _module_name_for_path
 from assistant_framework.skills import (
     SkillManager,
     build_skill_manifest,
@@ -14,6 +15,15 @@ from assistant_framework.workspace import Workspace
 
 
 class LoadingTests(unittest.TestCase):
+    def test_module_names_use_stable_path_fingerprint(self) -> None:
+        path = Path("/tmp/example/plugin.py")
+
+        first = _module_name_for_path(path, kind="skill")
+        second = _module_name_for_path(path, kind="skill")
+
+        self.assertEqual(first, second)
+        self.assertRegex(first, r"^_codex_skill_plugin_[0-9a-f]{16}$")
+
     def test_parse_args_schema_fields_handles_json_style_schema(self) -> None:
         self.assertEqual(
             parse_args_schema_fields('{"query":"required","date":"optional/YYYY-MM-DD","max_items":20}'),

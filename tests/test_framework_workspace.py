@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +73,37 @@ class WorkspaceTests(unittest.TestCase):
             ws.delete_path("copied/nested")
             self.assertFalse(ws.resolve("renamed/a.txt").exists())
             self.assertFalse(ws.resolve("copied/nested").exists())
+
+    def test_move_helpers_work_with_relative_workspace_root(self) -> None:
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as td:
+            os.chdir(td)
+            try:
+                ws = Workspace("workspace")
+                ws.write_text("src/a.txt", "hello")
+
+                moved_path = ws.move_file_to_dir("src/a.txt", "dst")
+
+                self.assertEqual(moved_path, "dst/a.txt")
+                self.assertEqual(ws.read_text("dst/a.txt"), "hello")
+            finally:
+                os.chdir(original_cwd)
+
+    def test_archive_text_blocks_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ws = Workspace(Path(td) / "workspace")
+
+            with self.assertRaises(ValueError):
+                ws.archive_text("../../outside.txt", "secret")
+
+    def test_archive_text_writes_under_data_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ws = Workspace(Path(td) / "workspace")
+
+            archive_path = Path(ws.archive_text("notes/a.txt", "secret", reason="cleanup"))
+
+            self.assertEqual(archive_path, Path(td) / "data" / "archives" / "notes" / "a.txt")
+            self.assertIn("reason=cleanup", archive_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
