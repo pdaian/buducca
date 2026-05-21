@@ -80,6 +80,7 @@ Remote Android note:
 ## Documentation map
 
 - Start here: [docs/getting-started.md](docs/getting-started.md)
+- AI stack overview and comparisons: [docs/ai-stack.md](docs/ai-stack.md)
 - Frontends and slash commands: [docs/frontends.md](docs/frontends.md)
 - Architecture and extension points: [docs/developer-guide.md](docs/developer-guide.md)
 - Plugin docs: `skills/<name>/README.md` and `collectors/<name>/README.md`
