@@ -20,6 +20,26 @@ _CONTINUATION_PROMPT = (
     "or add commentary about continuing. Output only the remaining continuation."
 )
 _MAX_CONTINUATION_ATTEMPTS = 2
+_USAGE_METRIC_PATHS = {
+    "completion_tokens": (("completion_tokens",),),
+    "prompt_tokens": (("prompt_tokens",),),
+    "total_tokens": (("total_tokens",),),
+    "cached_tokens": (
+        ("cached_tokens",),
+        ("prompt_tokens_details", "cached_tokens"),
+        ("prompt_cache_hit_tokens",),
+        ("cache_read_input_tokens",),
+    ),
+    "cache_write_tokens": (
+        ("cache_write_tokens",),
+        ("prompt_tokens_details", "cache_write_tokens"),
+        ("cache_creation_input_tokens",),
+    ),
+    "reasoning_tokens": (
+        ("reasoning_tokens",),
+        ("completion_tokens_details", "reasoning_tokens"),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -183,11 +203,18 @@ class OpenAICompatibleClient:
             payload = {
                 "model": runner.model,
                 "messages": continuation_messages,
-                "temperature": self.config.temperature,
-                "max_tokens": self.config.max_tokens,
             }
+            if self.config.temperature is not None:
+                payload["temperature"] = self.config.temperature
+            if self.config.max_tokens is not None:
+                payload["max_tokens"] = self.config.max_tokens
+            payload.update(runner.extra_body)
             if disable_thinking or self._messages_request_no_think(continuation_messages):
-                payload["chat_template_kwargs"] = {"enable_thinking": False}
+                chat_template_kwargs = payload.get("chat_template_kwargs")
+                payload["chat_template_kwargs"] = {
+                    **(chat_template_kwargs if isinstance(chat_template_kwargs, dict) else {}),
+                    "enable_thinking": False,
+                }
             started = time.perf_counter()
             request_key = self._register_request(runner_index)
 
@@ -288,8 +315,8 @@ class OpenAICompatibleClient:
     def _merge_usage_counts(destination: dict[str, int], usage: Any) -> None:
         if not isinstance(usage, dict):
             return
-        for field in ("completion_tokens", "prompt_tokens", "total_tokens"):
-            value = OpenAICompatibleClient._extract_usage_token_count(usage, field)
+        for field, paths in _USAGE_METRIC_PATHS.items():
+            value = OpenAICompatibleClient._extract_usage_token_count(usage, paths)
             if value is None:
                 continue
             destination[field] = destination.get(field, 0) + value
@@ -318,14 +345,32 @@ class OpenAICompatibleClient:
         performance = self._format_performance_metrics(data, duration_ms)
         if performance:
             segments.append(performance)
+        usage_details = self._format_usage_details(data)
+        if usage_details:
+            segments.extend(usage_details)
         return " | ".join(segments)
+
+    @staticmethod
+    def _format_usage_details(data: dict[str, Any]) -> list[str]:
+        usage = data.get("usage")
+        cached_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, (("cached_tokens",),))
+        cache_write_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, (("cache_write_tokens",),))
+        reasoning_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, (("reasoning_tokens",),))
+        details: list[str] = []
+        if cached_tokens or cache_write_tokens:
+            details.append(f"cache: {cached_tokens or 0} hit, {cache_write_tokens or 0} write")
+        if reasoning_tokens:
+            details.append(f"reasoning: {reasoning_tokens} tok")
+        return details
 
     @staticmethod
     def _format_performance_metrics(data: dict[str, Any], duration_ms: float) -> str:
         duration_seconds = max(duration_ms / 1000.0, 0.0)
         usage = data.get("usage")
-        completion_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, "completion_tokens")
-        total_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, "total_tokens")
+        completion_tokens = OpenAICompatibleClient._extract_usage_token_count(
+            usage, (("completion_tokens",),)
+        )
+        total_tokens = OpenAICompatibleClient._extract_usage_token_count(usage, (("total_tokens",),))
         output_tokens = completion_tokens if completion_tokens and completion_tokens > 0 else total_tokens
         if output_tokens and output_tokens > 0 and duration_seconds > 0:
             return f"{output_tokens / duration_seconds:.1f} tok/s, {output_tokens} tok, {duration_seconds:.2f}s"
@@ -334,21 +379,30 @@ class OpenAICompatibleClient:
         return ""
 
     @staticmethod
-    def _extract_usage_token_count(usage: Any, field: str) -> int | None:
+    def _extract_usage_token_count(
+        usage: Any,
+        paths: tuple[tuple[str, ...], ...],
+    ) -> int | None:
         if not isinstance(usage, dict):
             return None
-        value = usage.get(field)
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        if isinstance(value, str):
-            try:
-                return int(value.strip())
-            except ValueError:
-                return None
+        for path in paths:
+            value: Any = usage
+            for field in path:
+                if not isinstance(value, dict):
+                    value = None
+                    break
+                value = value.get(field)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    continue
         return None
 
     @staticmethod

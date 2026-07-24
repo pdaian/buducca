@@ -12,6 +12,8 @@ BUDUCCA is a messaging-first assistant stack. Its center is not a web app, queue
 - **Collectors:** `collectors/` pulls external context such as Gmail, calendar, Slack, Reddit, news, and Twitter into workspace files.
 - **Configuration:** `config.example/` uses plain JSON files for model runners, frontends, runtime behavior, collectors, and permissions.
 
+Current backend roles and the deliberately small agent roadmap are maintained in [agent-modernization.md](./agent-modernization.md). The model list is dated because provider aliases change faster than BUDUCCA's transport contract.
+
 ## How the pieces fit
 
 1. A frontend receives a message from an allowed chat, sender, group, or device.
@@ -46,6 +48,7 @@ This design favors explicit boundaries: messaging is handled by frontends, reaso
 - You operate the runtime, frontend credentials, model endpoint, and optional collectors.
 - Plain-file state is simple and transparent, but it is not a substitute for a transactional database in high-scale multi-user deployments.
 - The skill interface is intentionally compact; tool descriptions and argument schemas need to stay precise, especially for weaker local models.
+- Provider-specific reasoning and sampling fields are optional runner data, not new framework abstractions.
 - There is no required vector database, hosted dashboard, or visual workflow builder. Add those only if your deployment needs them.
 
 ## Short version

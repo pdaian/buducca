@@ -12,7 +12,7 @@ BUDUCCA loads either one JSON file or a config directory. The example tree is th
 
 See also: [`config.example/README.md`](../config.example/README.md)
 
-## 2. Point BUDUCCA at a modern open model
+## 2. Point BUDUCCA at a modern model backend
 
 Edit `config/llm.json`.
 
@@ -22,6 +22,16 @@ The runtime expects an OpenAI-compatible chat-completions endpoint:
 - `api_key`: bearer token, or a placeholder if your local server ignores auth
 - `model`: the model ID exposed by that server
 - `endpoint_path`: usually `/chat/completions`
+- `extra_body`: optional provider/model request fields merged into the outgoing JSON body
+
+The checked-in example uses hosted `gpt-5.6-luna` with low reasoning effort. Current starting points as reviewed on 2026-07-24:
+
+- `Qwen/Qwen3.5-9B` for an efficient local general/tool-use model
+- `gpt-oss-20b` for a stronger local reasoning profile when the hardware can carry it
+- `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` for efficient, balanced, or flagship hosted OpenAI work
+- `deepseek-v4-flash` or `deepseek-v4-pro` for a hosted OpenAI-compatible alternative
+
+See [agent-modernization.md](./agent-modernization.md) for the dated model matrix, tradeoffs, and roadmap. Model names move quickly, so verify the provider page before production deployment.
 
 Two practical deployment paths:
 
@@ -33,18 +43,30 @@ Relevant docs:
 - <https://lmstudio.ai/>
 - <https://docs.ollama.com/openai>
 
-Minimal example for a local OpenAI-compatible server:
+Minimal Qwen example for a local OpenAI-compatible server:
 
 ```json
 {
-  "base_url": "http://127.0.0.1:8000/v1",
-  "api_key": "local-token",
-  "model": "your-open-model",
-  "endpoint_path": "/chat/completions",
-  "temperature": 0.2,
-  "max_tokens": 400
+  "runners": [
+    {
+      "base_url": "http://127.0.0.1:8000/v1",
+      "api_key": "local-token",
+      "model": "Qwen/Qwen3.5-9B",
+      "endpoint_path": "/chat/completions",
+      "model_tag": "local-efficient",
+      "extra_body": {
+        "top_p": 0.8,
+        "top_k": 20,
+        "presence_penalty": 1.5
+      }
+    }
+  ],
+  "temperature": 0.7,
+  "max_tokens": 800
 }
 ```
+
+Set `temperature` or `max_tokens` to `null` to omit that legacy field when a backend expects newer alternatives such as `max_completion_tokens`. `extra_body` cannot override `model` or `messages`.
 
 ## 3. Enable one frontend
 
@@ -183,8 +205,6 @@ If send fails, fix the `Termux:API` SMS permission before starting the bot.
 
 More detail: [`docs/frontends.md`](./frontends.md)
 
-More detail: [`docs/frontends.md`](./frontends.md)
-
 ## 4. Run the bot
 
 ```bash
@@ -257,4 +277,5 @@ The full frontend command behavior is documented in [`docs/frontends.md`](./fron
 
 - Frontend setup and safety notes: [`docs/frontends.md`](./frontends.md)
 - Architecture and extension points: [`docs/developer-guide.md`](./developer-guide.md)
+- Current agent roadmap and model profiles: [`docs/agent-modernization.md`](./agent-modernization.md)
 - Top-level overview: [`README.md`](../README.md)

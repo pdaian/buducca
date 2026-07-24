@@ -524,8 +524,6 @@ class BotRunner:
 
     def _build_agent_context_sections(self) -> list[str]:
         self._refresh_skills()
-        configured_timezone = self.config.llm.system_prompt_timezone
-        now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
         sections: list[str] = [
             "\n".join(
                 [
@@ -539,8 +537,6 @@ class BotRunner:
                     "State what you know, what you inferred, and what is still unknown when that distinction matters.",
                     "For ambiguous or underspecified requests, first decide whether you can answer now, need one clarifying question, or should inspect workspace evidence.",
                     "If key information is missing, ask one targeted follow-up instead of guessing.",
-                    f"Current date/time ({configured_timezone}, accurate to the minute): "
-                    + now_in_timezone.strftime("%Y-%m-%d %H:%M %Z"),
                     "Treat time-sensitive requests such as schedules, deadlines, reminders, and relative dates as needing current context.",
                 ]
             ),
@@ -1134,6 +1130,13 @@ class BotRunner:
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(self._history[conversation_key])
         structured_memory_context = build_structured_memory_context(self._workspace)
+        configured_timezone = self.config.llm.system_prompt_timezone
+        now_in_timezone = datetime.now(ZoneInfo(configured_timezone))
+        request_context = (
+            "[Request context]\n"
+            f"- current_date_time ({configured_timezone}, accurate to the minute): "
+            + now_in_timezone.strftime("%Y-%m-%d %H:%M %Z")
+        )
 
         sender_identity = sender_contact or sender_name or sender_id
         if backend == "telegram":
@@ -1165,7 +1168,7 @@ class BotRunner:
                 text,
             ]
         )
-        user_parts = [structured_memory_context, sender_context, main_prompt_context]
+        user_parts = [structured_memory_context, request_context, sender_context, main_prompt_context]
         evidence_context = format_evidence_context(evidence)
         if evidence_context:
             user_parts.append(evidence_context)

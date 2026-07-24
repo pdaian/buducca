@@ -111,6 +111,54 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(http.calls[-1][1]["chat_template_kwargs"], {"enable_thinking": False})
 
+    def test_generate_reply_merges_runner_extra_body(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(
+            temperature=None,
+            max_tokens=None,
+            runners=[
+                LLMRunnerConfig(
+                    base_url="https://api.openai.com/v1",
+                    api_key="k",
+                    model="m",
+                    extra_body={
+                        "reasoning_effort": "low",
+                        "max_completion_tokens": 800,
+                    },
+                )
+            ],
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        client.generate_reply([{"role": "user", "content": "hi"}])
+
+        payload = http.calls[-1][1]
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(payload["max_completion_tokens"], 800)
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("max_tokens", payload)
+
+    def test_disable_thinking_preserves_other_chat_template_options(self) -> None:
+        http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(
+                    base_url="http://127.0.0.1:8000/v1",
+                    api_key="k",
+                    model="m",
+                    extra_body={"chat_template_kwargs": {"custom_flag": True}},
+                )
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        client.generate_reply([{"role": "user", "content": "hi"}], disable_thinking=True)
+
+        self.assertEqual(
+            http.calls[-1][1]["chat_template_kwargs"],
+            {"custom_flag": True, "enable_thinking": False},
+        )
+
     def test_generate_reply_disables_thinking_when_nothink_marker_is_present(self) -> None:
         http = StubHttpClient({"choices": [{"message": {"content": "ok"}}]})
         cfg = LLMConfig(base_url="https://api.openai.com/v1", api_key="k", model="m")
@@ -228,6 +276,36 @@ class LLMClientTests(unittest.TestCase):
         self.assertIn("IP: 10.0.0.9 | model: fast-a (chain: 0) | ", footer)
         self.assertIn("tok/s", footer)
         self.assertIn("25 tok", footer)
+
+    def test_generate_reply_footer_reports_cache_and_reasoning_usage(self) -> None:
+        http = StubHttpClient(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {
+                    "completion_tokens": 25,
+                    "total_tokens": 100,
+                    "prompt_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 20},
+                    "completion_tokens_details": {"reasoning_tokens": 10},
+                },
+            }
+        )
+        cfg = LLMConfig(
+            runners=[
+                LLMRunnerConfig(
+                    base_url="http://10.0.0.9:8000/v1",
+                    api_key="k",
+                    model="m",
+                    model_tag="efficient",
+                ),
+            ]
+        )
+        client = OpenAICompatibleClient(config=cfg, http_client=http)
+
+        client.generate_reply([{"role": "user", "content": "hi"}])
+
+        footer = client.pop_last_reply_footer()
+        self.assertIn("cache: 60 hit, 20 write", footer)
+        self.assertIn("reasoning: 10 tok", footer)
 
     def test_generate_reply_continues_when_finish_reason_is_length(self) -> None:
         http = SequencedHttpClient(

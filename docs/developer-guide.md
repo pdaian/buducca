@@ -13,6 +13,7 @@
 
 - Prompt assembly lives in `messaging_llm_bot/bot.py` via `_build_system_prompt()` and `_build_agent_context_sections()`.
 - Default base prompt and prompt-related config live in `messaging_llm_bot/config.py`.
+- Stable role, tool, and policy instructions stay in the system message. Minute-specific request time is appended to the final user message so compatible providers can reuse a longer prompt-cache prefix.
 - Default prompt inclusion is intentionally narrow: only general learnings from `workspace/learnings` are auto-included.
 - Other stored workspace memory such as birthdays, contacts, notes, tasks, routines, structured facts, and collector outputs should be described for discovery, but not expanded by default.
 
@@ -104,8 +105,31 @@ Collectors:
   - `config/runtime.json` -> `runtime`
   - `config/collectors/gmail.json` -> `collectors.gmail`
 - `index.json` may be used to assign config to a directory key directly.
+- `llm.runners[].extra_body` is merged into the outgoing Chat Completions JSON for provider-specific fields such as reasoning or sampling controls.
+- `extra_body` may override optional defaults such as `temperature`, but it cannot override the protected `model` or `messages` fields.
+- Set top-level `llm.temperature` or `llm.max_tokens` to JSON `null` to omit those fields entirely for newer model profiles.
 
 If you delete a plugin folder, it is not loaded.
+
+## Model-client compatibility
+
+The client deliberately stays on the small, widely implemented Chat Completions wire shape. This keeps Ollama, LM Studio, vLLM, SGLang, and hosted compatible APIs on one code path.
+
+Modern request options do not justify a provider SDK dependency by themselves. Put those fields in the runner:
+
+```json
+{
+  "model": "gpt-5.6-luna",
+  "extra_body": {
+    "reasoning_effort": "low",
+    "max_completion_tokens": 800
+  }
+}
+```
+
+The reply footer reads common usage shapes and adds cache-hit, cache-write, and reasoning-token counts when a provider returns them. Missing metrics remain absent rather than being guessed.
+
+The current client does not implement the Responses API or native function-tool objects. Those are optional future transports in [agent-modernization.md](./agent-modernization.md); the existing JSON skill protocol remains the local/provider-neutral contract.
 
 ## Add a new skill
 

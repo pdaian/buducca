@@ -4,7 +4,7 @@ Standalone helper scripts that are intended to be copied or run directly live he
 
 ## Frontend updater
 
-Use [`update_frontends.py`](/tmp/codex-run-q8sgoi2w/working/scripts/update_frontends.py) to update any installed messaging frontend packages the host can detect across supported package managers.
+Use [`update_frontends.py`](./update_frontends.py) to update any installed messaging frontend packages the host can detect across supported package managers.
 
 Preview the commands first:
 
@@ -20,7 +20,7 @@ python3 scripts/update_frontends.py signal telegram
 
 ## Android Termux client
 
-Use [`run_client.py`](/tmp/codex-run-5rrgtwgf/working/scripts/run_client.py) on the Android device.
+Use [`run_client.py`](./run_client.py) on the Android device.
 
 It now has sensible local defaults:
 
@@ -44,4 +44,4 @@ export BUDUCCA_REMOTE_DIR=/srv/buducca/android
 python3 scripts/run_client.py run --include-package org.thoughtcrime.securesms
 ```
 
-The script creates the local sync directory/files it needs. Full Android bridge details are in [`docs/frontends.md`](/tmp/codex-run-5rrgtwgf/working/docs/frontends.md).
+The script creates the local sync directory/files it needs. Full Android bridge details are in [`docs/frontends.md`](../docs/frontends.md).

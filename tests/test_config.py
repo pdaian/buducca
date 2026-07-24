@@ -200,6 +200,84 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.llm.runners[0].base_url, "http://10.0.0.1:8000/v1")
             self.assertEqual(config.llm.runners[1].model_tag, "b")
 
+    def test_llm_runner_extra_body_loads_modern_request_fields(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "temperature": None,
+                "max_tokens": None,
+                "runners": [
+                    {
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "k",
+                        "model": "m",
+                        "extra_body": {
+                            "reasoning_effort": "low",
+                            "max_completion_tokens": 800,
+                        },
+                    }
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_config(path)
+
+            self.assertIsNone(config.llm.temperature)
+            self.assertIsNone(config.llm.max_tokens)
+            self.assertEqual(config.llm.runners[0].extra_body["reasoning_effort"], "low")
+
+    def test_llm_single_runner_extra_body_loads_modern_request_fields(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "k",
+                "model": "m",
+                "temperature": None,
+                "max_tokens": None,
+                "extra_body": {
+                    "reasoning_effort": "low",
+                    "max_completion_tokens": 800,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            config = load_config(path)
+
+            self.assertEqual(config.llm.extra_body["reasoning_effort"], "low")
+            self.assertIsNone(config.llm.temperature)
+            self.assertIsNone(config.llm.max_tokens)
+
+    def test_llm_runner_extra_body_cannot_override_protected_fields(self) -> None:
+        data = {
+            "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},
+            "llm": {
+                "runners": [
+                    {
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "k",
+                        "model": "m",
+                        "extra_body": {"messages": []},
+                    }
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"llm\.runners\[0\]\.extra_body cannot override protected request fields: messages",
+            ):
+                load_config(path)
+
     def test_llm_runners_entries_must_be_complete(self) -> None:
         data = {
             "telegram": {"bot_token": "t", "long_poll_timeout_seconds": 10},

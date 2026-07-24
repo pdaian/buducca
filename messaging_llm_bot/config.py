@@ -78,6 +78,7 @@ class LLMRunnerConfig:
     model: str = ""
     endpoint_path: str = "/chat/completions"
     model_tag: str = ""
+    extra_body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -86,6 +87,7 @@ class LLMConfig:
     api_key: str = ""
     model: str = ""
     endpoint_path: str = "/chat/completions"
+    extra_body: dict[str, Any] = field(default_factory=dict)
     runners: list[LLMRunnerConfig] = field(default_factory=list)
     system_prompt: str = (
         "You are a careful, action-oriented assistant. Prioritize correctness over fluency, "
@@ -94,8 +96,8 @@ class LLMConfig:
         "information to act, and prefer the most structured skill or argument shape available when "
         "tool use is needed."
     )
-    temperature: float = 0.2
-    max_tokens: int = 400
+    temperature: float | None = 0.2
+    max_tokens: int | None = 400
     history_messages: int = 8
     system_prompt_timezone: str = "America/New_York"
     file_task_layout_prompt: str = "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (for example assistant/notes/, assistant/lists/, assistant/health/, assistant/finance/, assistant/people/, assistant/travel/). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."
@@ -245,6 +247,7 @@ def _effective_llm_runners(config: LLMConfig) -> list[LLMRunnerConfig]:
             model=config.model,
             endpoint_path=config.endpoint_path,
             model_tag=config.model,
+            extra_body=config.extra_body,
         )
     ]
 
@@ -394,6 +397,21 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
             raise ValueError(f"{prefix}.api_key must be set")
         if not runner.model.strip():
             raise ValueError(f"{prefix}.model must be set")
+        if not isinstance(runner.extra_body, dict):
+            raise ValueError(f"{prefix}.extra_body must be a JSON object")
+        protected_fields = sorted({"model", "messages"}.intersection(runner.extra_body))
+        if protected_fields:
+            raise ValueError(
+                f"{prefix}.extra_body cannot override protected request fields: {', '.join(protected_fields)}"
+            )
+    if config.llm.temperature is not None:
+        if isinstance(config.llm.temperature, bool) or not isinstance(config.llm.temperature, (int, float)):
+            raise ValueError("llm.temperature must be a number or null")
+    if config.llm.max_tokens is not None:
+        if isinstance(config.llm.max_tokens, bool) or not isinstance(config.llm.max_tokens, int):
+            raise ValueError("llm.max_tokens must be an integer or null")
+        if config.llm.max_tokens <= 0:
+            raise ValueError("llm.max_tokens must be > 0 when set")
     if config.llm.history_messages < 0:
         raise ValueError("llm.history_messages must be >= 0")
     if not config.llm.system_prompt_timezone.strip():

@@ -2579,6 +2579,8 @@ class BotTests(unittest.TestCase):
 
         prompt = llm.messages
         self.assertEqual(prompt[-1]["role"], "user")
+        self.assertIn("[Request context]", prompt[-1]["content"])
+        self.assertIn("current_date_time (America/New_York, accurate to the minute):", prompt[-1]["content"])
         self.assertIn("[Sender context]", prompt[-1]["content"])
         self.assertIn("[Main prompt]", prompt[-1]["content"])
         self.assertIn("<THIS IS THE MAIN PROMPT THAT MUST BE PARSED<", prompt[-1]["content"])
@@ -3231,8 +3233,13 @@ class BotTests(unittest.TestCase):
                 "Use the learn skill aggressively for stable context such as preferences, identity details, relationships, ongoing projects, recurring logistics, and long-lived constraints.",
                 system_prompt,
             )
-            self.assertIn("Current date/time (America/New_York, accurate to the minute):", system_prompt)
-            self.assertRegex(system_prompt, r"Current date/time \(America/New_York, accurate to the minute\): .* (EST|EDT)")
+            self.assertNotIn("current_date_time", system_prompt)
+            user_prompt = bot.llm.messages[-1]["content"]
+            self.assertIn("current_date_time (America/New_York, accurate to the minute):", user_prompt)
+            self.assertRegex(
+                user_prompt,
+                r"current_date_time \(America/New_York, accurate to the minute\): .* (EST|EDT)",
+            )
             self.assertIn("Do not mention source paths unless they materially help the answer", system_prompt)
             self.assertIn("[Reply Style]", system_prompt)
             self.assertIn("[Examples]", system_prompt)

@@ -3,14 +3,18 @@
     {
       "base_url": "https://api.openai.com/v1",
       "api_key": "replace-with-api-key",
-      "model": "gpt-4o-mini",
+      "model": "gpt-5.6-luna",
       "endpoint_path": "/chat/completions",
-      "model_tag": "primary"
+      "model_tag": "hosted-efficient",
+      "extra_body": {
+        "reasoning_effort": "low",
+        "max_completion_tokens": 800
+      }
     }
   ],
   "system_prompt": "You are a careful, action-oriented assistant. Prioritize correctness over fluency, ground important claims in available evidence, ask a targeted clarifying question when requirements are ambiguous or missing, finish tasks end-to-end when you have enough information to act, and prefer the most structured skill or argument shape available when tool use is needed.",
-  "temperature": 0.2,
-  "max_tokens": 400,
+  "temperature": null,
+  "max_tokens": null,
   "history_messages": 8,
   "system_prompt_timezone": "America/New_York",
   "file_task_layout_prompt": "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (assistant/notes, assistant/lists, assistant/health, assistant/finance, assistant/people, assistant/travel). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."

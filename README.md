@@ -35,18 +35,22 @@ python3 run_bot.py --config config
 
 For a fuller boot sequence, collector setup, and command reference, see [docs/getting-started.md](docs/getting-started.md).
 
-## Open-model path
+## Model paths
 
 The model client speaks the OpenAI chat-completions shape. The simplest production path is:
 
 - local `LM Studio` for the simplest OpenAI-compatible desktop setup
 - local `Ollama` for fast single-node setup
-- recent open instruct/reasoning models exposed behind either server
+- local `Qwen3.5-9B` as the current efficient general/tool-use starting point
+- local `gpt-oss-20b` when the machine can carry a stronger reasoning profile
+- hosted `GPT-5.6 Luna` for efficient volume, `Terra` for balance, or `Sol` for the hardest work
+- hosted `DeepSeek V4 Flash` or `V4 Pro` as OpenAI-compatible alternatives
 
 Relevant docs:
 
 - `LM Studio`: <https://lmstudio.ai/>
 - `Ollama` OpenAI compatibility: <https://docs.ollama.com/openai>
+- Current model profiles and adoption plan: [docs/agent-modernization.md](docs/agent-modernization.md)
 
 ## Commands you will actually use
 
@@ -81,6 +85,7 @@ Remote Android note:
 
 - Start here: [docs/getting-started.md](docs/getting-started.md)
 - AI stack overview and comparisons: [docs/ai-stack.md](docs/ai-stack.md)
+- Agent modernization gameplan and current backend profiles: [docs/agent-modernization.md](docs/agent-modernization.md)
 - Frontends and slash commands: [docs/frontends.md](docs/frontends.md)
 - Architecture and extension points: [docs/developer-guide.md](docs/developer-guide.md)
 - Plugin docs: `skills/<name>/README.md` and `collectors/<name>/README.md`

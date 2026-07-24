@@ -1,12 +1,13 @@
+import importlib.util
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import run_client
 from messaging_llm_bot.android_client import (
     AndroidClient,
     AndroidFrontendUnavailableError,
@@ -15,6 +16,15 @@ from messaging_llm_bot.android_client import (
     main,
 )
 from messaging_llm_bot.termux_notification_collector import _normalize_include_packages, collect_once
+
+
+RUN_CLIENT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_client.py"
+RUN_CLIENT_SPEC = importlib.util.spec_from_file_location("run_client", RUN_CLIENT_PATH)
+if RUN_CLIENT_SPEC is None or RUN_CLIENT_SPEC.loader is None:
+    raise RuntimeError("Unable to load scripts/run_client.py")
+run_client = importlib.util.module_from_spec(RUN_CLIENT_SPEC)
+sys.modules[RUN_CLIENT_SPEC.name] = run_client
+RUN_CLIENT_SPEC.loader.exec_module(run_client)
 
 
 class AndroidClientTests(unittest.TestCase):
