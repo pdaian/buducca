@@ -3,6 +3,7 @@ import threading
 import time
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
+from messaging_llm_bot.http import RequestTimeoutError
 from messaging_llm_bot.llm_client import OpenAICompatibleClient
 
 
@@ -306,6 +307,18 @@ class LLMClientTests(unittest.TestCase):
         footer = client.pop_last_reply_footer()
         self.assertIn("cache: 60 hit, 20 write", footer)
         self.assertIn("reasoning: 10 tok", footer)
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["model_tag"], "efficient")
+        self.assertEqual(metrics[0]["usage"], {
+            "completion_tokens": 25,
+            "total_tokens": 100,
+            "cached_tokens": 60,
+            "cache_write_tokens": 20,
+            "reasoning_tokens": 10,
+        })
+        self.assertGreaterEqual(metrics[0]["duration_ms"], 0)
+        self.assertEqual(client.pop_last_request_metrics(), [])
 
     def test_generate_reply_continues_when_finish_reason_is_length(self) -> None:
         http = SequencedHttpClient(
@@ -346,6 +359,103 @@ class LLMClientTests(unittest.TestCase):
         footer = client.pop_last_reply_footer()
         self.assertIn("5 tok", footer)
         self.assertTrue(any("LLM completion truncated:" in line for line in logs.output))
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual([item["continuation"] for item in metrics], [False, True])
+        self.assertEqual([item["finish_reason"] for item in metrics], ["length", "stop"])
+        self.assertEqual([item["usage"]["completion_tokens"] for item in metrics], [3, 2])
+
+    def test_request_metrics_preserve_usage_before_continuation_failure_and_failover(self) -> None:
+        http = SequencedHttpClient([
+            {
+                "choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "prompt_cache_hit_tokens": 8},
+            },
+            RequestTimeoutError("private endpoint detail"),
+            {
+                "choices": [{"message": {"content": "recovered"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+            },
+        ])
+        client = OpenAICompatibleClient(
+            config=LLMConfig(runners=[
+                LLMRunnerConfig(base_url="https://primary.invalid/v1", api_key="secret", model="first"),
+                LLMRunnerConfig(base_url="https://fallback.invalid/v1", api_key="secret", model="second"),
+            ]),
+            http_client=http,
+        )
+
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "hi"}]), "recovered")
+
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual([item["runner_index"] for item in metrics], [0, 0, 1])
+        self.assertEqual([item["continuation"] for item in metrics], [False, True, False])
+        self.assertEqual(metrics[0]["usage"]["cached_tokens"], 8)
+        self.assertEqual(metrics[1]["error"], "RequestTimeoutError")
+        self.assertEqual(metrics[1]["usage"], {})
+        self.assertEqual(metrics[2]["model"], "second")
+        self.assertNotIn("secret", repr(metrics))
+        self.assertNotIn("private endpoint detail", repr(metrics))
+
+    def test_request_metrics_reset_between_calls_and_keep_usage_on_malformed_response(self) -> None:
+        client = OpenAICompatibleClient(
+            config=LLMConfig(base_url="https://example.invalid/v1", api_key="k", model="m"),
+            http_client=SequencedHttpClient([
+                {"choices": [{"message": {"content": "first"}}], "usage": {"total_tokens": 10}},
+                {"choices": [], "usage": {"total_tokens": 7}},
+                {"choices": [{"message": {"content": "last"}}]},
+            ]),
+        )
+        client.generate_reply([])
+        with self.assertRaises(RuntimeError):
+            client.generate_reply([])
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["usage"], {"total_tokens": 7})
+        self.assertEqual(metrics[0]["error"], "RuntimeError")
+
+        client.generate_reply([])
+        self.assertEqual(client.pop_last_request_metrics()[0]["usage"], {})
+        with client.force_runner(1):
+            with self.assertRaises(RuntimeError):
+                client.generate_reply([])
+        self.assertEqual(client.pop_last_request_metrics(), [])
+
+    def test_request_metrics_are_isolated_between_threads(self) -> None:
+        barrier = threading.Barrier(2, timeout=2)
+
+        class ConcurrentHttpClient:
+            def post_json(self, url, payload, headers=None):
+                barrier.wait()
+                tokens = int(payload["messages"][0]["content"])
+                return {"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": tokens}}
+
+        client = OpenAICompatibleClient(
+            config=LLMConfig(base_url="https://example.invalid/v1", api_key="k", model="m"),
+            http_client=ConcurrentHttpClient(),
+        )
+        results = {}
+        errors = []
+
+        def run(tokens):
+            try:
+                client.generate_reply([{"role": "user", "content": str(tokens)}])
+                barrier.wait()
+                results[tokens] = client.pop_last_request_metrics()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run, args=(tokens,)) for tokens in (7, 23)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        for tokens in (7, 23):
+            self.assertEqual(len(results[tokens]), 1)
+            self.assertEqual(results[tokens][0]["usage"], {"total_tokens": tokens})
+        self.assertEqual(client.pop_last_request_metrics(), [])
 
     def test_chain_runner_affinity_switches_runner_after_mid_chain_failure(self) -> None:
         http = SequencedHttpClient(
@@ -454,6 +564,9 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(len(http.calls), 2)
         self.assertEqual(client.pop_last_reply_footer(), "")
         self.assertEqual(sum("trying next runner" in line for line in logs.output), 1)
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual([item["error"] for item in metrics], ["RuntimeError", "RuntimeError"])
+        self.assertEqual([item["usage"] for item in metrics], [{}, {}])
 
     def test_get_runner_statuses_reports_inflight_requests(self) -> None:
         class BlockingHttpClient:

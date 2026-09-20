@@ -127,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("last-action", "last_action"),
         ("last-skill", "last_skill_result"),
         ("last-turn", "last-turn"),
+        ("metrics", "metrics"),
     ):
         show_parser = trace_subparsers.add_parser(name, help=f"Show {name} from the latest trace")
         show_parser.add_argument("--workspace", default="workspace", help="Workspace directory")

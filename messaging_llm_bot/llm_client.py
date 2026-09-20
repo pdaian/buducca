@@ -67,8 +67,9 @@ class OpenAICompatibleClient:
         self._thread_state = threading.local()
 
     def generate_reply(self, messages: Iterable[dict[str, str]], *, disable_thinking: bool = False) -> str:
-        materialized_messages = list(messages)
         self._thread_state.reply_footer = ""
+        self._thread_state.request_metrics = []
+        materialized_messages = list(messages)
         runner_attempts = self._select_runners_for_attempt()
         last_error: Exception | None = None
         for attempt_number, (runner_index, runner) in enumerate(runner_attempts, start=1):
@@ -110,6 +111,12 @@ class OpenAICompatibleClient:
         footer = getattr(self._thread_state, "reply_footer", "")
         self._thread_state.reply_footer = ""
         return footer
+
+    def pop_last_request_metrics(self) -> list[dict[str, Any]]:
+        """Consume this thread's HTTP request metrics, including failed attempts."""
+        metrics = getattr(self._thread_state, "request_metrics", [])
+        self._thread_state.request_metrics = []
+        return metrics
 
     def set_active_skill_chain_length(self, length: int) -> None:
         self._thread_state.skill_chain_length = max(0, int(length))
@@ -217,6 +224,13 @@ class OpenAICompatibleClient:
                 }
             started = time.perf_counter()
             request_key = self._register_request(runner_index)
+            request_metrics: dict[str, Any] = {
+                "runner_index": runner_index,
+                "model": runner.model,
+                "model_tag": runner.model_tag or runner.model,
+                "continuation": continuation_attempt > 0,
+                "usage": {},
+            }
 
             if self.debug:
                 logging.debug("LLM request URL: %s", url)
@@ -224,16 +238,23 @@ class OpenAICompatibleClient:
 
             try:
                 data = self.http_client.post_json(url, payload, headers=headers)
+                self._merge_usage_counts(request_metrics["usage"], data.get("usage"))
+                choice = self._extract_primary_choice(data)
+                request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
+            except Exception as exc:
+                request_metrics["error"] = type(exc).__name__
+                raise
             finally:
+                duration_ms = (time.perf_counter() - started) * 1000
+                request_metrics["duration_ms"] = duration_ms
+                self._thread_state.request_metrics.append(request_metrics)
                 self._unregister_request(runner_index, request_key)
 
-            duration_ms = (time.perf_counter() - started) * 1000
             total_duration_ms += duration_ms
             if self.debug:
                 logging.debug("LLM response payload: %s", data)
                 logging.debug("LLM request completed in %.2fms", duration_ms)
 
-            choice = self._extract_primary_choice(data)
             with self._selection_lock:
                 self._last_success_at[runner_index] = datetime.now(timezone.utc).isoformat()
             self._merge_usage_counts(aggregated_usage, data.get("usage"))

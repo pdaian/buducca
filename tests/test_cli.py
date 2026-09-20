@@ -18,6 +18,29 @@ class CLITests(unittest.TestCase):
         args = parser.parse_args(["trace", "last-prompt"])
         self.assertEqual(args.workspace, "workspace")
 
+    def test_trace_metrics_reads_explicit_trace(self) -> None:
+        import json
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from unittest.mock import patch
+
+        args = build_parser().parse_args(["trace", "metrics", "--trace", "saved.json"])
+        out = StringIO()
+        with patch("assistant_framework.cli.load_trace", return_value={"metrics": {"request_count": 2}}) as load:
+            with redirect_stdout(out):
+                args.handler(args)
+
+        self.assertEqual(json.loads(out.getvalue()), {"request_count": 2})
+        self.assertEqual(load.call_args.args[1], "saved.json")
+
+    def test_trace_metrics_handles_older_traces(self) -> None:
+        from assistant_framework.cli import _load_trace_section
+        from unittest.mock import patch
+
+        args = build_parser().parse_args(["trace", "metrics"])
+        with patch("assistant_framework.cli.load_trace", return_value={"final_reply": "done"}):
+            self.assertEqual(_load_trace_section(args), "Trace field not found: metrics")
+
     def test_trace_replay_returns_final_reply(self) -> None:
         with self.subTest("replay"):
             import tempfile

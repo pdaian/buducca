@@ -70,6 +70,7 @@ python3 -m assistant_framework.cli skills inspect summarize_workspace --skills s
 
 # Inspect the latest trace
 python3 -m assistant_framework.cli trace last-prompt --workspace workspace
+python3 -m assistant_framework.cli trace metrics --workspace workspace
 python3 -m assistant_framework.cli trace replay --workspace workspace
 ```
 

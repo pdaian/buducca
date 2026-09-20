@@ -12,6 +12,25 @@ TRACE_DIR = "traces"
 LEGACY_TRACE_DIR = "logs/traces"
 
 
+def build_trace_metrics(requests: list[dict[str, Any]], *, skill_chain_length: int) -> dict[str, Any]:
+    """Summarize reported usage without treating missing provider metrics as zero."""
+    usage: dict[str, int] = {}
+    usage_request_counts: dict[str, int] = {}
+    for request in requests:
+        for name, value in request["usage"].items():
+            usage[name] = usage.get(name, 0) + value
+            usage_request_counts[name] = usage_request_counts.get(name, 0) + 1
+    return {
+        "request_count": len(requests),
+        "continuation_count": sum(request["continuation"] for request in requests),
+        "skill_chain_length": skill_chain_length,
+        "duration_ms": sum(request["duration_ms"] for request in requests),
+        "usage": usage,
+        "usage_request_counts": usage_request_counts,
+        "requests": requests,
+    }
+
+
 def _trace_dir(workspace: Workspace) -> Path:
     return workspace.data_root() / TRACE_DIR
 

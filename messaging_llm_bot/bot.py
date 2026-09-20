@@ -32,7 +32,7 @@ from assistant_framework.retrieval import (
 )
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
 from assistant_framework.skills import read_skill_doc_section
-from assistant_framework.traces import write_trace
+from assistant_framework.traces import build_trace_metrics, write_trace
 
 from .config import AndroidConfig, BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
 from .http import HttpClient, RequestTimeoutError
@@ -273,11 +273,13 @@ class BotRunner:
             with self._request_slots:
                 self._request_state.evidence = []
                 self._request_state.trace_steps = []
+                self._request_state.llm_requests = []
                 try:
                     yield
                 finally:
                     self._request_state.evidence = []
                     self._request_state.trace_steps = []
+                    self._request_state.llm_requests = []
 
     @staticmethod
     def _is_status_command(text: str) -> bool:
@@ -294,6 +296,28 @@ class BotRunner:
 
     def _get_trace_steps(self) -> list[dict[str, Any]]:
         return list(getattr(self._request_state, "trace_steps", []))
+
+    def _generate_model_reply(self, prompt: list[dict[str, str]], *, disable_thinking: bool = False) -> str:
+        try:
+            reply = self.llm.generate_reply(prompt, disable_thinking=disable_thinking)
+            self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+            return self._strip_think_blocks(reply, source="llm")
+        finally:
+            requests = getattr(self._request_state, "llm_requests", [])
+            requests.extend(getattr(self.llm, "pop_last_request_metrics", lambda: [])())
+            self._request_state.llm_requests = requests
+
+    def _write_message_trace(self, payload: dict[str, Any]) -> None:
+        steps = self._get_trace_steps()
+        payload["steps"] = steps
+        if steps:
+            payload["last_action"] = steps[-1].get("skill_call")
+            payload["last_skill_result"] = steps[-1].get("skill_result")
+        payload["metrics"] = build_trace_metrics(
+            list(getattr(self._request_state, "llm_requests", [])),
+            skill_chain_length=len(steps),
+        )
+        write_trace(self._workspace, payload)
 
     def _refresh_skills(self) -> None:
         self._skills = self._load_runtime_skills()
@@ -1340,11 +1364,7 @@ class BotRunner:
                         sender_contact=sender_contact,
                     )
                     self._set_active_skill_chain_length(0)
-                    model_reply = self._strip_think_blocks(
-                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                        source="llm",
-                    )
-                    self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+                    model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                     reply = self._coerce_reply_text(
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"scheduled reminder id={record.get('id', '')}",
@@ -1449,11 +1469,7 @@ class BotRunner:
                         sender_contact=sender_contact,
                     )
                     self._set_active_skill_chain_length(0)
-                    model_reply = self._strip_think_blocks(
-                        self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                        source="llm",
-                    )
-                    self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+                    model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                     reply = self._coerce_reply_text(
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"hourly slot={slot.isoformat()}",
@@ -2120,11 +2136,7 @@ class BotRunner:
                     prompt,
                 )
             self._set_active_skill_chain_length(step_index + 1)
-            model_reply = self._strip_think_blocks(
-                self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                source="llm",
-            )
-            self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+            model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
             if summarized_skill_result != raw_skill_result:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
@@ -3670,6 +3682,7 @@ class BotRunner:
         self._set_active_reply_footer("")
         self._set_request_evidence([])
         self._set_trace_steps([])
+        self._request_state.llm_requests = []
         text, disable_thinking, forced_runner_index = self._extract_llm_directives(text)
         command_text = text.strip()
         self._refresh_skills()
@@ -3707,24 +3720,16 @@ class BotRunner:
                         if forced_runner_index is not None and callable(force_runner):
                             stack.enter_context(force_runner(forced_runner_index))
                         self._set_active_skill_chain_length(0)
-                        model_reply = self._strip_think_blocks(
-                            self.llm.generate_reply(prompt, disable_thinking=disable_thinking),
-                            source="llm",
-                        )
-                        self._set_active_reply_footer(getattr(self.llm, "pop_last_reply_footer", lambda: "")())
+                        model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                         trace_payload["initial_model_reply"] = model_reply
                         reply = self._coerce_reply_text(
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                             context=f"{backend} conversation={conversation_id}",
                         )
-                    trace_payload["steps"] = self._get_trace_steps()
-                    if trace_payload["steps"]:
-                        trace_payload["last_action"] = trace_payload["steps"][-1].get("skill_call")
-                        trace_payload["last_skill_result"] = trace_payload["steps"][-1].get("skill_result")
                 except RequestTimeoutError:
                     logging.warning("LLM request timed out for %s conversation=%s", backend, conversation_id)
                     trace_payload["error"] = "timeout"
-                    write_trace(self._workspace, trace_payload)
+                    self._write_message_trace(trace_payload)
                     self._send_message(
                         backend,
                         conversation_id,
@@ -3737,12 +3742,12 @@ class BotRunner:
                     if str(exc).startswith("Requested runner /"):
                         logging.warning("Invalid runner directive for %s conversation=%s: %s", backend, conversation_id, exc)
                         trace_payload["error"] = "invalid_runner"
-                        write_trace(self._workspace, trace_payload)
+                        self._write_message_trace(trace_payload)
                         self._send_message(backend, conversation_id, str(exc))
                         return False
                     logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
                     trace_payload["error"] = "internal_error"
-                    write_trace(self._workspace, trace_payload)
+                    self._write_message_trace(trace_payload)
                     self._send_message(
                         backend,
                         conversation_id,
@@ -3753,7 +3758,7 @@ class BotRunner:
                 except Exception:
                     logging.exception("Failed to generate or parse LLM response for %s conversation=%s", backend, conversation_id)
                     trace_payload["error"] = "internal_error"
-                    write_trace(self._workspace, trace_payload)
+                    self._write_message_trace(trace_payload)
                     self._send_message(
                         backend,
                         conversation_id,
@@ -3775,7 +3780,7 @@ class BotRunner:
         if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
             reply = f"{reply}\n\n{reply_footer}"
         trace_payload["final_reply"] = reply
-        write_trace(self._workspace, trace_payload)
+        self._write_message_trace(trace_payload)
         for chunk in self._split_reply(reply):
             self._send_message(backend, conversation_id, chunk)
         self._append_agenta_query_log(
