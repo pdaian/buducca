@@ -6,6 +6,28 @@ import run_bot
 
 
 class RunBotSupervisorTests(unittest.TestCase):
+    def test_check_config_validates_without_starting_a_process(self) -> None:
+        with patch("run_bot.subprocess.Popen") as spawn, patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(run_bot.main(["--check-config", "--config", "config.example"]), 0)
+        spawn.assert_not_called()
+        self.assertIn("Configuration valid", output.getvalue())
+        self.assertNotIn("replace-with", output.getvalue())
+
+    def test_check_config_reports_errors_without_a_traceback(self) -> None:
+        with patch("messaging_llm_bot.config.load_config", side_effect=ValueError("runtime.max_skill_result_chars must be >= 512")), patch(
+            "sys.stderr", new_callable=io.StringIO,
+        ) as output, patch("run_bot.subprocess.Popen") as spawn:
+            self.assertEqual(run_bot.main(["--check-config"]), 2)
+        spawn.assert_not_called()
+        self.assertIn("Configuration error: runtime.max_skill_result_chars", output.getvalue())
+
+    def test_help_does_not_start_the_supervisor(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO), patch("run_bot.subprocess.Popen") as spawn:
+            with self.assertRaises(SystemExit) as caught:
+                run_bot.main(["--help"])
+        self.assertEqual(caught.exception.code, 0)
+        spawn.assert_not_called()
+
     def test_killed_child_restarts_after_delay(self) -> None:
         returncodes = iter([-signal.SIGKILL, 0])
         sleeps = []
@@ -46,3 +68,4 @@ class RunBotSupervisorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+import io

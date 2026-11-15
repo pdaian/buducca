@@ -16,11 +16,16 @@ _RESTART_AFTER_SECONDS = 60.0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Telegram + OpenAI-compatible bot")
+    parser = argparse.ArgumentParser(description="Run the BUDUCCA messaging assistant")
     parser.add_argument(
         "--config",
         default="config",
         help="Path to the bot configuration file or directory",
+    )
+    parser.add_argument(
+        "--check-config",
+        action="store_true",
+        help="Validate configuration and exit without starting frontends or writing runtime files",
     )
     return parser.parse_args(argv)
 
@@ -88,8 +93,19 @@ def _run_supervised(
 
 def main(argv: list[str] | None = None) -> int:
     effective_argv = sys.argv[1:] if argv is None else argv
+    args = parse_args(effective_argv)
+    if args.check_config:
+        from messaging_llm_bot.config import load_config
+
+        try:
+            config = load_config(args.config)
+        except (OSError, ValueError) as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
+        frontends = [name for name in ("telegram", "signal", "whatsapp", "android") if getattr(config, name) is not None]
+        print(f"Configuration valid. Frontends: {', '.join(frontends)}; LLM runners: {len(config.llm.runners) or 1}.")
+        return 0
     if os.environ.get(_CHILD_ENV_VAR) == "1":
-        args = parse_args(effective_argv)
         _run_bot(args.config)
         return 0
 

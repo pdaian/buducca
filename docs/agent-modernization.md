@@ -1,6 +1,6 @@
 # Agent modernization gameplan
 
-Backend profiles last reviewed: **2026-07-24**. Harness feature comparison last reviewed: **2026-09-20**.
+Backend profiles last reviewed: **2026-07-24**. Harness feature comparison last reviewed: **2026-09-20**. Runtime controls implemented: **2026-11-15**.
 
 BUDUCCA should adopt agent features only when they make the existing assistant more capable per token, easier to operate, or safer to trust. The goal is not to become another orchestration framework. The goal is to keep one small Python control plane current as model behavior improves.
 
@@ -22,13 +22,13 @@ These are ranked recommendations based on BUDUCCA's current code and the linked 
 | Priority | Feature and precedent | Smallest useful BUDUCCA version | Effort / decision |
 | --- | --- | --- | --- |
 | 1 | Usage visibility, as in [OpenClaw's session usage reporting](https://docs.openclaw.ai/concepts/usage-tracking). | Preserve the model client's existing usage data in local traces across every endpoint request, continuation, and runner failure. Expose it through the existing trace CLI. | **Small; implemented.** Gives evidence for later tuning with no extra model calls or services. |
-| 2 | No-progress loop detection, as in [OpenClaw's tool-loop guards](https://docs.openclaw.ai/tools/loop-detection). | Add an opt-in guard inside `_resolve_llm_reply` for repeated identical skill name, arguments, and result; record the stop reason in the trace. Keep the existing chain limit. | **Small; next reliability improvement.** Test legitimate polling, read-after-write, and changing results before enabling it by default. Identical arguments alone do not prove a loop. |
-| 3 | Bounded tool output, as in [Pydantic AI's tool output limits](https://pydantic.dev/docs/ai/harness/tool-output-limits/). | Keep the full result in the existing trace, bound the text sent back to the model, and provide a restricted way to read omitted ranges. Existing file read ranges and web-search summarization are useful starting points. | **Small to medium; next context improvement.** Measure result sizes first. Make truncation explicit and retain access to errors and omitted evidence. |
-| 4 | Per-run request budgets, as in [Pydantic AI's usage limits](https://pydantic.dev/docs/ai/core-concepts/agent/#usage-limits). | Optionally cap actual endpoint attempts across the initial reply, skill follow-ups, continuations, and failover. `max_skill_chain_steps` currently bounds only the skill loop. | **Small to medium; after measuring traces.** Count attempts before sending. Token totals alone cannot provide a hard limit when providers omit usage. |
+| 2 | No-progress loop detection, as in [OpenClaw's tool-loop guards](https://docs.openclaw.ai/tools/loop-detection). | `max_repeated_skill_results` stops consecutive identical skill names, arguments, and results, with a trace stop reason. | **Implemented, optional.** Enabled at 3 in the example configuration. Changing results and intervening calls reset detection; intentional unchanged polling can disable it. |
+| 3 | Bounded tool output, as in [Pydantic AI's tool output limits](https://pydantic.dev/docs/ai/harness/tool-output-limits/). | `max_skill_result_chars` bounds results before their first model follow-up, keeps both ends, and retains full results in traces. `read_skill_result` retrieves omitted character ranges in the current turn. | **Implemented, optional.** Enabled at 16,000 characters in the example; no extra files or service. Per-step trace fields expose result size and truncation. |
+| 4 | Per-run request budgets, as in [Pydantic AI's usage limits](https://pydantic.dev/docs/ai/core-concepts/agent/#usage-limits). | `max_llm_requests_per_turn` caps actual endpoint attempts across initial replies, follow-ups, continuations, and failover. | **Implemented, optional.** Enabled at 24 in the example. Attempts are counted before sending, independently of provider usage reporting. |
 | 5 | Resumable approvals, as in [Pydantic AI's deferred tools](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/). | Let `/approve <id>` resume one persisted pending action with its original arguments, conversation/sender scope, expiry, and single-use consumption. Reuse the existing policy boundary and action audit. | **Medium; when approval friction is frequent.** Current `ask` requires a policy edit and retry. Correct scoping and duplicate-action handling make this larger than a slash-command addition. |
 | 6 | Threshold-triggered history compaction, as in [LangChain's summarization middleware](https://docs.langchain.com/oss/python/langchain/middleware/built-in#summarization). | Implement the file-backed conversation checkpoint described in Phase 2, keeping recent turns and approval state outside the lossy summary. | **Medium; after context measurements and evals.** Adds a model call and can lose constraints. |
 
-Start with usage traces, then use representative conversations to choose between loop detection and bounded tool output. The existing runner failover, prompt-cache-friendly prefix, configurable reasoning options, structured memory, and action audit already cover several common harness features. Tool discovery remains conditional on catalog cost; a new protocol layer, agent swarm, or vector service has no demonstrated benefit here.
+Use usage traces and representative conversations to tune the optional limits. Existing configurations retain their previous behavior when the new settings are omitted or `null`. The runner failover, prompt-cache-friendly prefix, configurable reasoning options, structured memory, and action audit cover several common harness features. Tool discovery remains conditional on catalog cost; a new protocol layer, agent swarm, or vector service has no demonstrated benefit here.
 
 ### Inspect the implemented usage traces
 
@@ -44,6 +44,9 @@ New chat traces include a `metrics` object with:
 - `duration_ms`: summed endpoint request time, including failed attempts; this excludes skill execution, time waiting for a bot request slot, and message delivery;
 - `usage`: summed provider-reported prompt, completion, total, cached, cache-write, and reasoning token counts, when present;
 - `usage_request_counts`: how many endpoint requests supplied each token metric. Compare with `request_count` to identify partial totals.
+- `stop_reason`, when execution stops at a guard: `max_llm_requests_per_turn`, `repeated_skill_result`, or `max_skill_chain_steps`.
+
+Each completed step also records `result_chars`, `context_chars`, and `result_truncated`, alongside the full `skill_result`. Blocked endpoint attempts are not included in request counts. The final response after the last allowed skill is preserved; an additional skill is never dispatched beyond the chain limit.
 
 Cache and reasoning counts are breakdowns; do not add them to `total_tokens`. Missing counts stay absent, including when a timeout may have incurred provider usage that was never returned. This is diagnostic accounting, not a billing guarantee. Request records omit credentials, endpoint URLs, and exception messages.
 

@@ -207,9 +207,19 @@ More detail: [`docs/frontends.md`](./frontends.md)
 
 ## 4. Run the bot
 
+Validate your edited configuration first:
+
+```bash
+python3 -B run_bot.py --config config --check-config
+```
+
+This reports invalid settings without starting frontend sessions, contacting the model endpoint, or writing runtime files. It validates configuration only; service credentials and reachability are checked when the bot runs.
+
 ```bash
 python3 run_bot.py --config config
 ```
+
+The example runtime caps each turn at 24 endpoint attempts and 12 skill calls, detects three consecutive identical skill results, and limits each model-visible result to 16,000 characters. Full results remain in traces and the model can read omitted ranges within the same turn. Configure these optional limits in `runtime.json`; [configuration controls](../config.example/README.md) explains their defaults and how to disable them for intentional polling or larger outputs.
 
 Useful runtime files:
 

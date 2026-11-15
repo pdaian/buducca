@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
 class RequestTimeoutError(RuntimeError):
     """Raised when an HTTP request times out."""
+
+
+def _safe_url(url: str) -> str:
+    """Remove URL credentials, query secrets, and Telegram's token path segment."""
+    parsed = urlsplit(url)
+    path = re.sub(r"/bot[^/]+", "/bot<redacted>", parsed.path)
+    return urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], path, "", ""))
 
 
 class HttpClient:
@@ -21,7 +30,7 @@ class HttpClient:
         if headers:
             request_headers.update(headers)
 
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, allow_nan=False).encode("utf-8")
         req = Request(url=url, data=body, headers=request_headers, method="POST")
         return self._request_json(req)
 
@@ -31,16 +40,22 @@ class HttpClient:
 
     def get_bytes(self, url: str) -> bytes:
         req = Request(url=url, method="GET")
+        return self._request_bytes(req)
+
+    def _request_bytes(self, req: Request) -> bytes:
+        safe_url = _safe_url(req.full_url)
         try:
             with urlopen(req, timeout=self.timeout_seconds) as response:
                 return response.read()
-        except (socket.timeout, TimeoutError) as err:
-            raise RequestTimeoutError(f"Request timed out for {req.full_url}") from err
+        except (socket.timeout, TimeoutError):
+            raise RequestTimeoutError(f"Request timed out for {safe_url}") from None
         except HTTPError as err:
-            detail = err.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {err.code} for {req.full_url}: {detail}") from err
+            err.close()
+            raise RuntimeError(f"HTTP {err.code} for {safe_url}") from None
         except URLError as err:
-            raise RuntimeError(f"Failed request to {req.full_url}: {err}") from err
+            if isinstance(err.reason, (socket.timeout, TimeoutError)):
+                raise RequestTimeoutError(f"Request timed out for {safe_url}") from None
+            raise RuntimeError(f"Failed request to {safe_url}: {type(err.reason).__name__}") from None
 
     def post_multipart(
         self,
@@ -74,18 +89,11 @@ class HttpClient:
         return self._request_json(req)
 
     def _request_json(self, req: Request) -> dict[str, Any]:
+        raw = self._request_bytes(req)
         try:
-            with urlopen(req, timeout=self.timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
-        except (socket.timeout, TimeoutError) as err:
-            raise RequestTimeoutError(f"Request timed out for {req.full_url}") from err
-        except HTTPError as err:
-            detail = err.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {err.code} for {req.full_url}: {detail}") from err
-        except URLError as err:
-            raise RuntimeError(f"Failed request to {req.full_url}: {err}") from err
-
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as err:
-            raise RuntimeError(f"Non-JSON response from {req.full_url}: {raw[:300]}") from err
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise RuntimeError(f"Non-JSON response from {_safe_url(req.full_url)}") from None
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Expected a JSON object from {_safe_url(req.full_url)}")
+        return payload

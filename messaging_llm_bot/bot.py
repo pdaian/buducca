@@ -12,6 +12,7 @@ import time
 import traceback
 from contextlib import ExitStack, contextmanager
 from collections import defaultdict, deque
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -21,6 +22,7 @@ from typing import Any, Deque
 from assistant_framework import CollectorManager, SkillManager, Workspace
 from assistant_framework.action_runtime import append_action_audit, decide_action, load_action_policy
 from assistant_framework.config_files import load_named_config_map
+from assistant_framework.execution import RepeatedResultGuard, bound_skill_result, read_skill_result
 from assistant_framework.ingestion import ingest_attachment
 from assistant_framework.main_group import read_main_group
 from assistant_framework.memory import list_records, mark_routine_run, mark_task_notified
@@ -31,13 +33,13 @@ from assistant_framework.retrieval import (
     search_workspace,
 )
 from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
-from assistant_framework.skills import read_skill_doc_section
+from assistant_framework.skills import Skill, read_skill_doc_section
 from assistant_framework.traces import build_trace_metrics, write_trace
 
 from .config import AndroidConfig, BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
 from .http import HttpClient, RequestTimeoutError
 from .interfaces import IncomingAttachment, IncomingMessage
-from .llm_client import OpenAICompatibleClient
+from .llm_client import OpenAICompatibleClient, RequestBudgetExceeded
 from .android_client import AndroidClient, AndroidFrontendUnavailableError
 from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import TelegramClient
@@ -254,6 +256,16 @@ class BotRunner:
         skills = SkillManager(self.config.runtime.skills_dir).load()
         if not self.config.runtime.enable_message_send_skill:
             skills.pop("message_send", None)
+        if self.config.runtime.max_skill_result_chars is not None:
+            skills["read_skill_result"] = Skill(
+                name="read_skill_result",
+                description="Read omitted text from a completed skill result in this turn using character offsets.",
+                run=lambda _workspace, args: read_skill_result(
+                    self._get_trace_steps(), args, max_chars=self.config.runtime.max_skill_result_chars,
+                ),
+                requires_llm_response=True,
+                args_schema='{"step": "required integer >= 1", "offset": "optional integer >= 0", "limit": "optional integer >= 1"}',
+            )
         return skills
 
     def _conversation_scope_key(self, backend: str, conversation_id: str) -> str:
@@ -274,12 +286,19 @@ class BotRunner:
                 self._request_state.evidence = []
                 self._request_state.trace_steps = []
                 self._request_state.llm_requests = []
+                self._request_state.stop_reason = None
                 try:
-                    yield
+                    with ExitStack() as stack:
+                        request_budget = getattr(self.llm, "request_budget", None)
+                        limit = self.config.runtime.max_llm_requests_per_turn
+                        if limit is not None and callable(request_budget):
+                            stack.enter_context(request_budget(limit))
+                        yield
                 finally:
                     self._request_state.evidence = []
                     self._request_state.trace_steps = []
                     self._request_state.llm_requests = []
+                    self._request_state.stop_reason = None
 
     @staticmethod
     def _is_status_command(text: str) -> bool:
@@ -316,6 +335,7 @@ class BotRunner:
         payload["metrics"] = build_trace_metrics(
             list(getattr(self._request_state, "llm_requests", [])),
             skill_chain_length=len(steps),
+            stop_reason=getattr(self._request_state, "stop_reason", None),
         )
         write_trace(self._workspace, payload)
 
@@ -2090,15 +2110,18 @@ class BotRunner:
         if prompt and prompt[-1].get("role") == "user":
             main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
         max_skill_chain_steps = self.config.runtime.max_skill_chain_steps
-        for step_index in range(max_skill_chain_steps):
+        result_guard = RepeatedResultGuard(self.config.runtime.max_repeated_skill_results)
+        for step_index in range(max_skill_chain_steps + 1):
             skill_call = self._try_parse_skill_call(model_reply)
             if not skill_call:
                 return model_reply
+            if step_index == max_skill_chain_steps:
+                break
 
             done_was_explicit = self._done_flag_was_explicit(model_reply)
 
             raw_skill_result = self._strip_think_blocks(
-                self._run_skill_call(skill_call["name"], skill_call["args"]), source="skill"
+                self._run_skill_call(skill_call["name"], deepcopy(skill_call["args"])), source="skill"
             )
             trace_steps.append(
                 {
@@ -2109,21 +2132,39 @@ class BotRunner:
                 }
             )
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
+            context_result = bound_skill_result(
+                raw_skill_result, step=step_index + 1, max_chars=self.config.runtime.max_skill_result_chars,
+            )
+            trace_steps[-1]["result_chars"] = len(raw_skill_result)
+            trace_steps[-1]["context_chars"] = 0
+            trace_steps[-1]["result_truncated"] = False
             requires_llm_response = self._skill_requires_llm_response(skill_call["name"])
             long_skill_output = self._reply_would_split(raw_skill_result)
-            should_force_follow_up_call = long_skill_output
+            should_force_follow_up_call = long_skill_output or context_result != raw_skill_result
 
             if skill_call["done"] and not requires_llm_response and not should_force_follow_up_call:
                 return raw_skill_result
 
+            if result_guard.observe(skill_call["name"], skill_call["args"], raw_skill_result):
+                self._request_state.stop_reason = "repeated_skill_result"
+                logging.warning("Skill chain stopped after repeated identical results from %s", skill_call["name"])
+                return (
+                    f"I stopped because skill `{skill_call['name']}` returned the same result "
+                    f"{self.config.runtime.max_repeated_skill_results} times in a row with identical arguments. "
+                    "Please review the completed actions before retrying."
+                )
+
+            allow_follow_up = not skill_call["done"] or not done_was_explicit or context_result != raw_skill_result
+            trace_steps[-1]["context_chars"] = len(context_result)
+            trace_steps[-1]["result_truncated"] = context_result != raw_skill_result
             prompt.append({"role": "assistant", "content": model_reply})
             prompt.append(
                 {
                     "role": "user",
                     "content": self._continue_skill_chain_prompt(
                         skill_call["name"],
-                        raw_skill_result,
-                        allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
+                        context_result,
+                        allow_follow_up_skill=allow_follow_up,
                         main_prompt_block=main_prompt_block,
                     ),
                 }
@@ -2137,11 +2178,11 @@ class BotRunner:
                 )
             self._set_active_skill_chain_length(step_index + 1)
             model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
-            if summarized_skill_result != raw_skill_result:
+            if summarized_skill_result != raw_skill_result and self.config.runtime.max_skill_result_chars is None:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
                     summarized_skill_result,
-                    allow_follow_up_skill=not skill_call["done"] or not done_was_explicit,
+                    allow_follow_up_skill=allow_follow_up,
                     main_prompt_block=main_prompt_block,
                 )
             if self._debug_enabled:
@@ -2152,9 +2193,7 @@ class BotRunner:
                     model_reply,
                 )
 
-            if skill_call["done"] and requires_llm_response:
-                return model_reply
-
+        self._request_state.stop_reason = "max_skill_chain_steps"
         logging.warning("Skill chain exceeded max steps (%s)", max_skill_chain_steps)
         return "I stopped after too many chained skill calls. Please narrow the request and try again."
 
@@ -2189,6 +2228,8 @@ class BotRunner:
                 )
         try:
             result = skill.run(self._workspace, args)
+            if not isinstance(result, str):
+                raise TypeError(f"Expected a text result, got {type(result).__name__}")
             if action is not None:
                 append_action_audit(self._workspace, action=action, decision="allow", status="executed", result=result)
             return result
@@ -2262,6 +2303,10 @@ class BotRunner:
             f"- handled_messages: {self._handled_messages_count}",
             f"- active_chats_in_memory: {len(self._history)}",
             f"- max_concurrent_requests: {self.config.runtime.max_concurrent_requests}",
+            f"- max_skill_chain_steps: {self.config.runtime.max_skill_chain_steps}",
+            f"- max_llm_requests_per_turn: {self.config.runtime.max_llm_requests_per_turn or 'unlimited'}",
+            f"- max_repeated_skill_results: {self.config.runtime.max_repeated_skill_results or 'disabled'}",
+            f"- max_skill_result_chars: {self.config.runtime.max_skill_result_chars or 'unlimited'}",
         ]
         lines.extend(self._frontend_status_lines())
         runner_statuses = getattr(self.llm, "get_runner_statuses", lambda: [])()
@@ -3683,6 +3728,7 @@ class BotRunner:
         self._set_request_evidence([])
         self._set_trace_steps([])
         self._request_state.llm_requests = []
+        self._request_state.stop_reason = None
         text, disable_thinking, forced_runner_index = self._extract_llm_directives(text)
         command_text = text.strip()
         self._refresh_skills()
@@ -3726,6 +3772,17 @@ class BotRunner:
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                             context=f"{backend} conversation={conversation_id}",
                         )
+                except RequestBudgetExceeded as exc:
+                    logging.warning("LLM request budget exhausted for %s conversation=%s", backend, conversation_id)
+                    self._request_state.stop_reason = "max_llm_requests_per_turn"
+                    trace_payload["error"] = "request_budget_exceeded"
+                    trace_payload["final_reply"] = (
+                        f"I stopped: {exc} Completed actions are recorded in the trace; "
+                        "please review them before retrying."
+                    )
+                    self._write_message_trace(trace_payload)
+                    self._send_message(backend, conversation_id, trace_payload["final_reply"])
+                    return False
                 except RequestTimeoutError:
                     logging.warning("LLM request timed out for %s conversation=%s", backend, conversation_id)
                     trace_payload["error"] = "timeout"

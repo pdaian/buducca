@@ -164,259 +164,63 @@ For agent-facing skills, keep the README explicit:
 - Avoid duplicated logic between skills/collectors/core runtime.
 - Write code that reads like a clear script first, clever trick second.
 
-## Locking around LLM calls
+## Execution limits and result recovery
 
-This codebase already serializes LLM requests in the bot:
+The runtime has three optional controls in addition to `max_skill_chain_steps`:
 
-- `messaging_llm_bot/bot.py` creates `self._processing_lock = threading.RLock()`
-- `messaging_llm_bot/bot.py` wraps the model call in `_generate_reply_with_lock()`
+- `max_llm_requests_per_turn` counts actual endpoint attempts before dispatch, including continuations, failed requests, and runner failover. The counter spans every model call in a chat turn, scheduled reminder, or hourly routine. A rejected attempt does not appear as a completed request in usage metrics.
+- `max_repeated_skill_results` stops consecutive calls only when their skill name, canonical JSON arguments, and complete result all match. A different call or changed result resets the count. This is deliberately narrower than cycle detection, and operators can disable it for intentional polling.
+- `max_skill_result_chars` bounds each result before the next model call. The preview retains the beginning and end, including a notice that explains how to retrieve omitted text. The limit includes that notice; it does not bound the entire prompt or provider token usage.
 
-The current pattern is:
+All three default to `None` in Python and can be disabled with JSON `null`. The example configuration enables limits of 24 requests, 3 repeated results, and 16,000 characters. The minimum supported values are 1, 2, and 512. Existing chain, request timeout, and concurrency settings still apply independently. Completed actions are not rolled back when any limit stops a turn.
 
-```python
-def _generate_reply_with_lock(self, prompt: list[dict[str, str]]) -> str:
-    with self._processing_lock:
-        return self.llm.generate_reply(prompt)
+With result limits enabled, `BotRunner` registers the reserved runtime skill `read_skill_result`. For example:
+
+```json
+{"skill_call": {"name": "read_skill_result", "args": {"step": 1, "offset": 1000, "limit": 2000}, "done": false}}
 ```
 
-### Why lock an LLM call at all?
+`step` is the one-based index of a completed skill call in this turn. `offset` is a zero-based character offset; `limit` is the requested number of characters. Returned ranges use an exclusive end offset and include the next offset. Pages are capped to leave room for metadata. Reads count toward the same skill-chain and model-request limits.
 
-Locking is not about "making HTTP thread-safe" by itself. It is about protecting state around the call.
+The reader accesses only this thread's current trace steps. It accepts no file path and cannot load prior traces, other conversations, or results from a previous turn. Results expire from memory when the request context exits. Full results remain available to the operator in the existing saved trace. A skill receives its own copy of arguments, preserving the original call for traces and repetition detection.
 
-Typical reasons:
+When the result cap is disabled, the existing web-search behavior is retained: full HTML is shown once, then summarized in the prompt buffer. With the cap enabled, the bounded original result is retained so recovery offsets always refer to the original result.
 
-- the model client is not safe to use concurrently
-- request/response ordering must stay deterministic
-- shared conversation state can be corrupted if two replies are generated at once
-- downstream tools assume only one active reasoning/action loop at a time
+Chat traces include per-step `result_chars`, `context_chars`, and `result_truncated`. `metrics.stop_reason` identifies a request budget, repeated result, or chain-limit stop. Request-budget failures preserve completed steps and provider usage already received. Scheduled routines keep their existing log files and do not gain chat trace files.
 
-In this repository, the lock is a coarse-grained gate for reply generation. That is a reasonable default because the bot keeps shared history, traces, frontend state, and multi-step skill flows in the same process.
+The chain limit counts executed skills, including returned errors and policy denials. A normal final answer after the last allowed skill is delivered. If the model asks for another skill, the runner stops before dispatching it. Tool JSON returned in a mandatory follow-up is processed through the same bounded loop instead of being sent as a final answer.
 
-### What the lock does
+Skills must return text. A malformed result becomes an explicit skill error that the model can handle through the same loop; empty text remains a valid result. Existing reasoning-tag filtering and whitespace normalization still apply before a result enters the trace, so recovery offsets refer to that stored result.
 
-If two threads reach the LLM at the same time:
+## Concurrency and request state
 
-1. thread A acquires the lock
-2. thread B blocks
-3. thread A finishes the request and releases the lock
-4. thread B starts its request
+`BotRunner._request_context()` acquires a re-entrant lock for the frontend/conversation pair, then a process-wide `BoundedSemaphore` controlled by `max_concurrent_requests`. Messages in one conversation remain ordered while unrelated conversations may progress concurrently. `/status` bypasses the request slots so operators can inspect a busy bot.
 
-That gives you serialization: only one protected call runs at a time.
+Evidence, trace steps, endpoint metrics, stop reasons, and reply footers are thread-local. The model client's request-budget scopes are also thread-local and are cleaned up even when a request fails. Nested budget scopes consume their parent budget. Runner selection and in-flight request tracking use a separate short-lived lock.
 
-### What a lock does not do
+These controls apply within one process. They do not coordinate multiple bot processes, implement a provider rate limit, or make arbitrary plugin writes transactional. Plugins that modify shared workspace files must account for concurrent conversations when operators raise `max_concurrent_requests` above 1.
 
-A lock does not:
+## Configuration and action boundaries
 
-- limit requests across multiple processes or multiple machines
-- enforce provider rate limits
-- prevent duplicate work if the same message is queued twice
-- make unrelated shared state safe unless that state is also accessed under the same lock
+`python3 -B run_bot.py --config config --check-config` validates configuration and exits before creating a runner or supervisor. It reads the configuration and contact maps, reports section and field errors, and never checks external credentials or service reachability. `--help` also exits before starting a child process.
 
-For cross-process coordination, use an external primitive such as a database row lock, Redis lease, or queue worker model.
+Configuration rejects unknown fields, invalid section types, booleans masquerading as numeric limits, nonfinite request values, malformed model URLs, and streaming responses unsupported by this transport. Use `api_key` for authentication; model base URLs cannot contain credentials, queries, or fragments. The documented underscore-prefixed comment fields remain supported.
 
-### The main design choice: what exactly are you protecting?
+An absent action policy preserves the existing default behavior. An existing empty, malformed, or unreadable policy denies actions until corrected. Invalid decision values also deny; valid policies retain their existing `allow`, `deny`, and `ask` semantics and action audit records.
 
-There are two common scopes.
+HTTP errors retain the status and a sanitized endpoint URL. They omit URL user information, query strings, Telegram token path segments, response bodies, and chained transport errors that might disclose those values. Wrapped socket timeouts become `RequestTimeoutError` consistently for JSON and binary requests. JSON responses must be objects, and model responses must contain a choice with a message object.
 
-#### 1. Lock only the LLM call
+## Validation without generated files
 
-Use this when the shared risk is the model client itself or the provider interaction.
+The in-memory regression suite covers execution limits, result recovery, policy handling, configuration validation, model transport, and trace accounting. It mocks network calls and persistence and can run without bytecode, pytest caches, or temporary capture files:
 
-```python
-class Bot:
-    def __init__(self) -> None:
-        self._llm_lock = threading.Lock()
-
-    def generate_reply(self, prompt: list[dict[str, str]]) -> str:
-        with self._llm_lock:
-            return self.llm.generate_reply(prompt)
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -B -m pytest \
+  --capture=sys --assert=plain -p no:cacheprovider \
+  tests/test_execution.py tests/test_action_runtime.py \
+  tests/test_runtime_controls.py tests/test_config_validation.py \
+  tests/test_llm_client.py tests/test_http.py \
+  tests/test_trace_metrics.py tests/test_run_bot.py
 ```
 
-This is the smallest critical section. It reduces contention, but it does not protect prompt construction or history updates done outside the lock.
-
-#### 2. Lock the full conversation transaction
-
-Use this when prompt building, the model call, and history mutation must act like one unit.
-
-```python
-class ConversationWorker:
-    def __init__(self) -> None:
-        self._conversation_lock = threading.Lock()
-        self._history: list[dict[str, str]] = []
-
-    def handle_user_message(self, text: str) -> str:
-        with self._conversation_lock:
-            prompt = [*self._history, {"role": "user", "content": text}]
-            reply = self.llm.generate_reply(prompt)
-            self._history.append({"role": "user", "content": text})
-            self._history.append({"role": "assistant", "content": reply})
-            return reply
-```
-
-This is safer for per-conversation ordering, but it holds the lock for longer. That reduces throughput.
-
-### Why this repo uses `RLock`
-
-`threading.RLock()` is a re-entrant lock: the same thread can acquire it multiple times.
-
-That matters when protected code can call another helper that also needs the same lock.
-
-Example:
-
-```python
-class Bot:
-    def __init__(self) -> None:
-        self._processing_lock = threading.RLock()
-
-    def generate_once(self, prompt: list[dict[str, str]]) -> str:
-        with self._processing_lock:
-            return self._generate_internal(prompt)
-
-    def _generate_internal(self, prompt: list[dict[str, str]]) -> str:
-        with self._processing_lock:
-            return self.llm.generate_reply(prompt)
-```
-
-With a plain `threading.Lock()`, that pattern deadlocks when the same thread re-enters the lock. With `RLock()`, it succeeds.
-
-If re-entrancy is impossible by design, prefer `threading.Lock()` because it is simpler and makes accidental nested locking more visible.
-
-### A common bug: locking too little
-
-This version looks safe, but it is not safe for shared history:
-
-```python
-def handle_user_message(self, text: str) -> str:
-    prompt = [*self._history, {"role": "user", "content": text}]
-    with self._llm_lock:
-        reply = self.llm.generate_reply(prompt)
-    self._history.append({"role": "user", "content": text})
-    self._history.append({"role": "assistant", "content": reply})
-    return reply
-```
-
-Failure mode:
-
-1. thread A builds a prompt from history version 10
-2. thread B builds a prompt from history version 10
-3. thread A gets reply A and appends it
-4. thread B gets reply B and appends it
-
-Now both replies were generated from stale history, and ordering is wrong even though the LLM call itself was locked.
-
-If history consistency matters, build the prompt and commit the result under the same lock, or keep a separate lock per conversation.
-
-### A common bug: locking too much
-
-Avoid holding the lock across slow work that does not need protection.
-
-Bad:
-
-```python
-def handle_user_message(self, text: str) -> str:
-    with self._processing_lock:
-        attachments = self.download_attachments()
-        prompt = self.build_prompt(text, attachments)
-        reply = self.llm.generate_reply(prompt)
-        self.write_trace_to_disk(prompt, reply)
-        return reply
-```
-
-That blocks every other caller while waiting on downloads and disk I/O.
-
-Better:
-
-```python
-def handle_user_message(self, text: str) -> str:
-    attachments = self.download_attachments()
-    prompt = self.build_prompt(text, attachments)
-    with self._processing_lock:
-        reply = self.llm.generate_reply(prompt)
-    self.write_trace_to_disk(prompt, reply)
-    return reply
-```
-
-Use the smallest critical section that still protects the invariant you care about.
-
-### Per-process lock vs per-conversation lock
-
-A single global lock is simple and conservative:
-
-- easiest to reason about
-- avoids interleaving across all conversations
-- lowers throughput because unrelated conversations block each other
-
-A per-conversation lock is usually the better production shape when conversations are independent:
-
-```python
-from collections import defaultdict
-import threading
-
-
-class Bot:
-    def __init__(self) -> None:
-        self._conversation_locks = defaultdict(threading.Lock)
-
-    def handle_message(self, conversation_id: str, text: str) -> str:
-        lock = self._conversation_locks[conversation_id]
-        with lock:
-            prompt = self._build_prompt(conversation_id, text)
-            reply = self.llm.generate_reply(prompt)
-            self._commit_reply(conversation_id, text, reply)
-            return reply
-```
-
-That preserves message ordering within one conversation while allowing different conversations to progress in parallel.
-
-If you use this pattern, make sure the protected data is also scoped per conversation. A per-conversation lock does not protect global mutable state.
-
-### Async code uses `asyncio.Lock`, not `threading.Lock`
-
-In `asyncio`, use an async lock:
-
-```python
-import asyncio
-
-
-class AsyncBot:
-    def __init__(self) -> None:
-        self._llm_lock = asyncio.Lock()
-
-    async def generate_reply(self, prompt: list[dict[str, str]]) -> str:
-        async with self._llm_lock:
-            return await self.llm.generate_reply(prompt)
-```
-
-Do not use `threading.Lock()` to coordinate coroutines inside one event loop. It blocks the thread instead of yielding control cooperatively.
-
-### Rate limiting is different from locking
-
-These are related but distinct:
-
-- locking controls concurrency around shared state
-- rate limiting controls how often you call the provider
-
-If your provider allows only 5 concurrent requests, use a semaphore:
-
-```python
-import threading
-
-
-class Bot:
-    def __init__(self) -> None:
-        self._llm_slots = threading.Semaphore(5)
-
-    def generate_reply(self, prompt: list[dict[str, str]]) -> str:
-        with self._llm_slots:
-            return self.llm.generate_reply(prompt)
-```
-
-If you need both state safety and bounded concurrency, use both, but protect each concern separately.
-
-### Practical guidance for this repository
-
-- Keep `_processing_lock` if you want one in-flight LLM reasoning path at a time in this process.
-- Move to per-conversation locks if unrelated chats should not block each other.
-- If prompt/history consistency matters more than raw throughput, lock the full conversation transaction, not only `llm.generate_reply()`.
-- If only the HTTP client is unsafe, lock only the call site and leave history/state under their own locks.
-- If the bot ever runs in multiple processes, do not assume the current in-memory lock is sufficient.
+The broader existing suite includes temporary-directory and file-writing fixtures. Run it when filesystem writes are permitted; the command above is the subset suitable for a no-generated-files workflow.

@@ -30,10 +30,13 @@ Copy the example config, wire one model endpoint, enable one frontend, then run 
 cp -R config.example config
 $EDITOR config/llm.json
 $EDITOR config/telegram.json
+python3 -B run_bot.py --config config --check-config
 python3 run_bot.py --config config
 ```
 
 For a fuller boot sequence, collector setup, and command reference, see [docs/getting-started.md](docs/getting-started.md).
+
+The example runtime now bounds model requests, repeated skill results, and tool-result context. Full results and stop reasons remain inspectable in local traces, and omitted text can be read within the same turn. Existing configurations keep their prior limits until the new settings are enabled; see [configuration controls](config.example/README.md).
 
 ## Model paths
 
@@ -57,6 +60,9 @@ Relevant docs:
 ```bash
 # Run the bot
 python3 run_bot.py --config config
+
+# Check configuration without starting frontends or contacting providers
+python3 -B run_bot.py --config config --check-config
 
 # Run collectors
 python3 -m assistant_framework.cli collectors --workspace workspace --collectors collectors --config config/collectors

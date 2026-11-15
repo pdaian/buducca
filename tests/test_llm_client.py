@@ -4,7 +4,7 @@ import time
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
 from messaging_llm_bot.http import RequestTimeoutError
-from messaging_llm_bot.llm_client import OpenAICompatibleClient
+from messaging_llm_bot.llm_client import OpenAICompatibleClient, RequestBudgetExceeded
 
 
 class StubHttpClient:
@@ -609,6 +609,91 @@ class LLMClientTests(unittest.TestCase):
         statuses = client.get_runner_statuses()
         self.assertEqual(statuses[0].concurrent_requests, 0)
         self.assertIsNotNone(statuses[0].last_success_at)
+
+
+class RequestBudgetTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.reply = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+        self.http = SequencedHttpClient([])
+        self.client = OpenAICompatibleClient(
+            LLMConfig(runners=[
+                LLMRunnerConfig(base_url="https://one.invalid/v1", api_key="test", model="one"),
+                LLMRunnerConfig(base_url="https://two.invalid/v1", api_key="test", model="two"),
+            ]), self.http,
+        )
+        self.messages = [{"role": "user", "content": "hello"}]
+
+    def test_failover_cannot_bypass_budget(self) -> None:
+        self.http.responses = [RequestTimeoutError("timeout"), self.reply]
+        with self.client.request_budget(1), self.assertRaises(RequestBudgetExceeded):
+            self.client.generate_reply(self.messages)
+        self.assertEqual(len(self.http.calls), 1)
+        metrics = self.client.pop_last_request_metrics()
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["error"], "RequestTimeoutError")
+        self.assertTrue(all(status.concurrent_requests == 0 for status in self.client.get_runner_statuses()))
+
+    def test_continuations_consume_the_same_budget(self) -> None:
+        self.http.responses = [{"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}], "usage": {"total_tokens": 4}}, self.reply]
+        with self.client.request_budget(1), self.assertRaises(RequestBudgetExceeded):
+            self.client.generate_reply(self.messages)
+        self.assertEqual(len(self.http.calls), 1)
+        self.assertEqual(self.client.pop_last_request_metrics()[0]["usage"], {"total_tokens": 4})
+        self.assertEqual(self.client.pop_last_reply_footer(), "")
+
+    def test_budget_spans_calls_and_is_removed_after_failure(self) -> None:
+        self.http.responses = [self.reply, self.reply]
+        with self.assertRaises(RequestBudgetExceeded), self.client.request_budget(1):
+            self.client.generate_reply(self.messages)
+            self.client.generate_reply(self.messages)
+        self.assertEqual(self.client.pop_last_request_metrics(), [])
+        self.assertEqual(self.client.generate_reply(self.messages), "ok")
+        self.assertEqual(len(self.http.calls), 2)
+
+    def test_failover_continuation_and_follow_up_share_one_budget(self) -> None:
+        self.http.responses = [
+            RequestTimeoutError("timeout"),
+            {"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}]},
+            self.reply,
+        ]
+        with self.client.request_budget(3):
+            self.assertEqual(self.client.generate_reply(self.messages), "partialok")
+            self.assertEqual(len(self.client.pop_last_request_metrics()), 3)
+            with self.assertRaises(RequestBudgetExceeded):
+                self.client.generate_reply(self.messages)
+        self.assertEqual(len(self.http.calls), 3)
+
+    def test_nested_budget_also_consumes_parent(self) -> None:
+        self.http.responses = [self.reply] * 3
+        with self.client.request_budget(2):
+            with self.client.request_budget(1):
+                self.client.generate_reply(self.messages)
+            self.client.generate_reply(self.messages)
+            with self.assertRaises(RequestBudgetExceeded):
+                self.client.generate_reply(self.messages)
+        self.assertEqual(len(self.http.calls), 2)
+
+    def test_invalid_budgets_do_not_send_requests(self) -> None:
+        for limit in (0, -1, True, 1.5, "2", None):
+            with self.subTest(limit=limit), self.assertRaises(ValueError):
+                with self.client.request_budget(limit):
+                    self.client.generate_reply(self.messages)
+        self.assertEqual(self.http.calls, [])
+
+    def test_malformed_responses_raise_consistent_errors_without_payloads(self) -> None:
+        for payload in (None, [], {"choices": None}, {"choices": {}}, {"choices": [None]}, {"choices": [{"message": None}]}):
+            with self.subTest(payload=payload):
+                self.http.responses = [payload, payload]
+                with self.assertRaisesRegex(RuntimeError, "Malformed response from LLM endpoint"):
+                    self.client.generate_reply(self.messages)
+
+    def test_negative_usage_is_ignored_without_masking_valid_fallbacks(self) -> None:
+        counts = {}
+        self.client._merge_usage_counts(counts, {
+            "total_tokens": "-1", "completion_tokens": -2, "prompt_tokens": -3.0,
+            "cached_tokens": -5, "prompt_tokens_details": {"cached_tokens": 4},
+        })
+        self.assertEqual(counts, {"cached_tokens": 4})
 
 
 if __name__ == "__main__":

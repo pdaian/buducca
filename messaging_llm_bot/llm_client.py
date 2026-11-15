@@ -53,6 +53,16 @@ class RunnerStatus:
     last_success_at: str | None
 
 
+class RequestBudgetExceeded(RuntimeError):
+    """The next endpoint attempt would exceed this turn's configured budget."""
+
+
+@dataclass
+class _RequestBudget:
+    limit: int
+    used: int = 0
+
+
 class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig, http_client: HttpClient, *, debug: bool = False) -> None:
         self.config = config
@@ -90,6 +100,8 @@ class OpenAICompatibleClient:
                 if getattr(self._thread_state, "chain_runner_affinity_active", False):
                     self._thread_state.chain_runner_index = runner_index
                 return reply
+            except RequestBudgetExceeded:
+                raise
             except Exception as exc:
                 last_error = exc
                 if attempt_number >= len(runner_attempts):
@@ -120,6 +132,33 @@ class OpenAICompatibleClient:
 
     def set_active_skill_chain_length(self, length: int) -> None:
         self._thread_state.skill_chain_length = max(0, int(length))
+
+    @contextmanager
+    def request_budget(self, limit: int):
+        """Count actual attempts across calls, continuations, and runner failover.
+
+        Nested scopes also consume their parent budget. Each thread has its own
+        scopes, so simultaneous conversations cannot spend one another's budget.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Request budget must be a positive integer")
+        budgets = getattr(self._thread_state, "request_budgets", [])
+        self._thread_state.request_budgets = budgets
+        budgets.append(_RequestBudget(limit))
+        try:
+            yield
+        finally:
+            budgets.pop()
+
+    def _consume_request_budget(self) -> None:
+        budgets = getattr(self._thread_state, "request_budgets", [])
+        for budget in budgets:
+            if budget.used >= budget.limit:
+                raise RequestBudgetExceeded(
+                    f"The limit of {budget.limit} model requests for this turn has been reached."
+                )
+        for budget in budgets:
+            budget.used += 1
 
     def get_runner_statuses(self) -> list[RunnerStatus]:
         now = time.monotonic()
@@ -222,6 +261,7 @@ class OpenAICompatibleClient:
                     **(chat_template_kwargs if isinstance(chat_template_kwargs, dict) else {}),
                     "enable_thinking": False,
                 }
+            self._consume_request_budget()
             started = time.perf_counter()
             request_key = self._register_request(runner_index)
             request_metrics: dict[str, Any] = {
@@ -238,6 +278,8 @@ class OpenAICompatibleClient:
 
             try:
                 data = self.http_client.post_json(url, payload, headers=headers)
+                if not isinstance(data, dict):
+                    raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
                 self._merge_usage_counts(request_metrics["usage"], data.get("usage"))
                 choice = self._extract_primary_choice(data)
                 request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
@@ -294,12 +336,12 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _extract_primary_choice(data: dict[str, Any]) -> dict[str, Any]:
-        try:
-            choice = data["choices"][0]
-        except (KeyError, IndexError, AttributeError) as err:
-            raise RuntimeError(f"Malformed response from LLM endpoint: {data}") from err
-        if not isinstance(choice, dict):
-            raise RuntimeError(f"Malformed response from LLM endpoint: {data}")
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise RuntimeError("Malformed response from LLM endpoint: expected a non-empty choices list")
+        choice = choices[0]
+        if not isinstance(choice.get("message"), dict):
+            raise RuntimeError("Malformed response from LLM endpoint: expected a message object")
         return choice
 
     @classmethod
@@ -415,13 +457,15 @@ class OpenAICompatibleClient:
                 value = value.get(field)
             if isinstance(value, bool):
                 continue
-            if isinstance(value, int):
+            if isinstance(value, int) and value >= 0:
                 return value
-            if isinstance(value, float) and value.is_integer():
+            if isinstance(value, float) and value.is_integer() and value >= 0:
                 return int(value)
             if isinstance(value, str):
                 try:
-                    return int(value.strip())
+                    parsed = int(value.strip())
+                    if parsed >= 0:
+                        return parsed
                 except ValueError:
                     continue
         return None

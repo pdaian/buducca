@@ -12,7 +12,9 @@ TRACE_DIR = "traces"
 LEGACY_TRACE_DIR = "logs/traces"
 
 
-def build_trace_metrics(requests: list[dict[str, Any]], *, skill_chain_length: int) -> dict[str, Any]:
+def build_trace_metrics(
+    requests: list[dict[str, Any]], *, skill_chain_length: int, stop_reason: str | None = None,
+) -> dict[str, Any]:
     """Summarize reported usage without treating missing provider metrics as zero."""
     usage: dict[str, int] = {}
     usage_request_counts: dict[str, int] = {}
@@ -20,7 +22,7 @@ def build_trace_metrics(requests: list[dict[str, Any]], *, skill_chain_length: i
         for name, value in request["usage"].items():
             usage[name] = usage.get(name, 0) + value
             usage_request_counts[name] = usage_request_counts.get(name, 0) + 1
-    return {
+    metrics = {
         "request_count": len(requests),
         "continuation_count": sum(request["continuation"] for request in requests),
         "skill_chain_length": skill_chain_length,
@@ -29,6 +31,9 @@ def build_trace_metrics(requests: list[dict[str, Any]], *, skill_chain_length: i
         "usage_request_counts": usage_request_counts,
         "requests": requests,
     }
+    if stop_reason is not None:
+        metrics["stop_reason"] = stop_reason
+    return metrics
 
 
 def _trace_dir(workspace: Workspace) -> Path:

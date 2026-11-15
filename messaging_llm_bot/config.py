@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+from types import UnionType
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from typing import Any
+from typing import Any, get_args, get_origin, get_type_hints
 
 from assistant_framework.config_files import load_json_path
 
@@ -125,6 +128,9 @@ class RuntimeConfig:
     file_skill_actions: list[str] = field(default_factory=lambda: ["read", "write", "append", "move", "create_dir", "delete_dir"])
     action_policy_file: str = "assistant/action_policy.json"
     enable_reply_citations: bool = True
+    max_llm_requests_per_turn: int | None = None
+    max_repeated_skill_results: int | None = None
+    max_skill_result_chars: int | None = None
 
 
 @dataclass
@@ -180,6 +186,51 @@ def _strip_comment_keys(raw: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if not key.startswith("_")}
 
 
+def _build_config(config_type: type, raw: Any, *, section: str) -> Any:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{section} must be a JSON object")
+    payload = _strip_comment_keys(raw)
+    unknown = sorted(payload.keys() - {item.name for item in fields(config_type)})
+    if unknown:
+        raise ValueError(f"Unknown settings in {section}: {', '.join(unknown)}")
+    annotations = get_type_hints(config_type)
+    for name, value in payload.items():
+        if not _matches_config_type(value, annotations[name]):
+            raise ValueError(f"{section}.{name} has an invalid type; expected {annotations[name]}")
+    try:
+        return config_type(**payload)
+    except TypeError as exc:
+        raise ValueError(f"Invalid {section} configuration: {exc}") from exc
+
+
+def _matches_config_type(value: Any, annotation: Any) -> bool:
+    if annotation is Any:
+        return True
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is UnionType:
+        return any(_matches_config_type(value, item) for item in args)
+    if origin is list:
+        return isinstance(value, list) and all(_matches_config_type(item, args[0]) for item in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(
+            _matches_config_type(key, args[0]) and _matches_config_type(item, args[1])
+            for key, item in value.items()
+        )
+    if annotation in (int, float):
+        return not isinstance(value, bool) and isinstance(value, (int, float) if annotation is float else int)
+    return isinstance(value, annotation)
+
+
+def _validate_number(value: Any, name: str, *, minimum: int | float, integer: bool = False) -> None:
+    expected = "an integer" if integer else "a finite number"
+    valid_type = isinstance(value, int) if integer else isinstance(value, (int, float))
+    if isinstance(value, bool) or not valid_type or (isinstance(value, float) and not math.isfinite(value)):
+        raise ValueError(f"{name} must be {expected}")
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+
+
 def _normalize_telegram_config(raw: dict[str, Any]) -> dict[str, Any]:
     normalized = _strip_comment_keys(raw)
     normalized.pop("allowed_sender_ids", None)
@@ -226,14 +277,15 @@ def _load_llm_config(raw: Any) -> LLMConfig:
 
     payload = _strip_comment_keys(raw)
     runners_raw = payload.pop("runners", [])
-    llm = LLMConfig(**payload)
+    llm = _build_config(LLMConfig, payload, section="llm")
     if runners_raw is None:
         return llm
     if not isinstance(runners_raw, list):
         raise ValueError("llm.runners must be a list when set")
-    llm.runners = [LLMRunnerConfig(**_strip_comment_keys(item)) for item in runners_raw if isinstance(item, dict)]
-    if len(llm.runners) != len(runners_raw):
-        raise ValueError("llm.runners must contain only JSON objects")
+    llm.runners = [
+        _build_config(LLMRunnerConfig, item, section=f"llm.runners[{index}]")
+        for index, item in enumerate(runners_raw)
+    ]
     return llm
 
 
@@ -336,6 +388,11 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
     if not config.telegram and not config.signal and not config.whatsapp and not config.android:
         raise ValueError("At least one frontend must be configured: telegram, signal, whatsapp, or android")
 
+    for name in ("telegram", "signal", "whatsapp", "android"):
+        frontend = getattr(config, name)
+        if frontend is not None:
+            _validate_number(frontend.poll_interval_seconds, f"{name}.poll_interval_seconds", minimum=0)
+
     if config.telegram:
         mode = config.telegram.mode.strip().lower()
         if mode not in {"bot", "user"}:
@@ -350,28 +407,19 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
                 raise ValueError("telegram.api_hash must be set when telegram.mode is 'user'")
             if not config.telegram.session_path.strip():
                 raise ValueError("telegram.session_path must be set when telegram.mode is 'user'")
-        if config.telegram.poll_interval_seconds < 0:
-            raise ValueError("telegram.poll_interval_seconds must be >= 0")
-        if config.telegram.long_poll_timeout_seconds <= 0:
-            raise ValueError("telegram.long_poll_timeout_seconds must be > 0")
+        _validate_number(config.telegram.long_poll_timeout_seconds, "telegram.long_poll_timeout_seconds", minimum=1, integer=True)
 
     if config.signal:
         if not config.signal.account.strip():
             raise ValueError("signal.account must be set")
-        if config.signal.poll_interval_seconds < 0:
-            raise ValueError("signal.poll_interval_seconds must be >= 0")
 
     if config.whatsapp:
         if not config.whatsapp.account.strip():
             raise ValueError("whatsapp.account must be set")
-        if config.whatsapp.poll_interval_seconds < 0:
-            raise ValueError("whatsapp.poll_interval_seconds must be >= 0")
 
     if config.android:
         if not config.android.account.strip():
             raise ValueError("android.account must be set")
-        if config.android.poll_interval_seconds < 0:
-            raise ValueError("android.poll_interval_seconds must be >= 0")
         if not config.android.inbox_path.strip():
             raise ValueError("android.inbox_path must be set")
         if not config.android.state_file.strip():
@@ -391,12 +439,33 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
         raise ValueError("llm must configure at least one runner")
     for index, runner in enumerate(runners):
         prefix = f"llm.runners[{index}]"
-        if not runner.base_url.strip():
-            raise ValueError(f"{prefix}.base_url must be set")
-        if not runner.api_key.strip():
-            raise ValueError(f"{prefix}.api_key must be set")
-        if not runner.model.strip():
-            raise ValueError(f"{prefix}.model must be set")
+        for name in ("base_url", "api_key", "model", "endpoint_path"):
+            value = getattr(runner, name)
+            if not isinstance(value, str):
+                raise ValueError(f"{prefix}.{name} must be a non-empty string")
+            if not value.strip():
+                raise ValueError(f"{prefix}.{name} must be set")
+        try:
+            url = urlsplit(runner.base_url)
+            valid_url = (
+                url.scheme in {"http", "https"}
+                and bool(url.hostname)
+                and not any(char.isspace() for char in runner.base_url)
+            )
+            _ = url.port
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise ValueError(f"{prefix}.base_url must be an absolute HTTP(S) URL")
+        if url.username is not None or url.password is not None or url.query or url.fragment:
+            raise ValueError(f"{prefix}.base_url cannot include credentials, a query, or a fragment; use api_key for authentication")
+        try:
+            endpoint = urlsplit(runner.endpoint_path)
+            valid_endpoint = not endpoint.scheme and not endpoint.netloc and not runner.endpoint_path.startswith("//")
+        except ValueError:
+            valid_endpoint = False
+        if not valid_endpoint or any(char in runner.endpoint_path for char in "?#") or any(char.isspace() for char in runner.endpoint_path):
+            raise ValueError(f"{prefix}.endpoint_path must be a relative API path without a query or fragment")
         if not isinstance(runner.extra_body, dict):
             raise ValueError(f"{prefix}.extra_body must be a JSON object")
         protected_fields = sorted({"model", "messages"}.intersection(runner.extra_body))
@@ -404,36 +473,41 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
             raise ValueError(
                 f"{prefix}.extra_body cannot override protected request fields: {', '.join(protected_fields)}"
             )
+        if runner.extra_body.get("stream", False) is not False:
+            raise ValueError(f"{prefix}.extra_body.stream must be false; streaming responses are not supported")
+        try:
+            json.dumps(runner.extra_body, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{prefix}.extra_body must contain finite JSON values") from exc
     if config.llm.temperature is not None:
-        if isinstance(config.llm.temperature, bool) or not isinstance(config.llm.temperature, (int, float)):
-            raise ValueError("llm.temperature must be a number or null")
+        _validate_number(config.llm.temperature, "llm.temperature", minimum=0)
     if config.llm.max_tokens is not None:
         if isinstance(config.llm.max_tokens, bool) or not isinstance(config.llm.max_tokens, int):
             raise ValueError("llm.max_tokens must be an integer or null")
         if config.llm.max_tokens <= 0:
             raise ValueError("llm.max_tokens must be > 0 when set")
-    if config.llm.history_messages < 0:
-        raise ValueError("llm.history_messages must be >= 0")
+    _validate_number(config.llm.history_messages, "llm.history_messages", minimum=0, integer=True)
     if not config.llm.system_prompt_timezone.strip():
         raise ValueError("llm.system_prompt_timezone must be set")
     try:
         ZoneInfo(config.llm.system_prompt_timezone)
     except ZoneInfoNotFoundError as exc:
         raise ValueError("llm.system_prompt_timezone must be a valid IANA timezone") from exc
-    if config.runtime.request_timeout_seconds <= 0:
+    _validate_number(config.runtime.request_timeout_seconds, "runtime.request_timeout_seconds", minimum=0)
+    if config.runtime.request_timeout_seconds == 0:
         raise ValueError("runtime.request_timeout_seconds must be > 0")
-    if config.runtime.max_concurrent_requests <= 0:
-        raise ValueError("runtime.max_concurrent_requests must be > 0")
-    if config.runtime.max_skill_chain_steps <= 0:
-        raise ValueError("runtime.max_skill_chain_steps must be > 0")
+    for name in ("max_concurrent_requests", "max_skill_chain_steps", "max_reply_chunk_chars"):
+        _validate_number(getattr(config.runtime, name), f"runtime.{name}", minimum=1, integer=True)
+    for name, minimum in (("max_llm_requests_per_turn", 1), ("max_repeated_skill_results", 2), ("max_skill_result_chars", 512)):
+        value = getattr(config.runtime, name)
+        if value is not None:
+            _validate_number(value, f"runtime.{name}", minimum=minimum, integer=True)
     if not config.runtime.hourly_file.strip():
         raise ValueError("runtime.hourly_file must be set")
     if not config.runtime.hourly_status_file.strip():
         raise ValueError("runtime.hourly_status_file must be set")
     if config.runtime.enable_voice_notes and not config.runtime.voice_transcribe_command:
         raise ValueError("runtime.voice_transcribe_command must be set when runtime.enable_voice_notes is true")
-    if config.runtime.max_reply_chunk_chars <= 0:
-        raise ValueError("runtime.max_reply_chunk_chars must be > 0")
     if not config.runtime.contacts_file.strip():
         raise ValueError("runtime.contacts_file must be set")
     if not config.runtime.file_skill_actions:
@@ -452,16 +526,20 @@ def load_config(path: str | Path) -> BotConfig:
     signal_raw = raw.get("signal")
     whatsapp_raw = raw.get("whatsapp")
     android_raw = raw.get("android")
-    telegram = TelegramConfig(**_normalize_telegram_config(telegram_raw)) if isinstance(telegram_raw, dict) else None
-    signal = SignalConfig(**_strip_comment_keys(signal_raw)) if isinstance(signal_raw, dict) else None
-    whatsapp = WhatsAppConfig(**_strip_comment_keys(whatsapp_raw)) if isinstance(whatsapp_raw, dict) else None
-    android = AndroidConfig(**_strip_comment_keys(android_raw)) if isinstance(android_raw, dict) else None
+    telegram = _build_config(
+        TelegramConfig,
+        _normalize_telegram_config(telegram_raw) if isinstance(telegram_raw, dict) else telegram_raw,
+        section="telegram",
+    ) if telegram_raw is not None else None
+    signal = _build_config(SignalConfig, signal_raw, section="signal") if signal_raw is not None else None
+    whatsapp = _build_config(WhatsAppConfig, whatsapp_raw, section="whatsapp") if whatsapp_raw is not None else None
+    android = _build_config(AndroidConfig, android_raw, section="android") if android_raw is not None else None
     try:
         llm = _load_llm_config(raw["llm"])
     except KeyError as exc:
         raise ValueError("Missing required top-level section: llm") from exc
     runtime_raw = raw.get("runtime", {})
-    runtime = RuntimeConfig(**_strip_comment_keys(runtime_raw if isinstance(runtime_raw, dict) else {}))
+    runtime = _build_config(RuntimeConfig, runtime_raw, section="runtime")
     contacts = _dedupe_contacts(
         _load_contacts_from_workspace(runtime, config_path=config_path)
         + _load_top_level_contact_maps(runtime, config_path=config_path)
