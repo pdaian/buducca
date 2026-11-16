@@ -32,7 +32,7 @@ from assistant_framework.retrieval import (
     format_evidence_context,
     search_workspace,
 )
-from assistant_framework.reminders import REMINDERS_FILE, parse_unix_time, serialize_reminder_record
+from assistant_framework.reminders import ReminderStore
 from assistant_framework.skills import Skill, read_skill_doc_section
 from assistant_framework.traces import build_trace_metrics, write_trace
 
@@ -40,6 +40,7 @@ from .config import AndroidConfig, BotConfig, ContactConfig, WORKSPACE_CONTACT_M
 from .http import HttpClient, RequestTimeoutError
 from .interfaces import IncomingAttachment, IncomingMessage
 from .llm_client import OpenAICompatibleClient, RequestBudgetExceeded
+from .reminder_service import ReminderService
 from .android_client import AndroidClient, AndroidFrontendUnavailableError
 from .signal_client import SignalClient, SignalFrontendUnavailableError
 from .telegram_client import TelegramClient
@@ -202,6 +203,7 @@ class BotRunner:
         self._frontend_state_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._frontend_workers = self._build_frontend_workers()
+        self._reminder_service = ReminderService(ReminderStore(self._workspace), self._send_scheduled_message)
 
     def _set_active_reply_footer(self, footer: str) -> None:
         self._request_state.reply_footer = footer
@@ -287,6 +289,7 @@ class BotRunner:
                 self._request_state.trace_steps = []
                 self._request_state.llm_requests = []
                 self._request_state.stop_reason = None
+                self._request_state.reminder_context = {}
                 try:
                     with ExitStack() as stack:
                         request_budget = getattr(self.llm, "request_budget", None)
@@ -299,6 +302,7 @@ class BotRunner:
                     self._request_state.trace_steps = []
                     self._request_state.llm_requests = []
                     self._request_state.stop_reason = None
+                    self._request_state.reminder_context = {}
 
     @staticmethod
     def _is_status_command(text: str) -> bool:
@@ -781,8 +785,9 @@ class BotRunner:
                 getattr(self.signal, "receive_command", "<unavailable>"),
             )
         self._stop_event.clear()
-        self._start_frontend_workers()
         try:
+            self._reminder_service.start()
+            self._start_frontend_workers()
             while True:
                 self._raise_worker_failure_if_any()
                 try:
@@ -803,7 +808,11 @@ class BotRunner:
             logging.info("Bot interrupted. Exiting.")
             return
         finally:
+            self._reminder_service.stop()
             self._stop_frontend_workers()
+            close = getattr(self.telegram, "close", None)
+            if callable(close):
+                close()
 
     def _build_frontend_workers(self) -> dict[str, FrontendWorkerState]:
         workers: dict[str, FrontendWorkerState] = {}
@@ -1023,6 +1032,7 @@ class BotRunner:
         return lines
 
     def _poll_frontends_once(self) -> None:
+        self._reminder_service.poll_once()
         self._poll_due_structured_schedule_once()
         self._poll_due_reminders_once()
         self._poll_due_hourly_once()
@@ -1169,6 +1179,11 @@ class BotRunner:
         sender_name: str | None = None,
         sender_contact: str | None = None,
     ) -> list[dict[str, str]]:
+        self._request_state.reminder_context = {
+            "backend": backend,
+            "conversation_id": conversation_id,
+            "timezone": self.config.llm.system_prompt_timezone,
+        }
         evidence = search_workspace(self._workspace, text)
         self._set_request_evidence(evidence)
         messages: list[dict[str, str]] = [{"role": "system", "content": self._build_system_prompt()}]
@@ -1303,57 +1318,22 @@ class BotRunner:
             self._recent_handled_queries.pop(key, None)
 
     def _poll_due_reminders_once(self) -> None:
-        reminders_text = self._workspace.read_text(REMINDERS_FILE, default="")
-        if not reminders_text.strip():
-            return
-
-        now_unix_time = int(time.time())
-        retained_lines: list[str] = []
-        changed = False
-
-        for raw_line in reminders_text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                changed = True
+        # Legacy entries are saved prompts that still need a model turn. Direct
+        # messages belong exclusively to ReminderService, which never waits here.
+        store = ReminderStore(self._workspace)
+        for record in store.list():
+            if record.get("delivery") == "message" or int(record["unix_time"]) > time.time():
                 continue
+            if store.is_current(record) and self._run_due_reminder(record):
+                store.complete(record, now=time.time())
 
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                logging.warning("Skipping malformed reminder entry")
-                retained_lines.append(raw_line)
-                continue
-
-            if not isinstance(record, dict):
-                logging.warning("Skipping non-object reminder entry")
-                retained_lines.append(raw_line)
-                continue
-
-            unix_time = parse_unix_time(record.get("unix_time"))
-            prompt = str(record.get("prompt", "")).strip()
-            backend = str(record.get("backend", "")).strip()
-            conversation_id = str(record.get("conversation_id", "")).strip()
-
-            if unix_time is None or not prompt or not backend or not conversation_id:
-                logging.warning("Skipping invalid reminder entry with missing required fields")
-                retained_lines.append(raw_line)
-                continue
-
-            if unix_time > now_unix_time:
-                retained_lines.append(serialize_reminder_record(record))
-                continue
-
-            if self._run_due_reminder(record):
-                changed = True
-                continue
-
-            retained_lines.append(serialize_reminder_record(record))
-
-        if changed:
-            self._workspace.write_text(
-                REMINDERS_FILE,
-                "".join(f"{line}\n" for line in retained_lines if line.strip()),
-            )
+    def _send_scheduled_message(self, record: dict[str, Any]) -> None:
+        backend = record["backend"]
+        if self._backend_is_read_only(backend):
+            raise RuntimeError(f"Reminder backend {backend} is read-only")
+        text = f"[Reminder {record['id']}]\n{record['message']}"
+        for chunk in self._split_reply(text):
+            self._send_message(backend, record["conversation_id"], chunk)
 
     def _run_due_reminder(self, record: dict[str, Any]) -> bool:
         backend = str(record["backend"]).strip()
@@ -2212,6 +2192,13 @@ class BotRunner:
             if reply_footer:
                 args = dict(args)
                 args["_reply_footer"] = reply_footer
+        if name == "add_reminder" and args.get("operation", "add") == "add":
+            context = getattr(self._request_state, "reminder_context", {})
+            args = dict(args)
+            args.setdefault("timezone", self.config.llm.system_prompt_timezone)
+            if context and args.get("backend", context["backend"]) == context["backend"]:
+                args.setdefault("backend", context["backend"])
+                args.setdefault("conversation_id", context["conversation_id"])
 
         action = skill.build_action(args) if skill.build_action else None
         if action is not None:

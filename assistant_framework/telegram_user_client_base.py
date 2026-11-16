@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from pathlib import Path
 
 
@@ -13,6 +14,9 @@ class BaseTelegramUserClient:
         self.api_hash = api_hash
         self.session_path = session_path
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_lock = threading.RLock()
+        self._connect_lock: asyncio.Lock | None = None
         self._client: object | None = None
         self._entity_cache: dict[int, object] = {}
 
@@ -27,20 +31,44 @@ class BaseTelegramUserClient:
         return TelegramClient(str(path), self.api_id, self.api_hash)
 
     def _run(self, awaitable):
-        if self._loop is None or self._loop.is_closed():
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-        return self._loop.run_until_complete(awaitable)
+        # Polls and sends may originate from different bot workers. Telethon
+        # must stay on one event loop, which can run those requests concurrently.
+        with self._loop_lock:
+            if self._loop is None or self._loop.is_closed():
+                self._loop = asyncio.new_event_loop()
+                self._loop_thread = threading.Thread(
+                    target=self._serve_loop, args=(self._loop,), name="telegram-user-io", daemon=True,
+                )
+                self._loop_thread.start()
+            future = asyncio.run_coroutine_threadsafe(awaitable, self._loop)
+        return future.result()
+
+    @staticmethod
+    def _serve_loop(loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
 
     async def _connect_client(self):
-        if self._client is None:
-            self._client = self._ensure_client()
-        client = self._client
-        is_connected = getattr(client, "is_connected", None)
-        connected = bool(is_connected()) if callable(is_connected) else False
-        if not connected:
-            await client.connect()
-        return client
+        if self._connect_lock is None:
+            self._connect_lock = asyncio.Lock()
+        async with self._connect_lock:
+            if self._client is None:
+                self._client = self._ensure_client()
+            client = self._client
+            is_connected = getattr(client, "is_connected", None)
+            connected = bool(is_connected()) if callable(is_connected) else False
+            if not connected:
+                await client.connect()
+            return client
 
     @staticmethod
     def _entity_cache_key(entity: object) -> int | None:
@@ -87,10 +115,43 @@ class BaseTelegramUserClient:
         return self._cache_entity(dialog_entity)
 
     def close(self) -> None:
+        with self._loop_lock:
+            if self._loop is not None and self._loop_thread is not None:
+                loop, thread, client = self._loop, self._loop_thread, self._client
+
+                async def disconnect():
+                    callback = getattr(client, "disconnect", None)
+                    if callable(callback):
+                        await callback()
+
+                if thread is threading.current_thread():
+                    async def disconnect_and_stop():
+                        try:
+                            await disconnect()
+                        finally:
+                            loop.stop()
+                    loop.create_task(disconnect_and_stop())
+                else:
+                    try:
+                        asyncio.run_coroutine_threadsafe(disconnect(), loop).result(timeout=5)
+                    except Exception:
+                        pass
+                    loop.call_soon_threadsafe(loop.stop)
+                    thread.join(timeout=5)
+                self._client = None
+                self._loop = None
+                self._loop_thread = None
+                self._connect_lock = None
+                return
+            self._close_idle_loop()
+
+    def _close_idle_loop(self) -> None:
         loop = self._loop
         client = self._client
         self._client = None
         self._loop = None
+        self._loop_thread = None
+        self._connect_lock = None
 
         if loop is None or loop.is_closed():
             return

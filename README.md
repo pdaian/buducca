@@ -82,6 +82,8 @@ python3 -m assistant_framework.cli trace replay --workspace workspace
 
 In chat, the built-in operator commands are `/status` and `/skill`. Frontend details live in [docs/frontends.md](docs/frontends.md).
 
+The assistant can create one-off, daily, and weekly reminder messages through the [`add_reminder` skill](skills/add_reminder/README.md), then list, edit, or remove them by ID. While the bot is running, an independent service dispatches reminders on minute boundaries without waiting for model requests.
+
 Remote Android note:
 
 - The Android/Termux frontend supports a server-side inbox plus SMS outbox flow now. A Termux device can generate its own SSH key, push notification/SMS JSONL files to a limited server account, pull queued SMS commands back down, and send them locally via `Termux:API`. Setup details, file permissions, and the exact commands are in [docs/frontends.md](docs/frontends.md).

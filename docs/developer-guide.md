@@ -200,6 +200,16 @@ Evidence, trace steps, endpoint metrics, stop reasons, and reply footers are thr
 
 These controls apply within one process. They do not coordinate multiple bot processes, implement a provider rate limit, or make arbitrary plugin writes transactional. Plugins that modify shared workspace files must account for concurrent conversations when operators raise `max_concurrent_requests` above 1.
 
+## Timed reminder messages
+
+The [`add_reminder` skill](../skills/add_reminder/README.md) adds, lists, updates, and removes reminders with stable IDs and once/daily/weekly frequencies. Chat calls inherit the current conversation and configured prompt timezone. Daily and weekly schedules use calendar time in the selected timezone, including daylight-saving transitions.
+
+`ReminderService` starts and stops with `BotRunner`. Its timer checks at startup and at minute boundaries, and dispatches each due message on a separate worker. Delivery bypasses `_request_context`, conversation locks, request slots, and model calls. A blocked chat, hourly routine, or unrelated outbound request therefore does not hold up reminder dispatch. Delivery still depends on the selected frontend being available and writable. Telegram user-mode calls share a dedicated event loop so polling and sending can overlap; see Python's [cross-thread coroutine scheduling](https://docs.python.org/3/library/asyncio-task.html#asyncio.run_coroutine_threadsafe).
+
+`ReminderStore` reads `assistant/reminders.jsonl` as an append-only journal of full records and deletion markers. A process-wide lock protects read/modify/append operations; delivery holds no store lock during network I/O. Completion compares the dispatched record with the current record before removing it or advancing its schedule, preserving concurrent edits and removals. As with the rest of the bot, run one process per workspace. Legacy saved-prompt reminders use the same journal but retain their model-driven execution path.
+
+Overdue reminders deliver once on restart, then recurring reminders advance past missed occurrences. Failed sends retry after at least one minute. Delivery is at least once: a crash between the external send and recording completion, or an ambiguous network failure, can duplicate a message. An edit or removal cannot recall a send already in progress. See the skill README for DST behavior, schedule examples, and policy names.
+
 ## Configuration and action boundaries
 
 `python3 -B run_bot.py --config config --check-config` validates configuration and exits before creating a runner or supervisor. It reads the configuration and contact maps, reports section and field errors, and never checks external credentials or service reachability. `--help` also exits before starting a child process.
@@ -212,12 +222,12 @@ HTTP errors retain the status and a sanitized endpoint URL. They omit URL user i
 
 ## Validation without generated files
 
-The in-memory regression suite covers execution limits, result recovery, policy handling, configuration validation, model transport, and trace accounting. It mocks network calls and persistence and can run without bytecode, pytest caches, or temporary capture files:
+The in-memory regression suite covers reminders, execution limits, result recovery, policy handling, configuration validation, model transport, and trace accounting. It mocks network calls and persistence and can run without bytecode, pytest caches, or temporary capture files:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -B -m pytest \
   --capture=sys --assert=plain -p no:cacheprovider \
-  tests/test_execution.py tests/test_action_runtime.py \
+  tests/test_reminders.py tests/test_execution.py tests/test_action_runtime.py \
   tests/test_runtime_controls.py tests/test_config_validation.py \
   tests/test_llm_client.py tests/test_http.py \
   tests/test_trace_metrics.py tests/test_run_bot.py
