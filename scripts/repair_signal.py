@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import codecs
+from collections import deque
 import getpass
 import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 
 if __package__ in (None, ""):
     sys.dont_write_bytecode = True
@@ -111,13 +115,46 @@ def load_signal_command(config_path: str) -> tuple[str, list[str]]:
     return account, prefix
 
 
+def _run_interactive(command: list[str] | tuple[str, ...], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    # Keep stdin/stdout attached to the terminal so signal-cli can render its QR.
+    # Stream stderr too, retaining only a bounded tail for recovery guidance.
+    output: deque[str] = deque(maxlen=32)
+    with subprocess.Popen(command, stderr=subprocess.PIPE, text=True, errors="replace") as process:
+        def copy_stderr() -> None:
+            decoder = codecs.getincrementaldecoder(process.stderr.encoding)(errors="replace")
+            while True:
+                # read1 also forwards prompts that have no trailing newline.
+                chunk = process.stderr.buffer.read1(4096)
+                text = decoder.decode(chunk, final=not chunk)
+                if text:
+                    output.append(text)
+                    print(text, end="", file=sys.stderr, flush=True)
+                if not chunk:
+                    break
+
+        reader = threading.Thread(target=copy_stderr, daemon=True)
+        reader.start()
+        try:
+            process.wait(timeout=timeout)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            reader.join()
+    return subprocess.CompletedProcess(command, process.returncode, None, "".join(output))
+
+
 def _run(command: list[str] | tuple[str, ...], *, dry_run: bool, timeout: float,
          interactive: bool = False) -> subprocess.CompletedProcess[str] | None:
     print(shlex.join(command), flush=True)
     if dry_run:
         return None
     try:
-        result = subprocess.run(command, capture_output=not interactive, text=True, check=False, timeout=timeout)
+        if interactive:
+            result = _run_interactive(command, timeout=timeout)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RepairError(
             f"{command[0]} timed out after {timeout:g}s. Stop competing bot/signal-cli processes and check connectivity. "
@@ -174,6 +211,14 @@ def upgrade_signal_cli(executable: str, *, dry_run: bool) -> None:
 
 def _recovery_hint(error: str) -> str:
     detail = error.lower()
+    if "missingcapabilities" in detail or re.search(r"\blink request\b[^\n]*\b409\b", detail):
+        return (
+            "Signal rejected device linking with HTTP 409; signal-cli may be too old to supply required capabilities. "
+            "For a package-managed installation, rerun the same command with --upgrade --relink. "
+            f"If the package is still outdated or this is a manual/container install, update the configured signal-cli via {RELEASES_URL} "
+            "and install that release's required Java/native runtime. Then retry --relink and scan the new QR. "
+            "Keep the existing Signal account data."
+        )
     if any(word in detail for word in ("not registered", "not present", "authorization", "unauthorized", "401")):
         return (
             "Check the OS user, XDG_DATA_HOME, signal.account and command --config paths. "

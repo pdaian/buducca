@@ -43,7 +43,17 @@ python3 -B scripts/repair_signal.py --config config --relink --test-send
 
 Scan the terminal QR with the phone for the configured account. Relinking refreshes account attributes, requests contact/group synchronization, checks server authentication, and optionally sends the test. If an older CLI prints only a link URI, follow the [signal-cli linking instructions](https://github.com/AsamK/signal-cli/blob/master/man/signal-cli.1.adoc#link). Primary accounts that need SMS/CAPTCHA/PIN registration must follow the [upstream registration procedure](https://github.com/AsamK/signal-cli/wiki/Registration-with-signal-cli); `--repair` alone cannot recreate missing credentials.
 
+If pairing reaches `Received link information ...` and then fails with `Link request error: StatusCode: 409` or `MissingCapabilitiesException`, the CLI may lack capabilities now required by Signal ([upstream issue](https://github.com/AsamK/signal-cli/issues/1556)). Upgrade the configured CLI before pairing again:
+
+```bash
+python3 -B scripts/repair_signal.py --config config --upgrade --relink --test-send
+```
+
+Scan the new QR from this run. Keep the existing Signal account data. BUDUCCA uses the host's configured `signal-cli`; there is no bundled CLI version to bump in this repository. [Upstream recommends keeping signal-cli current](https://github.com/AsamK/signal-cli#readme), since releases older than three months may stop working with Signal's servers.
+
 `--upgrade` supports an existing signal-cli package owned by apt, Homebrew, dnf/yum, or Termux pkg. It checks ownership of the executable used by the bot, so a separate desktop app or a different CLI installation cannot be mistaken for an upgrade. Missing or manually installed/container binaries produce a nonzero result and point to the [official releases](https://github.com/AsamK/signal-cli/releases/latest) and their runtime requirements. Update that installation first, then rerun without `--upgrade`.
+
+Package repositories can lag behind upstream. If `--upgrade` completes but pairing still returns 409, compare the printed version with the official releases and update that same executable through its installation method, including the required Java/native runtime, before retrying `--relink`.
 
 The helper never wipes the Signal data directory or deletes BUDUCCA logs. It does not call `receive`, delete lock files, unregister accounts, or change your identity-trust policy. Failures, including rate limits, bad credentials, timeouts, and incomplete pairing, return a nonzero exit code with recovery guidance. A successful account check does not prove message delivery; use `--test-send` to check sending. After repair, **restart the bot** to clear its disabled Signal state and resume message reception and synchronization.
 

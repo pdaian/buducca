@@ -1,10 +1,11 @@
 import io
 import json
 import subprocess
+import sys
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from scripts import repair_signal
 
@@ -22,7 +23,9 @@ class SignalRepairScriptTests(unittest.TestCase):
         self.stdout, self.stderr = io.StringIO(), io.StringIO()
         stack.enter_context(redirect_stdout(self.stdout))
         stack.enter_context(redirect_stderr(self.stderr))
-        self.run = stack.enter_context(patch.object(repair_signal.subprocess, "run", side_effect=self.success))
+        self.run = Mock(side_effect=self.success)
+        stack.enter_context(patch.object(repair_signal.subprocess, "run", side_effect=self.run))
+        self.interactive_run = stack.enter_context(patch.object(repair_signal, "_run_interactive", side_effect=self.run))
 
     @staticmethod
     def success(command, **_kwargs):
@@ -44,7 +47,7 @@ class SignalRepairScriptTests(unittest.TestCase):
         link_call = next(call for call in calls if "link" in call.args[0])
         self.assertNotIn("-a", link_call.args[0])
         self.assertNotIn("-o", link_call.args[0])
-        self.assertFalse(link_call.kwargs["capture_output"])
+        self.interactive_run.assert_called_once_with(link_call.args[0], timeout=link_call.kwargs["timeout"])
         self.assertGreaterEqual(link_call.kwargs["timeout"], 180)
         commands = [call.args[0] for call in calls]
         self.assertEqual([command[-1] for command in commands[2:-1]], ["listAccounts", "updateAccount", "sendSyncRequest", "listDevices"])
@@ -134,6 +137,29 @@ class SignalRepairScriptTests(unittest.TestCase):
                 self.assertEqual(repair_signal.main(["--relink"]), 1)
         self.assertNotIn("check passed", self.stdout.getvalue())
 
+    def test_link_conflict_recommends_upgrading_before_retrying(self) -> None:
+        self.run.side_effect = [
+            self.success([]),
+            subprocess.CompletedProcess([], 3, None, "Link request error: StatusCode: 409\n"),
+        ]
+        self.assertEqual(repair_signal.main(["--relink", "--test-send"]), 1)
+        self.assertEqual(self.run.call_count, 2)
+        self.assertIn("StatusCode: 409", self.stderr.getvalue())
+        self.assertIn("--upgrade --relink", self.stderr.getvalue())
+        self.assertIn(repair_signal.RELEASES_URL, self.stderr.getvalue())
+        self.assertIn("new QR", self.stderr.getvalue())
+        self.assertNotIn("check passed", self.stdout.getvalue())
+
+    def test_capability_exception_has_upgrade_guidance_without_a_status_code(self) -> None:
+        hint = repair_signal._recovery_hint("org.whispersystems.signalservice.internal.push.exceptions.MissingCapabilitiesException")
+        self.assertIn("--upgrade --relink", hint)
+
+    def test_unrelated_conflicts_and_numbers_do_not_get_link_upgrade_guidance(self) -> None:
+        for detail in ("Send failed: StatusCode: 409", "Link request error: StatusCode: 4090",
+                       "User +15554091234 is not registered", "Link request error: StatusCode: 429"):
+            with self.subTest(detail=detail):
+                self.assertNotIn("--upgrade --relink", repair_signal._recovery_hint(detail))
+
     def test_invalid_timeout_is_rejected_without_commands(self) -> None:
         for timeout in ("0", "-1", "nan", "inf"):
             with self.subTest(timeout=timeout), self.assertRaises(SystemExit) as error:
@@ -195,6 +221,59 @@ class SignalRepairScriptTests(unittest.TestCase):
         with patch.object(repair_signal, "upgrade_signal_cli", side_effect=repair_signal.RepairError("upgrade failed")):
             self.assertEqual(repair_signal.main(["--upgrade", "--relink"]), 1)
         self.run.assert_not_called()
+
+
+class SignalRepairInteractiveTests(unittest.TestCase):
+    def test_stderr_is_streamed_and_retained_without_redirecting_qr_or_input(self) -> None:
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.stderr = io.TextIOWrapper(io.BytesIO(b"Link request error: StatusCode: 409\n"), encoding="utf-8")
+        process.returncode = 3
+        output = io.StringIO()
+        with patch.object(repair_signal.subprocess, "Popen", return_value=process) as popen, redirect_stderr(output):
+            result = repair_signal._run_interactive(["signal-cli", "link"], timeout=180)
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stderr, output.getvalue())
+        self.assertIn("StatusCode: 409", result.stderr)
+        self.assertNotIn("stdin", popen.call_args.kwargs)
+        self.assertNotIn("stdout", popen.call_args.kwargs)
+        process.wait.assert_called_once_with(timeout=180)
+
+    def test_stderr_decodes_characters_split_across_reads_and_replaces_invalid_bytes(self) -> None:
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.stderr.encoding = "utf-8"
+        process.stderr.buffer.read1.side_effect = [b"\xe2\x9c", b"\x93\xff\xe2", b""]
+        process.returncode = 0
+        output = io.StringIO()
+        with patch.object(repair_signal.subprocess, "Popen", return_value=process), redirect_stderr(output):
+            result = repair_signal._run_interactive(["signal-cli", "link"], timeout=180)
+        self.assertEqual(result.stderr, "\u2713\ufffd\ufffd")
+        self.assertEqual(result.stderr, output.getvalue())
+
+    def test_large_stderr_does_not_deadlock_and_only_retains_a_bounded_tail(self) -> None:
+        output = io.StringIO()
+        command = [sys.executable, "-B", "-c",
+                   "import sys; sys.stderr.write('x' * 200000 + '\\nLink request error: StatusCode: 409\\n'); sys.exit(3)"]
+        with redirect_stderr(output):
+            result = repair_signal._run_interactive(command, timeout=10)
+        self.assertEqual(result.returncode, 3)
+        self.assertGreater(len(output.getvalue()), 200000)
+        self.assertLessEqual(len(result.stderr), 32 * 4096)
+        self.assertTrue(result.stderr.endswith("Link request error: StatusCode: 409\n"))
+
+    def test_timeout_and_interruption_kill_and_reap_the_child(self) -> None:
+        for error in (subprocess.TimeoutExpired("signal-cli", 1), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                process = MagicMock()
+                process.__enter__.return_value = process
+                process.stderr = io.TextIOWrapper(io.BytesIO(b""), encoding="utf-8")
+                process.wait.side_effect = [error, -9]
+                with patch.object(repair_signal.subprocess, "Popen", return_value=process):
+                    with self.assertRaises(type(error)):
+                        repair_signal._run_interactive(["signal-cli", "link"], timeout=1)
+                process.kill.assert_called_once_with()
+                self.assertEqual(process.wait.call_count, 2)
 
 
 class SignalRepairConfigFormatTests(unittest.TestCase):
