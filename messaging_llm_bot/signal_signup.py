@@ -8,6 +8,10 @@ Please set up signal-cli with your preferred method, then return to BUDUCCA:
 - Phone number registration
 - Linked-device QR flow
 
+For diagnostics, CLI upgrades, account refresh, and QR relinking:
+  python3 -B scripts/repair_signal.py --config config --help
+See scripts/README.md for the repair workflow.
+
 Relevant docs:
 - signal-cli wiki: https://github.com/AsamK/signal-cli/wiki
 - signal-cli registration methods: https://github.com/AsamK/signal-cli/wiki/Registration-with-signal-cli

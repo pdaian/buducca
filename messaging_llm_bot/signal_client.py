@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import re
 import subprocess
 import time
 from shutil import which
@@ -47,7 +48,7 @@ class SignalClient:
         self.groups_command = groups_command or ["signal-cli", "-o", "json", "-a", account, "listGroups"]
         self.contacts_cache_ttl_seconds = max(0, contacts_cache_ttl_seconds)
         self.command_timeout_seconds = max(0.1, float(command_timeout_seconds))
-        self.group_send_command = ["signal-cli", "-a", account, "send", "-m", "{message}", "-g", "{group_id}"]
+        self.group_send_command = [*self._send_command_base(), "-m", "{message}", "-g", "{group_id}"]
         self._update_counter = 0
         self._contact_names: dict[str, str] = {}
         self._group_names: dict[str, str] = {}
@@ -73,12 +74,7 @@ class SignalClient:
                 self.receive_command,
             )
         self._validate_receive_command()
-        try:
-            proc = self._run_command(self.receive_command, context="receive")
-        except FileNotFoundError as exc:
-            raise SignalFrontendUnavailableError(
-                f"Signal frontend disabled: executable {exc.filename!r} was not found"
-            ) from exc
+        proc = self._run_command(self.receive_command, context="receive")
         if self._debug:
             logging.debug(
                 "Signal receive command finished: returncode=%s stdout_len=%s stderr=%s",
@@ -87,14 +83,7 @@ class SignalClient:
                 proc.stderr.strip() or "none",
             )
         if proc.returncode != 0:
-            stderr = proc.stderr.strip() or "no stderr"
-            if self._is_registration_error(stderr):
-                raise SignalFrontendUnavailableError(
-                    "Signal frontend disabled: Signal account is not registered. "
-                    "Set up signal-cli registration/linking first (phone number or QR). You can run `python3 -m messaging_llm_bot.signal_signup --config config` for docs. "
-                    "(see README.md: 'Additional collector/signup commands')."
-                )
-            raise RuntimeError(f"Signal receive command failed: {stderr}")
+            self._raise_command_error(proc, context="receive")
 
         envelopes = self._parse_receive_output(proc.stdout)
         if self._debug:
@@ -297,7 +286,7 @@ class SignalClient:
             return list(self.send_command)
 
         command = list(self.send_command[:message_placeholder_index])
-        if command and command[-1] == "-m":
+        if command and command[-1] in {"-m", "--message"}:
             command.pop()
         return command
 
@@ -517,8 +506,30 @@ class SignalClient:
         return ""
 
     def _is_registration_error(self, stderr: str) -> bool:
-        normalized = stderr.lower()
-        return "not registered" in normalized
+        # signal-cli emits this when loading the local sending account, before
+        # looking up recipients. A recipient being unregistered is different.
+        # Recipient failures can say "The user ... is not registered".
+        return re.search(r"^\s*User \S+ is not registered\b", stderr, re.IGNORECASE | re.MULTILINE) is not None
+
+    def _raise_command_error(self, proc: subprocess.CompletedProcess[str], *, context: str) -> None:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode} (no output)"
+        message = f"Signal {context} command failed: {detail}"
+        if self._is_registration_error(detail):
+            raise SignalFrontendUnavailableError(
+                f"{message} The local sending account needs registration or linking. "
+                "Run `python3 -B scripts/repair_signal.py --config config --repair` as the bot's OS user "
+                "with the bot's config; use --relink for an unlinked device, then restart the bot. "
+                "Registration help: `python3 -m messaging_llm_bot.signal_signup --config config`."
+            )
+        raise RuntimeError(message)
+
+    @staticmethod
+    def is_message_too_large_error(error: RuntimeError) -> bool:
+        detail = str(error).lower()
+        return any(marker in detail for marker in (
+            "message too long", "message is too long", "message too large", "message is too large",
+            "messagetoolargeexception", "message length exceeds", "message size exceeds",
+        ))
 
     def _find_voice_attachment_path(self, data_message: dict[str, Any]) -> str | None:
         attachments = self._message_attachments(data_message)
@@ -704,8 +715,7 @@ class SignalClient:
         ]
         proc = self._run_command(command, context="send")
         if proc.returncode != 0:
-            stderr = proc.stderr.strip() or "no stderr"
-            raise RuntimeError(f"Signal send command failed: {stderr}")
+            self._raise_command_error(proc, context="send")
 
     def send_file(self, recipient: str, file_path: str, caption: str | None = None) -> None:
         path = Path(file_path)
@@ -722,8 +732,7 @@ class SignalClient:
 
         proc = self._run_command(command, context="send attachment")
         if proc.returncode != 0:
-            stderr = proc.stderr.strip() or "no stderr"
-            raise RuntimeError(f"Signal send attachment command failed: {stderr}")
+            self._raise_command_error(proc, context="send attachment")
 
     def _run_command(self, command: list[str], *, context: str) -> subprocess.CompletedProcess[str]:
         try:
@@ -737,4 +746,9 @@ class SignalClient:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
                 f"Signal {context} command timed out after {self.command_timeout_seconds:g}s"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise SignalFrontendUnavailableError(
+                f"Signal frontend disabled: executable {command[0]!r} was not found. "
+                "Check the bot's PATH and run `python3 -B scripts/repair_signal.py --config config`."
             ) from exc

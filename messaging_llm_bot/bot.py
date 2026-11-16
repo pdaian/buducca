@@ -3056,12 +3056,22 @@ class BotRunner:
 
     def _send_signal_message(self, conversation_id: str, text: str) -> None:
         assert self.signal is not None
+        if self._signal_frontend_disabled:
+            raise SignalFrontendUnavailableError("Signal frontend is disabled; repair the account and restart the bot")
         pending_chunks = [text]
         while pending_chunks:
             chunk = pending_chunks.pop(0)
             try:
                 self.signal.send_message(conversation_id, chunk)
-            except RuntimeError:
+            except SignalFrontendUnavailableError as exc:
+                self._signal_frontend_disabled = True
+                self._set_frontend_disabled("signal", error=str(exc))
+                raise
+            except RuntimeError as exc:
+                # A timeout may have delivered the message already. Retrying
+                # smaller pieces is only safe for explicit size rejections.
+                if not SignalClient.is_message_too_large_error(exc):
+                    raise
                 retry_chunks = self._split_failed_signal_chunk(chunk)
                 if len(retry_chunks) == 1:
                     raise

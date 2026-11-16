@@ -189,6 +189,16 @@ One-time signup/help command:
 python3 -m messaging_llm_bot.signal_signup --config config
 ```
 
+For registration errors, CLI upgrades, or expired linked devices, use the [Signal repair script](../scripts/README.md#signal-repair):
+
+```bash
+python3 -B scripts/repair_signal.py --config config --upgrade --repair --dry-run
+```
+
+The exact error `User <number> is not registered` occurs while signal-cli loads the **local sending account**, before sending to a recipient ([upstream implementation](https://github.com/AsamK/signal-cli/blob/master/src/main/java/org/asamk/signal/App.java)). Confirm the bot's OS user, account number, and Signal data directory; relink an expired device with `--relink` and restart the bot after repair. The script's `--config` selects the BUDUCCA config; a `--config` inside a Signal command selects signal-cli's account directory.
+
+Group replies and attachments reuse the configured send command prefix, including its executable and account directory. A local registration failure disables the Signal frontend and includes repair instructions. Only explicit message-size errors trigger smaller-chunk retries; recipient errors, rate limits, and ambiguous timeouts are reported without resending pieces of the message.
+
 ## WhatsApp
 
 Configure `whatsapp` in `config/whatsapp.json` with receive/send JSON commands. The example config now points at the in-repo bridge: `python3 -m messaging_llm_bot.whatsapp_bridge`.
