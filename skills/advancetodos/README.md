@@ -1,10 +1,11 @@
 # Advance todos skill
 
 ## What it does
-Moves each selected Taskwarrior todo's due date **later by a fixed amount**, added
-to its existing due date. Without a date range, selects all overdue unfinished
-tasks. With both dates, selects unfinished tasks due within that inclusive range,
-including future tasks. Calls the harness user's `task` CLI directly.
+Shifts each selected Taskwarrior todo's due date **by a fixed amount**, added
+to its existing due date. Positive amounts move dates later; negative amounts
+bring them earlier. Without a date range, selects all unfinished tasks with due
+dates, including future tasks. With both dates, selects unfinished tasks due
+within that inclusive range. Calls the harness user's `task` CLI directly.
 
 ## Args schema
 ```ts
@@ -16,17 +17,19 @@ including future tasks. Calls the harness user's `task` CLI directly.
 }
 ```
 
-- `amount` is required and positive. Accepts seconds (`s`, `sec`, `seconds`),
+- `amount` is required and nonzero. Accepts seconds (`s`, `sec`, `seconds`),
   minutes (`min`, `minutes`), hours (`h`, `hours`), days (`d`, `days`), and weeks
   (`w`, `weeks`), including compounds such as `1d 2h 30min`. Fixed ISO durations
-  such as `P2D`, `P1W`, and `PT90M` also work. Fractions are allowed when the total
-  is a whole number of seconds, e.g. `1.5h`. Bare numbers, zero, negatives,
+  such as `P2D`, `P1W`, and `PT90M` also work. An optional leading `+` or `-` applies
+  to the entire duration: `-1h 30min` and `-PT90M` both move dates 90 minutes
+  earlier. Fractions are allowed when the total is a whole number of seconds,
+  e.g. `1.5h` or `-1.5h`. Bare numbers, zero, signs on individual components,
   months, years, and ambiguous `m` units are rejected.
-- Omit both dates to select tasks whose due timestamp is strictly before the
-  time captured at the start of the call. This can include tasks due earlier
-  today. Adding the amount once may leave a very old task overdue.
-- Supply **both** `start_date` and `end_date` as `YYYY-MM-DD` to replace overdue
-  selection with an inclusive range of due dates in the harness's local
+- Omit both dates to select all pending and waiting tasks with due dates,
+  whether overdue, due today, or due in the future. The amount is added once to
+  each original due date, preserving the spacing between tasks.
+- Supply **both** `start_date` and `end_date` as `YYYY-MM-DD` to restrict
+  selection to an inclusive range of due dates in the harness's local
   timezone. Same-day ranges work. Invalid, incomplete, or reversed ranges fail
   before reading or modifying tasks.
 - `dry_run` defaults to `false`. Set it to `true` to return a proposed change
@@ -61,8 +64,8 @@ Taskwarrior settings are edited directly. Requires `task` on `PATH` and the
 Python standard library; no extra installation or skill registration is needed.
 
 ## Results and retries
-Results are JSON with `ok`, `dry_run`, `scope` (`overdue` or `date_range`),
-`amount_seconds`, `matched`, `updated_count`, and `updated`. Each change includes
+Results are JSON with `ok`, `dry_run`, `scope` (`all` or `date_range`),
+signed `amount_seconds`, `matched`, `updated_count`, and `updated`. Each change includes
 `uuid`, `description`, `old_due`, and `new_due`. A preview adds `changes` and has
 zero updates. No matches is a successful result with zero counts and no writes.
 
@@ -78,8 +81,11 @@ idempotent and does not store a retry ledger.
 
 ## Usage
 ```bash
-# Move all overdue todos forward by two days.
+# Move all dated unfinished todos two days later.
 python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"2d"}'
+
+# Bring all dated unfinished todos two days earlier.
+python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"-2d"}'
 
 # Preview todos due November 16 through November 20, inclusive.
 python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"1 week","start_date":"2026-11-16","end_date":"2026-11-20","dry_run":true}'

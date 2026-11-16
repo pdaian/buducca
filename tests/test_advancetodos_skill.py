@@ -62,49 +62,61 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         self.process.return_value = exported(tasks)
         return self.run_skill({"amount": "2d", "dry_run": True, **args})
 
-    def test_overdue_selection_uses_exact_now_and_open_statuses(self) -> None:
+    def test_default_selection_includes_all_dated_open_tasks(self) -> None:
         tasks = [
             task(1), task(2, "20261116T115959Z", "waiting"),
             task(3, "20261116T120000Z"), task(4, "20261116T120001Z"),
             task(5, status="completed"), task(6, status="deleted"),
             task(7, status="recurring"), task(8, due=None),
+            task(9, "20261201T090000Z", "waiting"),
         ]
         result = self.preview(tasks)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["scope"], "overdue")
-        self.assertEqual(result["matched"], 2)
+        self.assertEqual(result["scope"], "all")
+        self.assertEqual(result["matched"], 5)
         self.assertEqual(result["updated_count"], 0)
-        self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[0]["uuid"], tasks[1]["uuid"]])
-        self.assertEqual([item["new_due"] for item in result["changes"]], ["20261117T090000Z", "20261118T115959Z"])
+        self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[i]["uuid"] for i in (0, 1, 2, 3, 8)])
+        self.assertEqual([item["new_due"] for item in result["changes"]], [
+            "20261117T090000Z", "20261118T115959Z", "20261118T120000Z",
+            "20261118T120001Z", "20261203T090000Z",
+        ])
         self.assertEqual(self.process.call_count, 1)
         self.assertEqual(self.mutations(), [])
-        self.clock.now.assert_called_once_with(timezone.utc)
 
     def test_apply_shifts_each_original_due_and_verifies_by_uuid(self) -> None:
         first = task(1, "20261101T090000Z", custom="preserve", scheduled="20261031T090000Z")
-        second = task(2, "20261115T183000Z", "waiting", wait="20261120T000000Z")
+        second = task(2, "20261201T183000Z", "waiting", wait="20261120T000000Z")
         original = copy.deepcopy([first, second])
-        self.process.side_effect = [
-            exported([first, second]), response(), exported([{**first, "due": "20261103T090000Z"}]),
-            response(), exported([{**second, "due": "20261117T183000Z"}]),
+        cases = [
+            ("2d", 172800, ["20261103T090000Z", "20261203T183000Z"]),
+            ("-2d", -172800, ["20261030T090000Z", "20261129T183000Z"]),
         ]
-        result = self.run_skill({"amount": "2d"})
-        self.assertTrue(result["ok"])
-        self.assertFalse(result["dry_run"])
-        self.assertEqual(result["updated_count"], 2)
-        self.assertEqual(result["amount_seconds"], 172800)
-        self.assertEqual([item["new_due"] for item in result["updated"]], ["20261103T090000Z", "20261117T183000Z"])
-        self.assertEqual([first, second], original)
-        for command, source, change in zip(self.mutations(), original, result["updated"]):
-            self.assertIn(source["uuid"], command)
-            self.assertNotIn(str(source["id"]), command)
-            self.assertIn(f"due.is:{source['due']}", command)
-            self.assertIn("status:pending", command)
-            self.assertIn("status:waiting", command)
-            self.assertEqual(command[command.index("modify") + 1:], [f"due:{change['new_due']}"])
-        self.assertEqual(self.process.call_count, 5)
+        for amount, seconds, due_dates in cases:
+            with self.subTest(amount=amount):
+                self.process.reset_mock()
+                self.process.side_effect = [
+                    exported([first, second]), response(), exported([{**first, "due": due_dates[0]}]),
+                    response(), exported([{**second, "due": due_dates[1]}]),
+                ]
+                result = self.run_skill({"amount": amount})
+                self.assertTrue(result["ok"])
+                self.assertFalse(result["dry_run"])
+                self.assertEqual(result["scope"], "all")
+                self.assertEqual(result["matched"], 2)
+                self.assertEqual(result["updated_count"], 2)
+                self.assertEqual(result["amount_seconds"], seconds)
+                self.assertEqual([item["new_due"] for item in result["updated"]], due_dates)
+                self.assertEqual([first, second], original)
+                for command, source, change in zip(self.mutations(), original, result["updated"]):
+                    self.assertIn(source["uuid"], command)
+                    self.assertNotIn(str(source["id"]), command)
+                    self.assertIn(f"due.is:{source['due']}", command)
+                    self.assertIn("status:pending", command)
+                    self.assertIn("status:waiting", command)
+                    self.assertEqual(command[command.index("modify") + 1:], [f"due:{change['new_due']}"])
+                self.assertEqual(self.process.call_count, 5)
 
-    def test_inclusive_date_range_replaces_overdue_selection(self) -> None:
+    def test_inclusive_date_range_restricts_selection(self) -> None:
         tasks = [
             task(1, "20261201T000000Z"), task(2, "20261203T235959Z"),
             task(3, "20261130T235959Z"), task(4, "20261204T000000Z"),
@@ -117,11 +129,13 @@ class AdvanceTodosSkillTests(unittest.TestCase):
 
     def test_date_range_applies_instead_of_only_previewing(self) -> None:
         original = task(1, "20261201T010000Z")
-        self.process.side_effect = [exported([original]), response(), exported([{**original, "due": "20261201T023000Z"}])]
-        result = self.run_skill({"amount": "PT90M", "start_date": "2026-12-01", "end_date": "2026-12-01"})
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["updated_count"], 1)
-        self.assertEqual(result["updated"][0]["new_due"], "20261201T023000Z")
+        for amount, new_due in (("PT90M", "20261201T023000Z"), ("-PT90M", "20261130T233000Z")):
+            with self.subTest(amount=amount):
+                self.process.side_effect = [exported([original]), response(), exported([{**original, "due": new_due}])]
+                result = self.run_skill({"amount": amount, "start_date": "2026-12-01", "end_date": "2026-12-01"})
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["updated_count"], 1)
+                self.assertEqual(result["updated"][0]["new_due"], new_due)
 
     def test_date_range_uses_harness_timezone_and_full_end_day(self) -> None:
         with patch.dict(os.environ, {"TZ": "America/New_York"}):
@@ -136,13 +150,22 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[1]["uuid"], tasks[2]["uuid"]])
 
     def test_fixed_days_across_dst_and_leap_day(self) -> None:
+        cases = [
+            ("20261031T160000Z", "1d", "20261101T160000Z"),
+            ("20261101T160000Z", "-1d", "20261031T160000Z"),
+            ("20240228T235959Z", "1d", "20240229T235959Z"),
+            ("20240301T235959Z", "-1d", "20240229T235959Z"),
+        ]
         with patch.dict(os.environ, {"TZ": "America/New_York"}):
             time.tzset()
-            result = self.preview([task(1, "20261031T160000Z")], amount="1d")
+            for old_due, amount, new_due in cases:
+                with self.subTest(old_due=old_due, amount=amount):
+                    result = self.preview([task(1, old_due)], amount=amount)
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(result["changes"][0]["new_due"], new_due)
+                    self.assertEqual(result["updated_count"], 0)
         time.tzset()
-        self.assertEqual(result["changes"][0]["new_due"], "20261101T160000Z")
-        result = self.preview([task(1, "20240228T235959Z")], amount="1d")
-        self.assertEqual(result["changes"][0]["new_due"], "20240229T235959Z")
+        self.assertEqual(self.mutations(), [])
 
     def test_range_uses_offset_at_due_date_not_current_season(self) -> None:
         with patch.dict(os.environ, {"TZ": "America/New_York"}):
@@ -153,18 +176,23 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[1]["uuid"]])
 
-    def test_recurring_instances_are_updated_without_template_or_siblings(self) -> None:
+    def test_recurring_instances_are_updated_without_template_or_propagation(self) -> None:
         child = task(1, parent=task(2)["uuid"], recur="weekly")
+        sibling = task(3, "20261201T090000Z", parent=task(2)["uuid"], recur="weekly")
         self.process.side_effect = [
-            exported([child, task(2, status="recurring"), task(3, "20261201T090000Z", recur="weekly")]),
+            exported([child, task(2, status="recurring"), sibling]),
             response(), exported([{**child, "due": "20261117T090000Z"}]),
+            response(), exported([{**sibling, "due": "20261203T090000Z"}]),
         ]
         result = self.run_skill({"amount": "2d"})
         self.assertTrue(result["ok"])
-        self.assertEqual(result["updated_count"], 1)
-        self.assertIn("rc.recurrence.confirmation=no", self.mutations()[0])
-        self.assertNotIn(task(2)["uuid"], self.mutations()[0])
-        self.assertNotIn(task(3)["uuid"], self.mutations()[0])
+        self.assertEqual(result["updated_count"], 2)
+        self.assertEqual([item["uuid"] for item in result["updated"]], [child["uuid"], sibling["uuid"]])
+        for command, selected, other in zip(self.mutations(), (child, sibling), (sibling, child)):
+            self.assertIn("rc.recurrence.confirmation=no", command)
+            self.assertIn(selected["uuid"], command)
+            self.assertNotIn(other["uuid"], command)
+            self.assertNotIn(task(2)["uuid"], command)
 
     def test_no_matches_performs_no_writes(self) -> None:
         result = self.run_skill({"amount": "1h"})
@@ -178,9 +206,11 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         cases = {"2d": 172800, "1 week": 604800, "1h 30min": 5400, "1.5h": 5400,
                  "60 seconds": 60, "P2D": 172800, "P1W": 604800, "PT90M": 5400,
                  "P1DT2H3M4S": 93784, "  2 DAYS  ": 172800, "0.5min": 30}
-        for amount, expected in cases.items():
-            with self.subTest(amount=amount):
-                self.assertEqual(self.module._duration(amount), timedelta(seconds=expected))
+        for value, expected in cases.items():
+            for prefix, sign in (("", 1), ("+", 1), ("-", -1)):
+                amount = prefix + value
+                with self.subTest(amount=amount):
+                    self.assertEqual(self.module._duration(amount), timedelta(seconds=sign * expected))
 
     def test_invalid_inputs_do_not_read_or_write_tasks(self) -> None:
         cases = [None, [], {}, {"amount": "1d", "duration": "2d"},
@@ -191,8 +221,10 @@ class AdvanceTodosSkillTests(unittest.TestCase):
                  {"amount": "1d", "start_date": "2026-02-30", "end_date": "2026-03-01"},
                  {"amount": "1d", "start_date": "20261116", "end_date": "2026-11-17"},
                  {"amount": "1d", "start_date": "2026-11-18", "end_date": "2026-11-17"}]
-        for amount in (None, 2, True, "", "0d", "-1d", "2", "1m", "1 month", "1y", "P1M", "P1Y",
-                       "P", "PT", "P1DT", "PT0.1S", "0.001s", "tomorrow", "1d; delete", "999999999999999999999d"):
+        for amount in (None, 2, True, "", "0d", "-0d", "+0s", "-PT0S", "2", "1m", "1 month", "1y", "P1M", "P1Y",
+                       "P", "PT", "P1DT", "PT0.1S", "0.001s", "tomorrow", "1d; delete", "999999999999999999999d",
+                       "-", "+", "--1d", "++1d", "+-1d", "-+1d", "1h -30min", "-1h +30min", "-1h -30min",
+                       "-P1M", "-PT0.1S", "-999999999999999999999d"):
             cases.append({"amount": amount})
         for args in cases:
             with self.subTest(args=args):
@@ -228,11 +260,14 @@ class AdvanceTodosSkillTests(unittest.TestCase):
                 self.assertEqual(result["updated_count"], 0)
         self.assertEqual(self.mutations(), [])
 
-    def test_due_overflow_fails_before_writing(self) -> None:
-        self.process.return_value = exported([task(1), task(2, "99991231T235959Z")])
-        result = self.run_skill({"amount": "1d", "start_date": "2026-01-01", "end_date": "9999-12-31"})
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["updated_count"], 0)
+    def test_due_overflow_and_underflow_fail_before_writing(self) -> None:
+        for amount, due in (("1d", "99991231T235959Z"), ("-1d", "00010101T000000Z")):
+            with self.subTest(amount=amount):
+                self.process.return_value = exported([task(1), task(2, due)])
+                result = self.run_skill({"amount": amount})
+                self.assertFalse(result["ok"])
+                self.assertIn("supported date range", result["error"])
+                self.assertEqual(result["updated_count"], 0)
         self.assertEqual(self.mutations(), [])
 
     def test_partial_failure_stops_and_preserves_verified_progress(self) -> None:

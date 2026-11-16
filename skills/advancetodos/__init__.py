@@ -11,12 +11,14 @@ from assistant_framework.workspace import Workspace
 
 NAME = "advancetodos"
 DESCRIPTION = (
-    "Move Taskwarrior todo due dates later by amount, added to each existing due date. "
-    "amount is a positive fixed duration such as '2d', '1 week', '1h 30min', or 'PT90M'; "
+    "Shift Taskwarrior todo due dates by amount, added to each existing due date. "
+    "amount is a nonzero fixed duration such as '2d', '1 week', '1h 30min', or 'PT90M'; "
+    "positive amounts move dates later, negative amounts such as '-2d' or '-PT90M' move them earlier. "
+    "A single leading sign applies to the entire duration, e.g. '-1h 30min' means 90 minutes earlier; "
     "units are weeks, days (24h), hours, minutes (min), and seconds. Months/years are unsupported. "
-    "By default selects all overdue pending/waiting tasks (due before the call's current time). "
-    "Supply both start_date and end_date as YYYY-MM-DD to instead select all pending/waiting "
-    "tasks due within those inclusive dates in the harness timezone, including future tasks. "
+    "By default selects all pending/waiting tasks with due dates, including future tasks. "
+    "Supply both start_date and end_date as YYYY-MM-DD to restrict selection to tasks due "
+    "within those inclusive dates in the harness timezone. "
     "Only due is changed; recurring templates and completed/deleted/undated tasks are excluded. "
     "dry_run=true previews changes; default false applies them directly. "
     "JSON reports ok, matched, updated_count, and old/new due dates. "
@@ -48,10 +50,14 @@ _ISO_DURATION = re.compile(
 
 
 def _duration(value: Any) -> timedelta:
-    error = "`amount` must be a positive fixed duration in whole seconds, e.g. '2d', '1h 30min', or 'PT90M'."
+    error = "`amount` must be a nonzero fixed duration in whole seconds, e.g. '2d', '-1h 30min', or '-PT90M'."
     if not isinstance(value, str) or not value.strip():
         raise ValueError(error)
     value = value.strip()
+    sign = 1
+    if value[0] in "+-":
+        sign = -1 if value[0] == "-" else 1
+        value = value[1:].lstrip()
     seconds = Decimal(0)
     if value.upper().startswith("P"):
         match = _ISO_DURATION.fullmatch(value)
@@ -70,7 +76,7 @@ def _duration(value: Any) -> timedelta:
     if seconds <= 0 or seconds != seconds.to_integral_value():
         raise ValueError(error)
     try:
-        return timedelta(seconds=int(seconds))
+        return timedelta(seconds=sign * int(seconds))
     except OverflowError as exc:
         raise ValueError("`amount` is too large.") from exc
 
@@ -91,7 +97,7 @@ def _due(value: Any) -> datetime:
 
 
 def _plan(
-    tasks: list[dict[str, Any]], amount: timedelta, now: datetime,
+    tasks: list[dict[str, Any]], amount: timedelta,
     start: date | None, end: date | None,
 ) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
@@ -105,8 +111,6 @@ def _plan(
         if start is not None and end is not None:
             if not start <= due.astimezone().date() <= end:
                 continue
-        elif due >= now:
-            continue
         uuid = task_uuid(task.get("uuid"))
         if uuid in seen:
             raise ValueError(f"Taskwarrior exported duplicate UUID {uuid}.")
@@ -137,20 +141,19 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         if not isinstance(dry_run, bool):
             raise ValueError("`dry_run` must be a boolean.")
         if ("start_date" in args) != ("end_date" in args):
-            raise ValueError("Supply both `start_date` and `end_date`, or omit both for overdue tasks.")
+            raise ValueError("Supply both `start_date` and `end_date`, or omit both for all dated pending/waiting tasks.")
         start = _date(args["start_date"], "start_date") if "start_date" in args else None
         end = _date(args["end_date"], "end_date") if "end_date" in args else None
         if start is not None and end is not None and start > end:
             raise ValueError("`start_date` must be on or before `end_date`.")
-        now = datetime.now(timezone.utc)
-        changes = _plan(export_tasks(_OPEN_FILTER), amount, now, start, end)
+        changes = _plan(export_tasks(_OPEN_FILTER), amount, start, end)
     except (ValueError, OverflowError, TaskwarriorError) as exc:
         return json.dumps({"ok": False, "error": str(exc), "updated_count": 0})
 
     result: dict[str, Any] = {
         "ok": True,
         "dry_run": dry_run,
-        "scope": "date_range" if start is not None else "overdue",
+        "scope": "date_range" if start is not None else "all",
         "amount_seconds": amount // timedelta(seconds=1),
         "matched": len(changes),
         "updated_count": 0,
