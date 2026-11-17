@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import logging
 import re
 import threading
@@ -11,7 +11,8 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .config import LLMConfig, LLMRunnerConfig, _effective_llm_runners
-from .http import HttpClient
+from .http import HttpClient, _safe_url
+from .llm_progress import RequestProgress
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
 _THINK_BLOCK_RE = re.compile(r"(?is)<think>.*?(?:</think>|$)")
@@ -85,7 +86,7 @@ class OpenAICompatibleClient:
         for attempt_number, (runner_index, runner) in enumerate(runner_attempts, start=1):
             logging.info(
                 "LLM runner request: url=%s model=%s attempt=%s/%s",
-                runner.base_url,
+                _safe_url(runner.base_url),
                 runner.model_tag or runner.model,
                 attempt_number,
                 len(runner_attempts),
@@ -108,7 +109,7 @@ class OpenAICompatibleClient:
                     raise
                 logging.warning(
                     "LLM runner failed: url=%s model=%s attempt=%s/%s reason=%s: %s; trying next runner",
-                    runner.base_url,
+                    _safe_url(runner.base_url),
                     runner.model_tag or runner.model,
                     attempt_number,
                     len(runner_attempts),
@@ -255,6 +256,11 @@ class OpenAICompatibleClient:
             if self.config.max_tokens is not None:
                 payload["max_tokens"] = self.config.max_tokens
             payload.update(runner.extra_body)
+            payload.setdefault("stream", callable(getattr(self.http_client, "post_json_stream", None)))
+            if payload["stream"]:
+                payload["stream_options"] = {"include_usage": True, **payload.get("stream_options", {})}
+            else:
+                payload.pop("stream_options", None)
             if disable_thinking or self._messages_request_no_think(continuation_messages):
                 chat_template_kwargs = payload.get("chat_template_kwargs")
                 payload["chat_template_kwargs"] = {
@@ -265,32 +271,61 @@ class OpenAICompatibleClient:
             started = time.perf_counter()
             request_key = self._register_request(runner_index)
             request_metrics: dict[str, Any] = {
+                "request_id": request_key,
                 "runner_index": runner_index,
                 "model": runner.model,
                 "model_tag": runner.model_tag or runner.model,
                 "continuation": continuation_attempt > 0,
+                "stream": payload["stream"],
                 "usage": {},
             }
+            progress = RequestProgress(request_key, runner_index, runner.model_tag or runner.model, started)
+            template_options = payload.get("chat_template_kwargs")
+            thinking = template_options.get("enable_thinking", "default") if isinstance(template_options, dict) else "default"
+            with self._selection_lock:
+                concurrent_requests = len(self._active_requests[runner_index])
+            logging.info(
+                "LLM request started: request_id=%s runner=%s model=%s api_model=%s url=%s "
+                "continuation=%s/%s chain=%s messages=%s prompt_chars=%s stream=%s "
+                "temperature=%s max_tokens=%s max_completion_tokens=%s thinking=%s reasoning_effort=%s "
+                "timeout_seconds=%s concurrent_requests=%s",
+                request_key, runner_index, runner.model_tag or runner.model, runner.model, _safe_url(url),
+                continuation_attempt, _MAX_CONTINUATION_ATTEMPTS,
+                getattr(self._thread_state, "skill_chain_length", 0), len(continuation_messages),
+                sum(len(self._raw_text(message.get("content"))) for message in continuation_messages),
+                payload["stream"], payload.get("temperature", "default"), payload.get("max_tokens", "default"),
+                payload.get("max_completion_tokens", "default"), thinking, payload.get("reasoning_effort", "default"),
+                getattr(self.http_client, "timeout_seconds", "unknown"), concurrent_requests,
+            )
 
             if self.debug:
-                logging.debug("LLM request URL: %s", url)
+                logging.debug("LLM request URL: %s", _safe_url(url))
                 logging.debug("LLM request payload: %s", payload)
 
             try:
-                data = self.http_client.post_json(url, payload, headers=headers)
-                if not isinstance(data, dict):
-                    raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
-                self._merge_usage_counts(request_metrics["usage"], data.get("usage"))
-                choice = self._extract_primary_choice(data)
-                request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
-            except Exception as exc:
+                with progress.reporting():
+                    if payload["stream"]:
+                        data = self._read_streamed_reply(url, payload, headers, progress)
+                    else:
+                        data = self.http_client.post_json(url, payload, headers=headers)
+                        self._observe_response(progress, data)
+                    if not isinstance(data, dict):
+                        raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
+                    choice = self._extract_primary_choice(data)
+                    request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
+            except BaseException as exc:
                 request_metrics["error"] = type(exc).__name__
                 raise
             finally:
                 duration_ms = (time.perf_counter() - started) * 1000
+                request_metrics.update(progress.metrics())
                 request_metrics["duration_ms"] = duration_ms
                 self._thread_state.request_metrics.append(request_metrics)
                 self._unregister_request(runner_index, request_key)
+                if "error" in request_metrics:
+                    progress.log("failed", level=logging.WARNING, outcome=f"error={request_metrics['error']}")
+                else:
+                    progress.log("completed", outcome=f"finish_reason={request_metrics['finish_reason'] or 'unknown'}")
 
             total_duration_ms += duration_ms
             if self.debug:
@@ -315,7 +350,7 @@ class OpenAICompatibleClient:
 
             logging.warning(
                 "LLM completion truncated: url=%s model=%s finish_reason=%s continuation_attempt=%s/%s",
-                runner.base_url,
+                _safe_url(runner.base_url),
                 runner.model_tag or runner.model,
                 finish_reason or "unknown",
                 continuation_attempt + 1,
@@ -333,6 +368,92 @@ class OpenAICompatibleClient:
             duration_ms=total_duration_ms,
         )
         return aggregated_reply
+
+    def _read_streamed_reply(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str], progress: RequestProgress,
+    ) -> dict[str, Any]:
+        content: list[str] = []
+        refusal: list[str] = []
+        finish_reason = None
+        full_response = None
+        saw_delta = False
+        with closing(self.http_client.post_json_stream(url, payload, headers=headers)) as events:
+            for data in events:
+                if not isinstance(data, dict):
+                    raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
+                self._observe_response(progress, data, streamed=True)
+                if data.get("error") is not None:
+                    raise RuntimeError(f"LLM endpoint returned a streaming error from {_safe_url(url)}")
+                choices = data.get("choices")
+                if not isinstance(choices, list) or any(not isinstance(choice, dict) for choice in choices):
+                    raise RuntimeError("Malformed response from LLM endpoint: expected a choices list")
+                for choice in choices:
+                    if choice.get("index", 0) != 0:
+                        continue
+                    if "message" in choice:
+                        if saw_delta or full_response is not None:
+                            raise RuntimeError("Malformed response from LLM endpoint: mixed streaming and JSON responses")
+                        self._extract_primary_choice(data)
+                        full_response = data
+                        continue
+                    if full_response is not None:
+                        raise RuntimeError("Malformed response from LLM endpoint: mixed streaming and JSON responses")
+                    delta = choice.get("delta")
+                    if delta is None and choice.get("finish_reason"):
+                        delta = {}
+                    if not isinstance(delta, dict):
+                        raise RuntimeError("Malformed response from LLM endpoint: expected a delta object")
+                    saw_delta = True
+                    content_part = self._raw_text(delta.get("content"))
+                    if content_part:
+                        content.append(content_part)
+                    refusal_part = self._raw_text(delta.get("refusal"))
+                    if refusal_part:
+                        refusal.append(refusal_part)
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+        if full_response is not None:
+            return full_response
+        if not saw_delta or not finish_reason:
+            raise RuntimeError("Incomplete response from LLM endpoint: missing completion finish reason")
+        return {
+            "choices": [{
+                "message": {"content": "".join(content) if content else None, "refusal": "".join(refusal)},
+                "finish_reason": finish_reason,
+            }],
+            "usage": progress.metrics()["usage"],
+        }
+
+    @classmethod
+    def _observe_response(cls, progress: RequestProgress, data: Any, *, streamed: bool = False) -> None:
+        if not isinstance(data, dict):
+            return
+        usage: dict[str, int] = {}
+        cls._merge_usage_counts(usage, data.get("usage"))
+        choices = data.get("choices")
+        choice = next((
+            item for item in choices if isinstance(item, dict) and item.get("index", 0) == 0
+        ), {}) if isinstance(choices, list) else {}
+        message = choice.get("delta", choice.get("message"))
+        if not isinstance(message, dict):
+            message = {}
+        progress.update(
+            content=cls._raw_text(message.get("content")) or cls._raw_text(message.get("refusal")),
+            reasoning=cls._raw_text(message.get("reasoning_content")) or cls._raw_text(message.get("reasoning")),
+            usage=usage,
+            streamed=streamed and "message" not in choice,
+        )
+
+    @staticmethod
+    def _raw_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(
+                item["text"] for item in content
+                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
+            )
+        return ""
 
     @staticmethod
     def _extract_primary_choice(data: dict[str, Any]) -> dict[str, Any]:

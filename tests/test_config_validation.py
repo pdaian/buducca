@@ -84,7 +84,7 @@ class ConfigValidationTests(unittest.TestCase):
                         self.load()
                     self.raw = original
 
-    def test_runner_urls_and_unsupported_streaming_fail_before_startup(self) -> None:
+    def test_runner_urls_and_invalid_streaming_options_fail_before_startup(self) -> None:
         for field, value in (
             ("base_url", "file:///tmp/model"), ("base_url", "relative/path"),
             ("base_url", "https://host:invalid/v1"), ("base_url", "https://host:99999/v1"),
@@ -92,7 +92,9 @@ class ConfigValidationTests(unittest.TestCase):
             ("base_url", "https://user:password@host/v1"), ("base_url", "https://host/v1?key=secret"),
             ("endpoint_path", "https://other.invalid"), ("endpoint_path", "//other.invalid"),
             ("endpoint_path", "//["), ("endpoint_path", "/chat completions"),
-            ("extra_body", {"stream": True}), ("extra_body", {"stream": "false"}),
+            ("extra_body", {"stream": 1}), ("extra_body", {"stream": "false"}),
+            ("extra_body", {"stream_options": None}), ("extra_body", {"stream_options": []}),
+            ("extra_body", {"stream_options": {"include_usage": "true"}}),
             ("extra_body", {"temperature": float("nan")}), ("extra_body", {"model": "override"}),
         ):
             with self.subTest(field=field, value=value):
@@ -109,6 +111,10 @@ class ConfigValidationTests(unittest.TestCase):
         })
         self.raw["runtime"]["_comment"] = "ignored"
         self.assertIsNone(self.load().llm.temperature)
+
+    def test_streaming_and_usage_options_are_supported(self) -> None:
+        self.raw["llm"]["extra_body"] = {"stream": True, "stream_options": {"include_usage": True}}
+        self.assertEqual(self.load().llm.extra_body, self.raw["llm"]["extra_body"])
 
     def test_bad_runner_types_and_unknown_fields_identify_the_index(self) -> None:
         for runner in ("bad", {"typo": True}, {"api_key": 123}):

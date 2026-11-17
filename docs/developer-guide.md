@@ -129,6 +129,15 @@ Modern request options do not justify a provider SDK dependency by themselves. P
 
 The reply footer reads common usage shapes and adds cache-hit, cache-write, and reasoning-token counts when a provider returns them. Missing metrics remain absent rather than being guessed.
 
+At `runtime.log_level: "INFO"` (the default), model requests also emit detailed console logs:
+
+- Each HTTP attempt has a request ID, runner and API model, endpoint, continuation and skill-chain position, message and prompt-character counts, sampling/thinking settings, timeout, and concurrent-request count.
+- Streaming logs the first generated text and its latency, then reports progress every five seconds, including while waiting for the server or a stalled stream. Progress includes phase, elapsed and idle time, chunk and character counts, average characters/second, and reported token usage. Tokens/second uses reported completion tokens divided by elapsed request time; chunks and characters are never treated as token counts.
+- `latest_reasoning` and `latest_output` show the last 400 characters of model-provided reasoning and answer text, with newlines and terminal controls escaped. Reasoning can come from `reasoning_content`, `reasoning`, or inline `<think>` blocks. Only reasoning exposed by the endpoint is available. These previews stay in console logs; reasoning is still filtered from delivered replies and is not added to request metrics.
+- Completion and failure logs include final timing, available prompt/completion/total/cache/reasoning-token counts, and a finish reason or error type. Partial usage survives stream failures. Request metrics also retain first-token latency when measurable, chunk counts, and content/reasoning character counts.
+
+The built-in HTTP client requests streaming and `stream_options.include_usage: true` by default. This uses the compatible SSE protocol and usage/reasoning fields described in [LM Studio's API changelog](https://lmstudio.ai/docs/developer/api-changelog). A server that responds with ordinary JSON remains supported. For endpoints that reject streaming, set the runner's `extra_body.stream` to `false`; waiting heartbeats remain active, while previews and usage arrive with the complete response. To disable just the usage request, set `extra_body.stream_options.include_usage` to `false`. Missing usage and first-token timing are marked unavailable, and a stream that ends without completion is treated as a failed attempt. Full request/response payload logging still requires debug mode.
+
 The current client does not implement the Responses API or native function-tool objects. Those are optional future transports in [agent-modernization.md](./agent-modernization.md); the existing JSON skill protocol remains the local/provider-neutral contract.
 
 ## Add a new skill
@@ -214,7 +223,7 @@ Overdue reminders deliver once on restart, then recurring reminders advance past
 
 `python3 -B run_bot.py --config config --check-config` validates configuration and exits before creating a runner or supervisor. It reads the configuration and contact maps, reports section and field errors, and never checks external credentials or service reachability. `--help` also exits before starting a child process.
 
-Configuration rejects unknown fields, invalid section types, booleans masquerading as numeric limits, nonfinite request values, malformed model URLs, and streaming responses unsupported by this transport. Use `api_key` for authentication; model base URLs cannot contain credentials, queries, or fragments. The documented underscore-prefixed comment fields remain supported.
+Configuration rejects unknown fields, invalid section types, booleans masquerading as numeric limits, nonfinite request values, malformed model URLs, and invalid streaming options. Use `api_key` for authentication; model base URLs cannot contain credentials, queries, or fragments. The documented underscore-prefixed comment fields remain supported.
 
 An absent action policy preserves the existing default behavior. An existing empty, malformed, or unreadable policy denies actions until corrected. Invalid decision values also deny; valid policies retain their existing `allow`, `deny`, and `ask` semantics and action audit records.
 
@@ -229,7 +238,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -B -m pytest 
   --capture=sys --assert=plain -p no:cacheprovider \
   tests/test_reminders.py tests/test_execution.py tests/test_action_runtime.py \
   tests/test_runtime_controls.py tests/test_config_validation.py \
-  tests/test_llm_client.py tests/test_http.py \
+  tests/test_llm_client.py tests/test_llm_streaming.py tests/test_http.py \
   tests/test_trace_metrics.py tests/test_run_bot.py
 ```
 

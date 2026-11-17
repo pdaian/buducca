@@ -473,8 +473,14 @@ def _validate(config: BotConfig, *, config_path: Path) -> None:
             raise ValueError(
                 f"{prefix}.extra_body cannot override protected request fields: {', '.join(protected_fields)}"
             )
-        if runner.extra_body.get("stream", False) is not False:
-            raise ValueError(f"{prefix}.extra_body.stream must be false; streaming responses are not supported")
+        if not isinstance(runner.extra_body.get("stream", True), bool):
+            raise ValueError(f"{prefix}.extra_body.stream must be a boolean")
+        if "stream_options" in runner.extra_body:
+            options = runner.extra_body["stream_options"]
+            if not isinstance(options, dict):
+                raise ValueError(f"{prefix}.extra_body.stream_options must be a JSON object")
+            if not isinstance(options.get("include_usage", True), bool):
+                raise ValueError(f"{prefix}.extra_body.stream_options.include_usage must be a boolean")
         try:
             json.dumps(runner.extra_body, allow_nan=False)
         except (TypeError, ValueError) as exc:

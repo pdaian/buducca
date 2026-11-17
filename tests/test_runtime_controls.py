@@ -34,7 +34,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.bot._typing_indicator = Mock(side_effect=lambda *_args: nullcontext())
         self.bot._send_message = Mock()
         self.bot._append_agenta_query_log = Mock()
-        self.bot.llm.http_client = Mock()
+        self.bot.llm.http_client = Mock(spec=["post_json"])
 
     @staticmethod
     def response(text, *, finish="stop"):

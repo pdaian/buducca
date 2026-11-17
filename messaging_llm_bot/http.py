@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import re
 import socket
 import uuid
-from typing import Any
+from typing import Any, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -34,6 +35,37 @@ class HttpClient:
         req = Request(url=url, data=body, headers=request_headers, method="POST")
         return self._request_json(req)
 
+    def post_json_stream(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Read Chat Completions SSE events, or JSON if the server ignores streaming."""
+        request_headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if headers:
+            request_headers.update(headers)
+        body = json.dumps(payload, allow_nan=False).encode("utf-8")
+        req = Request(url=url, data=body, headers=request_headers, method="POST")
+        safe_url = _safe_url(url)
+        with self._open_response(req) as response:
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type == "application/json":
+                yield self._decode_json(response.read(), safe_url)
+                return
+            data_lines: list[bytes] = []
+            for line in response:
+                line = line.rstrip(b"\r\n")
+                if line.startswith(b"data:"):
+                    data_lines.append(line[5:].removeprefix(b" "))
+                elif not line and data_lines:
+                    raw = b"\n".join(data_lines)
+                    data_lines.clear()
+                    if raw.strip() == b"[DONE]":
+                        return
+                    yield self._decode_json(raw, safe_url)
+            # A dropped connection must not turn a partial answer into a success.
+            if data_lines and b"\n".join(data_lines).strip() == b"[DONE]":
+                return
+            raise RuntimeError(f"Incomplete event stream from {safe_url}")
+
     def get_json(self, url: str) -> dict[str, Any]:
         req = Request(url=url, method="GET")
         return self._request_json(req)
@@ -43,10 +75,15 @@ class HttpClient:
         return self._request_bytes(req)
 
     def _request_bytes(self, req: Request) -> bytes:
+        with self._open_response(req) as response:
+            return response.read()
+
+    @contextmanager
+    def _open_response(self, req: Request):
         safe_url = _safe_url(req.full_url)
         try:
             with urlopen(req, timeout=self.timeout_seconds) as response:
-                return response.read()
+                yield response
         except (socket.timeout, TimeoutError):
             raise RequestTimeoutError(f"Request timed out for {safe_url}") from None
         except HTTPError as err:
@@ -90,10 +127,14 @@ class HttpClient:
 
     def _request_json(self, req: Request) -> dict[str, Any]:
         raw = self._request_bytes(req)
+        return self._decode_json(raw, _safe_url(req.full_url))
+
+    @staticmethod
+    def _decode_json(raw: bytes, safe_url: str) -> dict[str, Any]:
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise RuntimeError(f"Non-JSON response from {_safe_url(req.full_url)}") from None
+            raise RuntimeError(f"Non-JSON response from {safe_url}") from None
         if not isinstance(payload, dict):
-            raise RuntimeError(f"Expected a JSON object from {_safe_url(req.full_url)}")
+            raise RuntimeError(f"Expected a JSON object from {safe_url}")
         return payload
