@@ -3,14 +3,16 @@
 ## What it does
 Shifts each selected Taskwarrior todo's due date **by a fixed amount**, added
 to its existing due date. Positive amounts move dates later; negative amounts
-bring them earlier. Without a date range, selects all unfinished tasks with due
-dates, including future tasks. With both dates, selects unfinished tasks due
-within that inclusive range. Calls the harness user's `task` CLI directly.
+bring them earlier. Without a date range, defaults to **overdue** unfinished
+tasks. Future tasks require explicit `scope: "all"` or a date range that includes
+them. With both dates, selects unfinished tasks due within that inclusive range.
+Calls the harness user's `task` CLI directly.
 
 ## Args schema
 ```ts
 {
   amount: string;
+  scope?: "overdue" | "all" | "date_range";
   start_date?: string;
   end_date?: string;
   dry_run?: boolean;
@@ -25,13 +27,20 @@ within that inclusive range. Calls the harness user's `task` CLI directly.
   earlier. Fractions are allowed when the total is a whole number of seconds,
   e.g. `1.5h` or `-1.5h`. Bare numbers, zero, signs on individual components,
   months, years, and ambiguous `m` units are rejected.
-- Omit both dates to select all pending and waiting tasks with due dates,
-  whether overdue, due today, or due in the future. The amount is added once to
-  each original due date, preserving the spacing between tasks.
+- `scope` defaults to `overdue` when both dates are omitted. It selects pending
+  and waiting tasks whose due timestamp is strictly before a single UTC cutoff
+  captured at the start of selection. Tasks due later today or in the future are
+  excluded. Use this scope for requests to advance overdue todos.
+- Set `scope: "all"` only when the request includes future tasks. This selects
+  all pending and waiting tasks with due dates. **This is an explicit opt-in to
+  the previous no-range behavior.** The amount is added once to each original
+  due date, preserving the spacing between tasks.
 - Supply **both** `start_date` and `end_date` as `YYYY-MM-DD` to restrict
   selection to an inclusive range of due dates in the harness's local
-  timezone. Same-day ranges work. Invalid, incomplete, or reversed ranges fail
-  before reading or modifying tasks.
+  timezone. This implies `scope: "date_range"` when scope is omitted. Same-day
+  ranges work. The dates are required for `date_range` and cannot be combined
+  with `overdue` or `all`. Invalid, incomplete, or reversed ranges fail before
+  reading or modifying tasks.
 - `dry_run` defaults to `false`. Set it to `true` to return a proposed change
   list without issuing writes. A later apply call selects tasks afresh; a preview
   does not reserve or lock them.
@@ -64,7 +73,7 @@ Taskwarrior settings are edited directly. Requires `task` on `PATH` and the
 Python standard library; no extra installation or skill registration is needed.
 
 ## Results and retries
-Results are JSON with `ok`, `dry_run`, `scope` (`all` or `date_range`),
+Results are JSON with `ok`, `dry_run`, `scope` (`overdue`, `all`, or `date_range`),
 signed `amount_seconds`, `matched`, `updated_count`, and `updated`. Each change includes
 `uuid`, `description`, `old_due`, and `new_due`. A preview adds `changes` and has
 zero updates. No matches is a successful result with zero counts and no writes.
@@ -73,6 +82,8 @@ Input/export/preflight errors return `ok:false`, `error`, and `updated_count:0`.
 An update failure also reports `failed` with the attempted old/new dates and an
 `outcome` of `unknown`, plus `unattempted_count`. Only verified updates appear
 in `updated`; the failed task may have changed even if verification failed.
+Include the specific `failed.error` in the chat response so the operator can
+distinguish a CLI error from an unexpected due date during verification.
 
 **Do not blindly repeat a failed apply call.** A second call can advance already
 updated tasks again. Inspect the reported UUIDs with `taskwarrior` and use
@@ -81,11 +92,14 @@ idempotent and does not store a retry ledger.
 
 ## Usage
 ```bash
-# Move all dated unfinished todos two days later.
+# Move overdue unfinished todos two days later.
 python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"2d"}'
 
+# Preview shifting only overdue todos by 210 days.
+python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"210d","scope":"overdue","dry_run":true}'
+
 # Bring all dated unfinished todos two days earlier.
-python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"-2d"}'
+python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"-2d","scope":"all"}'
 
 # Preview todos due November 16 through November 20, inclusive.
 python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"1 week","start_date":"2026-11-16","end_date":"2026-11-20","dry_run":true}'

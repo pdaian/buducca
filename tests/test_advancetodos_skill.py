@@ -62,7 +62,28 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         self.process.return_value = exported(tasks)
         return self.run_skill({"amount": "2d", "dry_run": True, **args})
 
-    def test_default_selection_includes_all_dated_open_tasks(self) -> None:
+    def test_default_selection_includes_only_overdue_open_tasks(self) -> None:
+        tasks = [
+            task(1), task(2, "20261116T115959Z", "waiting"),
+            task(3, "20261116T120000Z"), task(4, "20261116T120001Z"),
+            task(5, status="completed"), task(6, status="deleted"),
+            task(7, status="recurring"), task(8, due=None),
+            task(9, "20270716T090000Z", description="renew progressive"),
+            task(10, "20261201T090000Z", "waiting"),
+        ]
+        for args in ({}, {"scope": "overdue"}):
+            with self.subTest(args=args):
+                self.process.reset_mock()
+                result = self.preview(tasks, **args)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["scope"], "overdue")
+                self.assertEqual(result["matched"], 2)
+                self.assertEqual(result["updated_count"], 0)
+                self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[0]["uuid"], tasks[1]["uuid"]])
+                self.assertEqual(self.process.call_count, 1)
+                self.assertEqual(self.mutations(), [])
+
+    def test_explicit_all_scope_includes_future_dated_open_tasks(self) -> None:
         tasks = [
             task(1), task(2, "20261116T115959Z", "waiting"),
             task(3, "20261116T120000Z"), task(4, "20261116T120001Z"),
@@ -70,7 +91,7 @@ class AdvanceTodosSkillTests(unittest.TestCase):
             task(7, status="recurring"), task(8, due=None),
             task(9, "20261201T090000Z", "waiting"),
         ]
-        result = self.preview(tasks)
+        result = self.preview(tasks, scope="all")
         self.assertTrue(result["ok"])
         self.assertEqual(result["scope"], "all")
         self.assertEqual(result["matched"], 5)
@@ -98,7 +119,7 @@ class AdvanceTodosSkillTests(unittest.TestCase):
                     exported([first, second]), response(), exported([{**first, "due": due_dates[0]}]),
                     response(), exported([{**second, "due": due_dates[1]}]),
                 ]
-                result = self.run_skill({"amount": amount})
+                result = self.run_skill({"amount": amount, "scope": "all"})
                 self.assertTrue(result["ok"])
                 self.assertFalse(result["dry_run"])
                 self.assertEqual(result["scope"], "all")
@@ -116,16 +137,48 @@ class AdvanceTodosSkillTests(unittest.TestCase):
                     self.assertEqual(command[command.index("modify") + 1:], [f"due:{change['new_due']}"])
                 self.assertEqual(self.process.call_count, 5)
 
+    def test_210_day_apply_excludes_future_task_and_verifies_each_update(self) -> None:
+        future = task(1, "20270716T090000Z", description="renew progressive")
+        first, second = task(2, "20260601T090000Z"), task(3, "20260602T090000Z", "waiting")
+        self.process.side_effect = [
+            exported([future, first, second]),
+            response(), exported([{**first, "due": "20261228T090000Z"}]),
+            response(), exported([{**second, "due": "20261229T090000Z"}]),
+        ]
+        result = self.run_skill({"amount": "210d"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["scope"], "overdue")
+        self.assertEqual(result["matched"], 2)
+        self.assertEqual(result["updated_count"], 2)
+        self.assertEqual([item["uuid"] for item in result["updated"]], [first["uuid"], second["uuid"]])
+        for command in self.mutations():
+            self.assertNotIn(future["uuid"], command)
+        reads = [call.args[0] for call in self.process.call_args_list if "export" in call.args[0]]
+        self.assertEqual([command[-1] for command in reads], ["export"] * 3)
+        self.assertEqual(reads[1][-2], f"( {first['uuid']} )")
+        self.assertEqual(reads[2][-2], f"( {second['uuid']} )")
+
+    def test_overdue_selection_uses_one_utc_cutoff_in_any_timezone(self) -> None:
+        tasks = [task(1, "20261116T115959Z"), task(2, "20261116T120000Z"), task(3, "20261116T120001Z")]
+        with patch.dict(os.environ, {"TZ": "America/New_York"}):
+            time.tzset()
+            result = self.preview(tasks)
+        time.tzset()
+        self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[0]["uuid"]])
+        self.clock.now.assert_called_once_with(timezone.utc)
+
     def test_inclusive_date_range_restricts_selection(self) -> None:
         tasks = [
             task(1, "20261201T000000Z"), task(2, "20261203T235959Z"),
             task(3, "20261130T235959Z"), task(4, "20261204T000000Z"),
             task(5, "20261202T120000Z", "waiting"), task(6, "20261202T120000Z", "completed"),
         ]
-        result = self.preview(tasks, start_date="2026-12-01", end_date="2026-12-03")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["scope"], "date_range")
-        self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[i]["uuid"] for i in (0, 1, 4)])
+        for args in ({}, {"scope": "date_range"}):
+            with self.subTest(args=args):
+                result = self.preview(tasks, start_date="2026-12-01", end_date="2026-12-03", **args)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["scope"], "date_range")
+                self.assertEqual([item["uuid"] for item in result["changes"]], [tasks[i]["uuid"] for i in (0, 1, 4)])
 
     def test_date_range_applies_instead_of_only_previewing(self) -> None:
         original = task(1, "20261201T010000Z")
@@ -184,7 +237,7 @@ class AdvanceTodosSkillTests(unittest.TestCase):
             response(), exported([{**child, "due": "20261117T090000Z"}]),
             response(), exported([{**sibling, "due": "20261203T090000Z"}]),
         ]
-        result = self.run_skill({"amount": "2d"})
+        result = self.run_skill({"amount": "2d", "scope": "all"})
         self.assertTrue(result["ok"])
         self.assertEqual(result["updated_count"], 2)
         self.assertEqual([item["uuid"] for item in result["updated"]], [child["uuid"], sibling["uuid"]])
@@ -215,6 +268,11 @@ class AdvanceTodosSkillTests(unittest.TestCase):
     def test_invalid_inputs_do_not_read_or_write_tasks(self) -> None:
         cases = [None, [], {}, {"amount": "1d", "duration": "2d"},
                  {"amount": "1d", "dry_run": "false"}, {"amount": "1d", "dry_run": 1},
+                 {"amount": "1d", "scope": "pending"}, {"amount": "1d", "scope": None},
+                 {"amount": "1d", "scope": True}, {"amount": "1d", "scope": []},
+                 {"amount": "1d", "scope": "date_range"},
+                 {"amount": "1d", "scope": "all", "start_date": "2026-01-01", "end_date": "2026-01-02"},
+                 {"amount": "1d", "scope": "overdue", "start_date": "2026-01-01", "end_date": "2026-01-02"},
                  {"amount": "1d", "start_date": "2026-01-01"},
                  {"amount": "1d", "end_date": "2026-01-01"},
                  {"amount": "1d", "start_date": None, "end_date": None},
@@ -264,7 +322,7 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         for amount, due in (("1d", "99991231T235959Z"), ("-1d", "00010101T000000Z")):
             with self.subTest(amount=amount):
                 self.process.return_value = exported([task(1), task(2, due)])
-                result = self.run_skill({"amount": amount})
+                result = self.run_skill({"amount": amount, "scope": "all"})
                 self.assertFalse(result["ok"])
                 self.assertIn("supported date range", result["error"])
                 self.assertEqual(result["updated_count"], 0)
@@ -284,6 +342,7 @@ class AdvanceTodosSkillTests(unittest.TestCase):
         self.assertEqual(result["failed"]["uuid"], second["uuid"])
         self.assertEqual(result["failed"]["outcome"], "unknown")
         self.assertIn("Hook rejected change", result["failed"]["error"])
+        self.assertIn("Hook rejected change", result["error"])
         self.assertEqual(result["unattempted_count"], 1)
         self.assertEqual(len(self.mutations()), 2)
 

@@ -60,9 +60,14 @@ def run_task(arguments: list[str]) -> str:
 
 
 def export_tasks(filters: list[str]) -> list[dict[str, Any]]:
-    # Export accepts filters after the command. Selecting the command first keeps
-    # search terms that happen to name a command from becoming write operations.
-    output = run_task(["export", *filters])
+    # Taskwarrior 3.5 treats arguments after export as report names, not filters.
+    # Keep the filter in one parenthesized argument before export so command
+    # names and aliases within search terms cannot become write operations.
+    # limit is a CLI setting, so it must remain outside the grouped expression.
+    limits = [term for term in filters if term.startswith(("limit:", "limit="))]
+    terms = [term for term in filters if not term.startswith(("limit:", "limit="))]
+    arguments = [f"( {' '.join(terms)} )"] if terms else []
+    output = run_task([*arguments, *limits, "export"])
     try:
         tasks = json.loads(output)
     except json.JSONDecodeError as exc:

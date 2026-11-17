@@ -60,14 +60,32 @@ class TaskwarriorSkillTests(unittest.TestCase):
         self.assertTrue(self.run_skill({"action": "LIST", "command": "list"})["ok"])
 
     def test_list_keeps_command_named_search_terms_read_only(self) -> None:
-        result = self.run_skill({"filter": ["delete", "+PENDING"]})
-        self.assertTrue(result["ok"])
-        self.assertEqual(self.process.call_args.args[0][-3:], ["export", "delete", "+PENDING"])
+        for term in ("delete", "del", "done", "modify", "export", "finish"):
+            with self.subTest(term=term):
+                result = self.run_skill({"filter": [term, "+PENDING"]})
+                self.assertTrue(result["ok"])
+                # A single grouped argument also protects configured aliases.
+                self.assertEqual(self.process.call_args.args[0][-2:], [f"( {term} +PENDING )", "export"])
 
     def test_list_handles_empty_results_and_explicit_filters(self) -> None:
         result = self.run_skill({"filter": ["project:Home", "status:pending"]})
         self.assertEqual(result["tasks"], [])
-        self.assertEqual(self.process.call_args.args[0][-3:], ["export", "project:Home", "status:pending"])
+        self.assertEqual(self.process.call_args.args[0][-2:], ["( project:Home status:pending )", "export"])
+
+    def test_uuid_and_overdue_filters_precede_export(self) -> None:
+        for filters in ([UUID], ["+OVERDUE"], ["(", "status:pending", "or", "status:waiting", ")", "due.any:"]):
+            with self.subTest(filters=filters):
+                result = self.run_skill({"filter": filters})
+                self.assertTrue(result["ok"])
+                self.assertEqual(self.process.call_args.args[0][-2:], [f"( {' '.join(filters)} )", "export"])
+
+    def test_list_preserves_explicit_limits_outside_filter_expression(self) -> None:
+        for limit in ("limit:5", "limit:page", "limit=0"):
+            with self.subTest(limit=limit):
+                self.run_skill({"filter": ["+PENDING", limit]})
+                self.assertEqual(self.process.call_args.args[0][-3:], ["( +PENDING )", limit, "export"])
+                self.run_skill({"filter": [limit]})
+                self.assertEqual(self.process.call_args.args[0][-2:], [limit, "export"])
 
     def test_string_filter_preserves_quoted_terms(self) -> None:
         for filters in ('description.contains:"annual report" +PENDING',
@@ -75,7 +93,7 @@ class TaskwarriorSkillTests(unittest.TestCase):
                         ['description.contains:"annual report"', "+PENDING"]):
             with self.subTest(filters=filters):
                 self.run_skill({"filter": filters})
-                self.assertEqual(self.process.call_args.args[0][-2:], ['description.contains:"annual report"', "+PENDING"])
+                self.assertEqual(self.process.call_args.args[0][-2:], ['( description.contains:"annual report" +PENDING )', "export"])
 
     def test_rejects_invalid_arguments_before_any_cli_call(self) -> None:
         cases = [
@@ -162,6 +180,9 @@ class TaskwarriorSkillTests(unittest.TestCase):
                 self.assertEqual({field["name"] for field in fields if field["required"]}, required)
                 self.assertTrue(manifest["requires_llm_response"])
                 self.assertTrue(manifest["human_help_surface"]["what_it_does"])
+                if name == "advancetodos":
+                    self.assertEqual(next(field["schema"] for field in fields if field["name"] == "scope"),
+                                     '"overdue" | "all" | "date_range"')
         self.process.assert_not_called()
 
     def test_harness_cli_executes_both_skills(self) -> None:

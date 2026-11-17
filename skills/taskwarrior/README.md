@@ -79,6 +79,15 @@ clear the active context so selection follows the supplied arguments. Recurring
 instance edits do not propagate to siblings (`recurrence.confirmation=no`).
 Taskwarrior hooks remain active. No persistent configuration is changed.
 
+Export filters are passed as one parenthesized argument **before** `export`.
+Taskwarrior 3.5's [export implementation](https://github.com/GothenburgBitFactory/taskwarrior/blob/v3.5.0/src/commands/CmdExport.cpp)
+interprets arguments after `export` as report names: several
+trailing filter terms can be ignored, while a single UUID fails report lookup.
+Grouping also keeps command names and configured aliases used as search text
+from becoming commands. Explicit `limit:`/`limit=` settings remain separate CLI
+arguments. This fixes both filtered listing and the UUID readback used by
+`advancetodos` without depending on database internals.
+
 The command/JSON boundary avoids dependence on Taskwarrior 2.x text storage or
 3.x database internals. The result format now consistently uses JSON:
 `{"ok":true,"action":"list","tasks":[...]}`,

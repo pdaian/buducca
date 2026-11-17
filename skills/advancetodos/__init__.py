@@ -16,17 +16,20 @@ DESCRIPTION = (
     "positive amounts move dates later, negative amounts such as '-2d' or '-PT90M' move them earlier. "
     "A single leading sign applies to the entire duration, e.g. '-1h 30min' means 90 minutes earlier; "
     "units are weeks, days (24h), hours, minutes (min), and seconds. Months/years are unsupported. "
-    "By default selects all pending/waiting tasks with due dates, including future tasks. "
+    "Without a date range, scope defaults to 'overdue': pending/waiting tasks due before now. "
+    "Use scope='overdue' when asked to advance overdue todos; future tasks are excluded. "
+    "Use scope='all' only when explicitly asked to include future dated tasks. "
     "Supply both start_date and end_date as YYYY-MM-DD to restrict selection to tasks due "
-    "within those inclusive dates in the harness timezone. "
+    "within those inclusive dates in the harness timezone (scope='date_range', inferred from dates). "
     "Only due is changed; recurring templates and completed/deleted/undated tasks are excluded. "
     "dry_run=true previews changes; default false applies them directly. "
     "JSON reports ok, matched, updated_count, and old/new due dates. "
-    "On failure, inspect updated/failed before retrying: rerunning can advance tasks twice."
+    "On failure, report failed.error and inspect updated/failed before retrying: rerunning can advance tasks twice."
 )
 ARGS_SCHEMA = """
 {
   amount: string;
+  scope?: "overdue" | "all" | "date_range";
   start_date?: string;
   end_date?: string;
   dry_run?: boolean;
@@ -98,7 +101,7 @@ def _due(value: Any) -> datetime:
 
 def _plan(
     tasks: list[dict[str, Any]], amount: timedelta,
-    start: date | None, end: date | None,
+    start: date | None, end: date | None, overdue_before: datetime | None,
 ) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -108,6 +111,8 @@ def _plan(
         if task.get("status") not in _OPEN_STATUSES or not task.get("due"):
             continue
         due = _due(task["due"])
+        if overdue_before is not None and due >= overdue_before:
+            continue
         if start is not None and end is not None:
             if not start <= due.astimezone().date() <= end:
                 continue
@@ -133,7 +138,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
     try:
         if not isinstance(args, dict):
             raise ValueError("Arguments must be a JSON object.")
-        unknown = args.keys() - {"amount", "start_date", "end_date", "dry_run"}
+        unknown = args.keys() - {"amount", "scope", "start_date", "end_date", "dry_run"}
         if unknown:
             raise ValueError(f"Unsupported arguments: {', '.join(sorted(unknown))}.")
         amount = _duration(args.get("amount"))
@@ -141,19 +146,25 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
         if not isinstance(dry_run, bool):
             raise ValueError("`dry_run` must be a boolean.")
         if ("start_date" in args) != ("end_date" in args):
-            raise ValueError("Supply both `start_date` and `end_date`, or omit both for all dated pending/waiting tasks.")
+            raise ValueError("Supply both `start_date` and `end_date`, or omit both.")
         start = _date(args["start_date"], "start_date") if "start_date" in args else None
         end = _date(args["end_date"], "end_date") if "end_date" in args else None
         if start is not None and end is not None and start > end:
             raise ValueError("`start_date` must be on or before `end_date`.")
-        changes = _plan(export_tasks(_OPEN_FILTER), amount, start, end)
+        scope = args.get("scope", "date_range" if start is not None else "overdue")
+        if scope not in ("overdue", "all", "date_range"):
+            raise ValueError("`scope` must be overdue, all, or date_range.")
+        if (scope == "date_range") != (start is not None):
+            raise ValueError("`start_date` and `end_date` are required only for scope='date_range'.")
+        overdue_before = datetime.now(timezone.utc) if scope == "overdue" else None
+        changes = _plan(export_tasks(_OPEN_FILTER), amount, start, end, overdue_before)
     except (ValueError, OverflowError, TaskwarriorError) as exc:
         return json.dumps({"ok": False, "error": str(exc), "updated_count": 0})
 
     result: dict[str, Any] = {
         "ok": True,
         "dry_run": dry_run,
-        "scope": "date_range" if start is not None else "all",
+        "scope": scope,
         "amount_seconds": amount // timedelta(seconds=1),
         "matched": len(changes),
         "updated_count": 0,
@@ -180,7 +191,7 @@ def run(workspace: Workspace, args: dict[str, Any]) -> str:
             except TaskwarriorError as exc:
                 result.update({
                     "ok": False,
-                    "error": "Stopped after a failed update. Inspect updated/failed tasks before retrying; rerunning can advance tasks twice.",
+                    "error": f"Stopped after a failed update: {exc} Inspect updated/failed tasks before retrying; rerunning can advance tasks twice.",
                     "failed": {**change, "error": str(exc), "outcome": "unknown"},
                     "unattempted_count": len(changes) - index - 1,
                 })
