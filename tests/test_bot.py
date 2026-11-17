@@ -3529,7 +3529,7 @@ class BotTests(unittest.TestCase):
         self.assertIn("Skill `web_search` returned:\nresult", bot.llm.messages[-1]["content"])
 
     def test_web_search_chain_uses_full_html_once_then_summarizes_in_prompt_buffer(self) -> None:
-        bot = self.make_bot()
+        bot = self.make_bot(runtime=RuntimeConfig(max_skill_result_chars=None))
 
         class InspectingLLM:
             def __init__(self) -> None:

@@ -36,7 +36,7 @@ python3 run_bot.py --config config
 
 For a fuller boot sequence, collector setup, and command reference, see [docs/getting-started.md](docs/getting-started.md).
 
-The example runtime now bounds model requests, repeated skill results, and tool-result context. Full results and stop reasons remain inspectable in local traces, and omitted text can be read within the same turn. Existing configurations keep their prior limits until the new settings are enabled; see [configuration controls](config.example/README.md).
+Skill results sent to the model default to a 4,000-character preview, with full results retained in local traces and omitted text readable within the same turn. The example runtime also bounds model requests and repeated skill results. See [configuration controls](config.example/README.md) for limits and context-overflow recovery.
 
 ## Model paths
 

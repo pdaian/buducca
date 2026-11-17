@@ -3,10 +3,11 @@ import json
 import socket
 import traceback
 import unittest
+from http.client import IncompleteRead
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
-from messaging_llm_bot.http import HttpClient, RequestTimeoutError
+from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError
 
 
 class HttpClientTests(unittest.TestCase):
@@ -64,6 +65,52 @@ class HttpClientTests(unittest.TestCase):
                     client.get_json("https://example.invalid?secret=PRIVATE")
                 self.assertNotIn("SECRET", str(caught.exception))
                 self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_context_errors_are_classified_without_exposing_response_bodies(self) -> None:
+        url = "https://user:password@example.invalid/v1/chat/completions?key=PRIVATE"
+        bodies = [
+            {"error": {"code": "context_length_exceeded", "message": "SECRET password"}},
+            {"error": {"code": 400, "type": "exceed_context_size_error", "n_prompt_tokens": 24689, "n_ctx": 8192}},
+            {"error": "request (24689 tokens) exceeds the available context size (8192 tokens), try increasing it SECRET"},
+            {"error": {"message": "Trying to keep the first 10000 tokens when context the length is only 8192"}},
+            {"error": {"message": "This model's maximum context length is 8192 tokens. However, you requested 10000 tokens."}},
+        ]
+        for streaming in (False, True):
+            for body in bodies:
+                response = io.BytesIO(json.dumps(body).encode())
+                error = HTTPError(url, 400, "Bad Request", {}, response)
+                with self.subTest(streaming=streaming, body=body), patch("messaging_llm_bot.http.urlopen", side_effect=error):
+                    with self.assertRaises(ContextLengthExceededError) as caught:
+                        client = HttpClient(1)
+                        if streaming:
+                            list(client.post_json_stream(url, {}))
+                        else:
+                            client.post_json(url, {})
+                rendered = "".join(traceback.format_exception(caught.exception))
+                self.assertIn("model context window exceeded", rendered)
+                for secret in ("SECRET", "PRIVATE", "password", "user:"):
+                    self.assertNotIn(secret, rendered)
+                self.assertTrue(response.closed)
+
+    def test_unrelated_bad_requests_remain_generic_and_body_reads_are_bounded(self) -> None:
+        for body in (b'{"error":{"message":"Unknown model SECRET"}}', b'[]', b'null', b'\xffSECRET', b'x' * 100000):
+            response = io.BytesIO(body)
+            error = HTTPError("https://example.invalid", 400, "Bad Request", {}, response)
+            with self.subTest(body=body[:100]), patch("messaging_llm_bot.http.urlopen", side_effect=error), patch.object(error, "read", wraps=error.read) as read:
+                with self.assertRaises(RuntimeError) as caught:
+                    HttpClient(1).post_json("https://example.invalid", {})
+                self.assertNotIsInstance(caught.exception, ContextLengthExceededError)
+                self.assertEqual(str(caught.exception), "HTTP 400 for https://example.invalid")
+                read.assert_called_once_with(8192)
+            self.assertTrue(response.closed)
+
+    def test_failed_error_body_read_preserves_http_status_and_closes_response(self) -> None:
+        for failure in (TimeoutError("SECRET"), IncompleteRead(b"SECRET")):
+            error = HTTPError("https://example.invalid", 400, "Bad Request", {}, io.BytesIO())
+            with self.subTest(failure=type(failure).__name__), patch("messaging_llm_bot.http.urlopen", side_effect=error), patch.object(error, "read", side_effect=failure):
+                with self.assertRaisesRegex(RuntimeError, "^HTTP 400 for https://example.invalid$"):
+                    HttpClient(1).post_json("https://example.invalid", {})
+            self.assertTrue(error.closed)
 
     def test_nonfinite_request_json_is_rejected_before_network_io(self) -> None:
         with patch("messaging_llm_bot.http.urlopen") as request:

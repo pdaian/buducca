@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .config import LLMConfig, LLMRunnerConfig, _effective_llm_runners
-from .http import HttpClient, _safe_url
+from .http import ContextLengthExceededError, HttpClient, _is_context_length_error, _safe_url
 from .llm_progress import RequestProgress
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
@@ -311,6 +311,8 @@ class OpenAICompatibleClient:
                         self._observe_response(progress, data)
                     if not isinstance(data, dict):
                         raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
+                    if data.get("error") is not None and _is_context_length_error(data):
+                        raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
                     choice = self._extract_primary_choice(data)
                     request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
             except BaseException as exc:
@@ -383,6 +385,8 @@ class OpenAICompatibleClient:
                     raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
                 self._observe_response(progress, data, streamed=True)
                 if data.get("error") is not None:
+                    if _is_context_length_error(data):
+                        raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
                     raise RuntimeError(f"LLM endpoint returned a streaming error from {_safe_url(url)}")
                 choices = data.get("choices")
                 if not isinstance(choices, list) or any(not isinstance(choice, dict) for choice in choices):

@@ -26,9 +26,9 @@ The example runtime enables these limits:
 | `max_skill_chain_steps` | `12` | Maximum completed skill calls, with a final model response still permitted. |
 | `max_llm_requests_per_turn` | `24` | Maximum actual endpoint attempts, including failures, continuations, and failover, across the entire turn. |
 | `max_repeated_skill_results` | `3` | Stop after this many consecutive identical skill names, arguments, and results. Changing results or intervening calls reset the count. |
-| `max_skill_result_chars` | `16000` | Maximum characters from each skill result sent to the model, including the truncation notice. Full results remain in the trace. |
+| `max_skill_result_chars` | `4000` | Maximum characters from each skill result sent to the model, including the truncation notice. Full results remain in the trace. |
 
-The three new limits are optional: omit them or set them to `null` to retain previous behavior. Minimum values are `1`, `2`, and `512`, respectively. Set the repetition limit to `null` for workflows that intentionally poll unchanged results. These are execution and character limits, not token or billing guarantees; existing actions are not rolled back when a limit stops a turn.
+Omitting `max_skill_result_chars` uses a 4,000-character limit, including in existing configurations. Set it to `null` to disable result limits and context-overflow recovery. The request and repetition limits remain disabled when omitted or set to `null`. Minimum values are `1`, `2`, and `512`, respectively. Set the repetition limit to `null` for workflows that intentionally poll unchanged results. These are execution and character limits, not token or billing guarantees; existing actions are not rolled back when a limit stops a turn.
 
 When result limits are enabled, the runtime reserves the skill name `read_skill_result` for reading omitted ranges from completed results in the current turn. It cannot read other conversations, previous turns, or arbitrary trace files. See [runtime controls](../docs/developer-guide.md#execution-limits-and-result-recovery) for the call shape and trace fields.
 

@@ -17,17 +17,17 @@ class ConfigValidationTests(unittest.TestCase):
         with patch("messaging_llm_bot.config.load_json_path", return_value=deepcopy(self.raw)):
             return load_config("config")
 
-    def test_legacy_configs_leave_new_limits_disabled(self) -> None:
+    def test_legacy_configs_bound_skill_results_by_default(self) -> None:
         config = self.load()
         self.assertIsNone(config.runtime.max_llm_requests_per_turn)
         self.assertIsNone(config.runtime.max_repeated_skill_results)
-        self.assertIsNone(config.runtime.max_skill_result_chars)
+        self.assertEqual(config.runtime.max_skill_result_chars, 4000)
 
     def test_checked_in_example_is_valid(self) -> None:
         config = load_config("config.example")
         self.assertEqual(config.runtime.max_llm_requests_per_turn, 24)
         self.assertEqual(config.runtime.max_repeated_skill_results, 3)
-        self.assertEqual(config.runtime.max_skill_result_chars, 16000)
+        self.assertEqual(config.runtime.max_skill_result_chars, 4000)
 
     def test_limits_accept_null_and_their_minimum(self) -> None:
         for name, minimum in (("max_llm_requests_per_turn", 1), ("max_repeated_skill_results", 2), ("max_skill_result_chars", 512)):

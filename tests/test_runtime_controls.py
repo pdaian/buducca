@@ -1,13 +1,16 @@
+import io
 import json
 import threading
 import unittest
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from assistant_framework.skills import Skill
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
+from messaging_llm_bot.http import ContextLengthExceededError, HttpClient
 
 
 class RuntimeControlTests(unittest.TestCase):
@@ -176,7 +179,193 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertTrue(self.bot._handle_message(1, "second"))
         self.assertIn("step is unavailable in this turn", self.traces[-1]["steps"][0]["skill_result"])
 
+    def test_default_limit_bounds_large_results_before_follow_up(self) -> None:
+        result = "start" + "x" * 33926 + "end!!"
+        self.skill.run.return_value = result
+        prompts = []
+        responses = iter([self.call(), self.response("Done")])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            return next(responses)
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        self.assertTrue(self.bot._handle_message(1, "read"))
+        self.assertNotIn(result, prompts[1][-1]["content"])
+        self.assertIn("read_skill_result", prompts[1][-1]["content"])
+        step = self.traces[-1]["steps"][0]
+        self.assertEqual(step["result_chars"], 33936)
+        self.assertEqual(step["context_chars"], 4000)
+        self.assertEqual(step["skill_result"], result)
+
+    def test_http_context_overflow_recovers_without_repeating_skill(self) -> None:
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming):
+                self.skill.run.reset_mock()
+                result = "start" + "x" * 6000 + "end"
+                self.skill.run.return_value = result
+                self.bot.llm.http_client = HttpClient(1)
+                self.bot.llm._runners[0].extra_body = {"stream": streaming}
+                messages = [{"role": "system", "content": "Keep these instructions."},
+                            {"role": "user", "content": "Keep the full request."}]
+                self.bot._build_messages = Mock(side_effect=lambda *_args, **_kwargs: [dict(m) for m in messages])
+                responses = []
+                for response in (self.call(), self.response("Recovered")):
+                    body = io.BytesIO(json.dumps(response).encode())
+                    body.headers = {"Content-Type": "application/json"}
+                    responses.append(body)
+                error = HTTPError("https://example.invalid/v1/chat/completions", 400, "Bad Request", {}, io.BytesIO(
+                    json.dumps({"error": {"type": "exceed_context_size_error", "n_prompt_tokens": 24689, "n_ctx": 8192}}).encode(),
+                ))
+                with patch("messaging_llm_bot.http.urlopen", side_effect=[responses[0], error, responses[1]]) as request, self.assertLogs(level="WARNING"):
+                    self.assertTrue(self.bot._handle_message(1, "work"))
+                self.skill.run.assert_called_once()
+                payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(len(payloads), 3)
+                self.assertEqual(payloads[2]["messages"][:2], messages)
+                self.assertEqual(payloads[2]["messages"][2], payloads[1]["messages"][2])
+                self.assertLess(len(payloads[2]["messages"][-1]["content"]), len(payloads[1]["messages"][-1]["content"]))
+                trace = self.traces[-1]
+                self.assertTrue(trace["final_reply"].startswith("Recovered"))
+                self.assertEqual(trace["steps"][0]["skill_result"], result)
+                self.assertEqual(trace["steps"][0]["context_chars"], 2000)
+                self.assertEqual(trace["metrics"]["request_count"], 3)
+                self.assertEqual(trace["metrics"]["requests"][1]["error"], "ContextLengthExceededError")
+                self.assertEqual(self.bot.config.runtime.max_skill_result_chars, 4000)
+                self.assertTrue(all(response.closed for response in [*responses, error]))
+
+    def test_recovery_compacts_previous_results_and_retains_readback(self) -> None:
+        result = "start" + "x" * 3000 + "MIDDLE EVIDENCE" + "y" * 3000 + "end"
+        self.skill.run.return_value = result
+        prompts = []
+        responses = iter([
+            self.call(), self.call(), ContextLengthExceededError("context full"),
+            self.call("read_skill_result", {"step": 1, "offset": 3005, "limit": 15}), self.response("Done"),
+        ])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            response = next(responses)
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "read"))
+        self.assertEqual(self.skill.run.call_count, 2)
+        self.assertNotIn("MIDDLE EVIDENCE", prompts[3][-1]["content"])
+        self.assertIn("MIDDLE EVIDENCE", prompts[4][-1]["content"])
+        self.assertLess(len(prompts[3][2]["content"]), len(prompts[2][2]["content"]))
+        self.assertEqual([step["context_chars"] for step in self.traces[-1]["steps"][:2]], [2000, 2000])
+        self.assertEqual(self.traces[-1]["steps"][0]["skill_result"], result)
+
+    def test_context_recovery_is_bounded_and_reports_actionable_error(self) -> None:
+        self.skill.run.return_value = "x" * 5000
+        self.bot.llm.http_client.post_json.side_effect = [self.call(), *[ContextLengthExceededError("context full")] * 3]
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.skill.run.assert_called_once()
+        trace = self.traces[-1]
+        self.assertEqual(trace["metrics"]["request_count"], 4)
+        self.assertEqual(trace["error"], "context_length_exceeded")
+        self.assertEqual(trace["metrics"]["stop_reason"], "context_length_exceeded")
+        self.assertEqual(trace["steps"][0]["context_chars"], 1000)
+        self.assertIn("Increase the model's loaded context length", trace["final_reply"])
+        self.assertIn("Completed actions", trace["final_reply"])
+
+    def test_reduced_cap_applies_to_readback_and_later_results_only_in_current_turn(self) -> None:
+        result = "x" * 6000
+        self.skill.run.return_value = result
+        self.bot.llm.http_client.post_json.side_effect = [
+            self.call(), ContextLengthExceededError("context full"),
+            self.call("read_skill_result", {"step": 1, "limit": 10000}), self.call(), self.response("Done"),
+            self.call(), self.response("Next turn"),
+        ]
+        with self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "work"))
+        steps = self.traces[-1]["steps"]
+        self.assertEqual(steps[0]["context_chars"], 2000)
+        self.assertLessEqual(steps[1]["result_chars"], 2000)
+        self.assertFalse(steps[1]["result_truncated"])
+        self.assertEqual(steps[2]["context_chars"], 2000)
+        self.assertIn("next offset 1840", steps[1]["skill_result"])
+        self.assertIsNone(self.bot._request_state.skill_result_chars)
+        self.assertTrue(self.bot._handle_message(1, "new work"))
+        self.assertEqual(self.traces[-1]["steps"][0]["context_chars"], 4000)
+
+    def test_context_recovery_consumes_existing_request_budget(self) -> None:
+        self.bot.config.runtime.max_llm_requests_per_turn = 2
+        self.skill.run.return_value = "x" * 5000
+        self.bot.llm.http_client.post_json.side_effect = [self.call(), ContextLengthExceededError("context full")]
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.skill.run.assert_called_once()
+        self.assertEqual(self.traces[-1]["error"], "request_budget_exceeded")
+        self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
+
+    def test_context_recovery_does_not_change_concurrent_conversation_limits(self) -> None:
+        self.skill.run.return_value = "x" * 6000
+        barrier = threading.Barrier(2, timeout=3)
+        attempts = {"1": 0, "2": 0}
+        outcomes = []
+
+        def respond(_url, payload, **_kwargs):
+            conversation = payload["messages"][0]["content"]
+            attempts[conversation] += 1
+            if attempts[conversation] == 1:
+                barrier.wait()
+                return self.call()
+            if conversation == "1" and attempts[conversation] == 2:
+                raise ContextLengthExceededError("context full")
+            return self.response("Done")
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        threads = [threading.Thread(target=lambda value=value: outcomes.append(self.bot._handle_message(value, str(value))))
+                   for value in (1, 2)]
+        with self.assertLogs(level="WARNING"):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [True, True])
+        traces = {trace["conversation_id"]: trace for trace in self.traces}
+        self.assertEqual(traces["1"]["steps"][0]["context_chars"], 2000)
+        self.assertEqual(traces["2"]["steps"][0]["context_chars"], 4000)
+        self.assertEqual(self.bot.config.runtime.max_skill_result_chars, 4000)
+
+    def test_unrelated_bad_request_does_not_trigger_context_recovery(self) -> None:
+        self.skill.run.return_value = "x" * 5000
+        self.bot.llm.http_client.post_json.side_effect = [self.call(), RuntimeError("HTTP 400 for https://example.invalid")]
+        with self.assertLogs(level="ERROR"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
+        self.assertEqual(self.traces[-1]["steps"][0]["context_chars"], 4000)
+
+    def test_disabled_result_limit_and_small_results_do_not_retry_identical_prompts(self) -> None:
+        for limit, result in ((None, "x" * 5000), (4000, "small"), (512, "x" * 5000)):
+            with self.subTest(limit=limit, size=len(result)):
+                self.bot.config.runtime.max_skill_result_chars = limit
+                self.skill.run.return_value = result
+                self.bot.llm.http_client.post_json.side_effect = [self.call(), ContextLengthExceededError("context full")]
+                with self.assertLogs(level="WARNING"):
+                    self.assertFalse(self.bot._handle_message(1, "work"))
+                self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
+                self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
+
+    def test_initial_prompt_overflow_reports_error_without_retrying(self) -> None:
+        self.bot.llm.http_client.post_json.side_effect = ContextLengthExceededError("context full")
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.bot.llm.http_client.post_json.assert_called_once()
+        self.skill.run.assert_not_called()
+        self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
+        self.assertNotIn("Completed actions", self.traces[-1]["final_reply"])
+
     def test_reader_is_only_exposed_when_limits_are_enabled(self) -> None:
+        self.assertIn("read_skill_result", self.bot._load_runtime_skills())
+        self.bot.config.runtime.max_skill_result_chars = None
         self.assertNotIn("read_skill_result", self.bot._load_runtime_skills())
         self.bot.config.runtime.max_skill_result_chars = 512
         self.assertIn("read_skill_result", self.bot._load_runtime_skills())

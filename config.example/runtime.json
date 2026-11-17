@@ -5,7 +5,7 @@
   "max_skill_chain_steps": 12,
   "max_llm_requests_per_turn": 24,
   "max_repeated_skill_results": 3,
-  "max_skill_result_chars": 16000,
+  "max_skill_result_chars": 4000,
   "workspace_dir": "workspace",
   "collector_status_file": "collector_status.json",
   "hourly_file": "hourly",

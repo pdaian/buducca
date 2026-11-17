@@ -130,7 +130,7 @@ class RuntimeConfig:
     enable_reply_citations: bool = True
     max_llm_requests_per_turn: int | None = None
     max_repeated_skill_results: int | None = None
-    max_skill_result_chars: int | None = None
+    max_skill_result_chars: int | None = 4000
 
 
 @dataclass

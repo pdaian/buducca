@@ -219,7 +219,7 @@ This reports invalid settings without starting frontend sessions, contacting the
 python3 run_bot.py --config config
 ```
 
-The example runtime caps each turn at 24 endpoint attempts and 12 skill calls, detects three consecutive identical skill results, and limits each model-visible result to 16,000 characters. Full results remain in traces and the model can read omitted ranges within the same turn. Configure these optional limits in `runtime.json`; [configuration controls](../config.example/README.md) explains their defaults and how to disable them for intentional polling or larger outputs.
+The example runtime caps each turn at 24 endpoint attempts and 12 skill calls, detects three consecutive identical skill results, and limits each model-visible result to 4,000 characters. Full results remain in traces and the model can read omitted ranges within the same turn. Configure these limits in `runtime.json`; [configuration controls](../config.example/README.md) explains their defaults and how to disable them for intentional polling or larger outputs.
 
 Useful runtime files:
 

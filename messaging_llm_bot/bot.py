@@ -37,7 +37,7 @@ from assistant_framework.skills import Skill, read_skill_doc_section
 from assistant_framework.traces import build_trace_metrics, write_trace
 
 from .config import AndroidConfig, BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
-from .http import HttpClient, RequestTimeoutError
+from .http import ContextLengthExceededError, HttpClient, RequestTimeoutError
 from .interfaces import IncomingAttachment, IncomingMessage
 from .llm_client import OpenAICompatibleClient, RequestBudgetExceeded
 from .reminder_service import ReminderService
@@ -263,7 +263,11 @@ class BotRunner:
                 name="read_skill_result",
                 description="Read omitted text from a completed skill result in this turn using character offsets.",
                 run=lambda _workspace, args: read_skill_result(
-                    self._get_trace_steps(), args, max_chars=self.config.runtime.max_skill_result_chars,
+                    self._get_trace_steps(), args,
+                    max_chars=(
+                        getattr(self._request_state, "skill_result_chars", None)
+                        or self.config.runtime.max_skill_result_chars
+                    ),
                 ),
                 requires_llm_response=True,
                 args_schema='{"step": "required integer >= 1", "offset": "optional integer >= 0", "limit": "optional integer >= 1"}',
@@ -290,6 +294,7 @@ class BotRunner:
                 self._request_state.llm_requests = []
                 self._request_state.stop_reason = None
                 self._request_state.reminder_context = {}
+                self._request_state.skill_result_chars = None
                 try:
                     with ExitStack() as stack:
                         request_budget = getattr(self.llm, "request_budget", None)
@@ -303,6 +308,7 @@ class BotRunner:
                     self._request_state.llm_requests = []
                     self._request_state.stop_reason = None
                     self._request_state.reminder_context = {}
+                    self._request_state.skill_result_chars = None
 
     @staticmethod
     def _is_status_command(text: str) -> bool:
@@ -2090,6 +2096,9 @@ class BotRunner:
         if prompt and prompt[-1].get("role") == "user":
             main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
         max_skill_chain_steps = self.config.runtime.max_skill_chain_steps
+        result_limit = self.config.runtime.max_skill_result_chars
+        self._request_state.skill_result_chars = result_limit
+        result_message_indexes: list[int] = []
         result_guard = RepeatedResultGuard(self.config.runtime.max_repeated_skill_results)
         for step_index in range(max_skill_chain_steps + 1):
             skill_call = self._try_parse_skill_call(model_reply)
@@ -2113,7 +2122,7 @@ class BotRunner:
             )
             summarized_skill_result = self._summarize_skill_result_for_context(skill_call["name"], raw_skill_result)
             context_result = bound_skill_result(
-                raw_skill_result, step=step_index + 1, max_chars=self.config.runtime.max_skill_result_chars,
+                raw_skill_result, step=step_index + 1, max_chars=result_limit,
             )
             trace_steps[-1]["result_chars"] = len(raw_skill_result)
             trace_steps[-1]["context_chars"] = 0
@@ -2138,6 +2147,7 @@ class BotRunner:
             trace_steps[-1]["context_chars"] = len(context_result)
             trace_steps[-1]["result_truncated"] = context_result != raw_skill_result
             prompt.append({"role": "assistant", "content": model_reply})
+            result_message_indexes.append(len(prompt))
             prompt.append(
                 {
                     "role": "user",
@@ -2157,7 +2167,35 @@ class BotRunner:
                     prompt,
                 )
             self._set_active_skill_chain_length(step_index + 1)
-            model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+            for recovery_attempt in range(3):
+                try:
+                    model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+                    break
+                except ContextLengthExceededError:
+                    if result_limit is None or recovery_attempt == 2:
+                        raise
+                    result_limit = max(512, min(2000, result_limit // 2))
+                    compacted = False
+                    for step, message_index in zip(trace_steps, result_message_indexes):
+                        excerpt = bound_skill_result(
+                            step["skill_result"], step=step["step"], max_chars=result_limit,
+                        )
+                        if len(excerpt) >= step["context_chars"]:
+                            continue
+                        prompt[message_index]["content"] = self._continue_skill_chain_prompt(
+                            step["skill_call"]["name"], excerpt,
+                            allow_follow_up_skill=True, main_prompt_block=main_prompt_block,
+                        )
+                        step["context_chars"] = len(excerpt)
+                        step["result_truncated"] = True
+                        compacted = True
+                    if not compacted:
+                        raise
+                    self._request_state.skill_result_chars = result_limit
+                    logging.warning(
+                        "LLM context window exceeded; retrying follow-up with skill results capped at %s "
+                        "characters (recovery %s/2)", result_limit, recovery_attempt + 1,
+                    )
             if summarized_skill_result != raw_skill_result and self.config.runtime.max_skill_result_chars is None:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
@@ -3777,6 +3815,21 @@ class BotRunner:
                         f"I stopped: {exc} Completed actions are recorded in the trace; "
                         "please review them before retrying."
                     )
+                    self._write_message_trace(trace_payload)
+                    self._send_message(backend, conversation_id, trace_payload["final_reply"])
+                    return False
+                except ContextLengthExceededError:
+                    logging.warning("LLM context window exceeded for %s conversation=%s", backend, conversation_id)
+                    self._request_state.stop_reason = "context_length_exceeded"
+                    trace_payload["error"] = "context_length_exceeded"
+                    trace_payload["final_reply"] = (
+                        "The language model's context window is too small for this request. "
+                        "Increase the model's loaded context length or narrow the request."
+                    )
+                    if self._get_trace_steps():
+                        trace_payload["final_reply"] += (
+                            " Completed actions are recorded in the trace; please review them before retrying."
+                        )
                     self._write_message_trace(trace_payload)
                     self._send_message(backend, conversation_id, trace_payload["final_reply"])
                     return False

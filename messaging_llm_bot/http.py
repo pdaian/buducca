@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from http.client import HTTPException
 import json
 import re
 import socket
@@ -13,6 +14,40 @@ from urllib.request import Request, urlopen
 
 class RequestTimeoutError(RuntimeError):
     """Raised when an HTTP request times out."""
+
+
+class ContextLengthExceededError(RuntimeError):
+    """The endpoint explicitly rejected a request that exceeded its context window."""
+
+
+def _is_context_length_error(payload: Any) -> bool:
+    """Recognize provider errors without exposing their potentially private bodies."""
+    message = ""
+    if isinstance(payload, bytes):
+        message = payload.decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(message)
+        except (ValueError, RecursionError):
+            payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error", payload)
+        if isinstance(error, dict):
+            codes = (error.get("code"), error.get("type"))
+            if any(code in ("context_length_exceeded", "exceed_context_size_error") for code in codes):
+                return True
+            message = error.get("message", "")
+        elif isinstance(error, str):
+            message = error
+        else:
+            return False
+    elif payload is not None:
+        return False
+    return isinstance(message, str) and bool(re.search(
+        r"request \(\d+ tokens\) exceeds the available context size \(\d+ tokens\)"
+        r"|trying to keep the first \d+ tokens when (?:the )?context (?:the )?(?:length|size) is only \d+"
+        r"|maximum context length is \d+ tokens.{0,100}(?:requested|resulted in) \d+ tokens",
+        message, re.IGNORECASE | re.DOTALL,
+    ))
 
 
 def _safe_url(url: str) -> str:
@@ -87,7 +122,16 @@ class HttpClient:
         except (socket.timeout, TimeoutError):
             raise RequestTimeoutError(f"Request timed out for {safe_url}") from None
         except HTTPError as err:
-            err.close()
+            try:
+                raw = err.read(8192) if err.code in (400, 413) else b""
+            except (OSError, ValueError, HTTPException):
+                raw = b""
+            finally:
+                err.close()
+            if err.code in (400, 413) and _is_context_length_error(raw):
+                raise ContextLengthExceededError(
+                    f"HTTP {err.code} for {safe_url}: model context window exceeded"
+                ) from None
             raise RuntimeError(f"HTTP {err.code} for {safe_url}") from None
         except URLError as err:
             if isinstance(err.reason, (socket.timeout, TimeoutError)):

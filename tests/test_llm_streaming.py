@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
-from messaging_llm_bot.http import HttpClient, RequestTimeoutError
+from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError
 from messaging_llm_bot.llm_client import OpenAICompatibleClient, RequestBudgetExceeded
 
 
@@ -131,6 +131,26 @@ class LLMStreamingTests(unittest.TestCase):
         self.assertFalse(request.call_args.args[1]["stream"])
         self.assertNotIn("stream_options", request.call_args.args[1])
         self.assertTrue(any("latest_reasoning='Consider it.'" in line for line in logs.output))
+
+    def test_context_errors_in_successful_http_responses_are_classified(self) -> None:
+        error = {"error": {"type": "exceed_context_size_error", "message": "SECRET prompt text"}}
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming):
+                self.client._runners[0].extra_body = {"stream": streaming}
+                if streaming:
+                    response = stream_response([error])
+                else:
+                    response = io.BytesIO(json.dumps(error).encode())
+                    response.headers = {"Content-Type": "application/json"}
+                with patch("messaging_llm_bot.http.urlopen", return_value=response), self.assertLogs(level="WARNING"):
+                    with self.assertRaises(ContextLengthExceededError) as caught:
+                        self.client.generate_reply(self.messages)
+                self.assertNotIn("SECRET", str(caught.exception))
+                self.assertTrue(response.closed)
+                metrics = self.client.pop_last_request_metrics()
+                self.assertEqual(len(metrics), 1)
+                self.assertEqual(metrics[0]["error"], "ContextLengthExceededError")
+                self.assertEqual(self.client.pop_last_reply_footer(), "")
 
     def test_explicit_stream_options_are_preserved_without_mutating_config(self) -> None:
         options = {"include_usage": False, "custom_flag": True}
