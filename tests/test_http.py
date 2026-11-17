@@ -104,6 +104,42 @@ class HttpClientTests(unittest.TestCase):
                 read.assert_called_once_with(8192)
             self.assertTrue(response.closed)
 
+    def test_http_500_context_errors_are_classified_without_treating_other_failures_as_overflow(self) -> None:
+        url = "https://user:password@example.invalid/v1/chat/completions?key=PRIVATE"
+        bodies = [
+            (b'{"error":{"code":500,"message":"Context size has been exceeded.","type":"server_error"}}', True),
+            (b'{"error":"Context length has been exceeded. SECRET"}', True),
+            (b'{"error":{"code":500,"message":"Compute error. SECRET","type":"server_error"}}', False),
+            (b'{"error":{"code":500,"message":"Failed to allocate KV cache. SECRET","type":"server_error"}}', False),
+            (b'{"error":{"message":null,"type":"server_error"}}', False),
+            (b'[]', False),
+            (b'\xffSECRET', False),
+            (b'x' * 100000, False),
+        ]
+        for streaming in (False, True):
+            for body, is_context_error in bodies:
+                response = io.BytesIO(body)
+                error = HTTPError(url, 500, "Internal Server Error", {}, response)
+                with self.subTest(streaming=streaming, body=body[:150]), patch(
+                    "messaging_llm_bot.http.urlopen", side_effect=error,
+                ), patch.object(error, "read", wraps=error.read) as read:
+                    with self.assertRaises(RuntimeError) as caught:
+                        client = HttpClient(1)
+                        if streaming:
+                            list(client.post_json_stream(url, {}))
+                        else:
+                            client.post_json(url, {})
+                    read.assert_called_once_with(8192)
+                self.assertEqual(isinstance(caught.exception, ContextLengthExceededError), is_context_error)
+                expected = "HTTP 500 for https://example.invalid/v1/chat/completions"
+                if is_context_error:
+                    expected += ": model context window exceeded"
+                self.assertEqual(str(caught.exception), expected)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for secret in ("SECRET", "PRIVATE", "password", "user:"):
+                    self.assertNotIn(secret, rendered)
+                self.assertTrue(response.closed)
+
     def test_failed_error_body_read_preserves_http_status_and_closes_response(self) -> None:
         for failure in (TimeoutError("SECRET"), IncompleteRead(b"SECRET")):
             error = HTTPError("https://example.invalid", 400, "Bad Request", {}, io.BytesIO())

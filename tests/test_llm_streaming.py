@@ -133,24 +133,34 @@ class LLMStreamingTests(unittest.TestCase):
         self.assertTrue(any("latest_reasoning='Consider it.'" in line for line in logs.output))
 
     def test_context_errors_in_successful_http_responses_are_classified(self) -> None:
-        error = {"error": {"type": "exceed_context_size_error", "message": "SECRET prompt text"}}
-        for streaming in (False, True):
-            with self.subTest(streaming=streaming):
-                self.client._runners[0].extra_body = {"stream": streaming}
-                if streaming:
-                    response = stream_response([error])
-                else:
-                    response = io.BytesIO(json.dumps(error).encode())
-                    response.headers = {"Content-Type": "application/json"}
-                with patch("messaging_llm_bot.http.urlopen", return_value=response), self.assertLogs(level="WARNING"):
-                    with self.assertRaises(ContextLengthExceededError) as caught:
-                        self.client.generate_reply(self.messages)
-                self.assertNotIn("SECRET", str(caught.exception))
-                self.assertTrue(response.closed)
-                metrics = self.client.pop_last_request_metrics()
-                self.assertEqual(len(metrics), 1)
-                self.assertEqual(metrics[0]["error"], "ContextLengthExceededError")
-                self.assertEqual(self.client.pop_last_reply_footer(), "")
+        errors = [
+            {"error": {"type": "exceed_context_size_error", "message": "SECRET prompt text"}},
+            {"error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded.", "details": "SECRET"}},
+            {"error": "Context size has been exceeded. SECRET"},
+        ]
+        for streaming, json_fallback in ((False, False), (True, False), (True, True)):
+            for error in errors:
+                with self.subTest(streaming=streaming, json_fallback=json_fallback, error=error):
+                    self.client._runners[0].extra_body = {"stream": streaming}
+                    if streaming and not json_fallback:
+                        response = stream_response([error])
+                    else:
+                        response = io.BytesIO(json.dumps(error).encode())
+                        response.headers = {"Content-Type": "application/json"}
+                    with patch("messaging_llm_bot.http.urlopen", return_value=response), self.assertLogs(level="WARNING") as logs:
+                        with self.assertRaises(ContextLengthExceededError) as caught:
+                            self.client.generate_reply(self.messages)
+                    self.assertNotIn("SECRET", str(caught.exception))
+                    self.assertNotIn("SECRET", "\n".join(logs.output))
+                    self.assertTrue(response.closed)
+                    metrics = self.client.pop_last_request_metrics()
+                    self.assertEqual(len(metrics), 1)
+                    self.assertEqual(metrics[0]["error"], "ContextLengthExceededError")
+                    self.assertNotIn("SECRET", repr(metrics))
+                    self.assertNotIn("first_token_ms", metrics[0])
+                    self.assertEqual(self.client.get_runner_statuses()[0].concurrent_requests, 0)
+                    self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
+                    self.assertEqual(self.client.pop_last_reply_footer(), "")
 
     def test_explicit_stream_options_are_preserved_without_mutating_config(self) -> None:
         options = {"include_usage": False, "custom_flag": True}

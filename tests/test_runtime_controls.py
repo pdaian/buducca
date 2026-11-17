@@ -198,9 +198,9 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(step["context_chars"], 4000)
         self.assertEqual(step["skill_result"], result)
 
-    def test_http_context_overflow_recovers_without_repeating_skill(self) -> None:
-        for streaming in (False, True):
-            with self.subTest(streaming=streaming):
+    def test_context_overflow_recovers_without_repeating_skill(self) -> None:
+        for streaming, status in ((False, 400), (True, 400), (False, 500), (True, 500), (True, 200)):
+            with self.subTest(streaming=streaming, status=status):
                 self.skill.run.reset_mock()
                 result = "start" + "x" * 6000 + "end"
                 self.skill.run.return_value = result
@@ -214,9 +214,16 @@ class RuntimeControlTests(unittest.TestCase):
                     body = io.BytesIO(json.dumps(response).encode())
                     body.headers = {"Content-Type": "application/json"}
                     responses.append(body)
-                error = HTTPError("https://example.invalid/v1/chat/completions", 400, "Bad Request", {}, io.BytesIO(
-                    json.dumps({"error": {"type": "exceed_context_size_error", "n_prompt_tokens": 24689, "n_ctx": 8192}}).encode(),
-                ))
+                if status == 400:
+                    error_body = {"error": {"type": "exceed_context_size_error", "n_prompt_tokens": 24689, "n_ctx": 8192}}
+                else:
+                    error_body = {"error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded."}}
+                raw = json.dumps(error_body).encode()
+                if status == 200:
+                    error = io.BytesIO(b"data: " + raw + b"\n\ndata: [DONE]\n\n")
+                    error.headers = {"Content-Type": "text/event-stream"}
+                else:
+                    error = HTTPError("https://example.invalid/v1/chat/completions", status, "Error", {}, io.BytesIO(raw))
                 with patch("messaging_llm_bot.http.urlopen", side_effect=[responses[0], error, responses[1]]) as request, self.assertLogs(level="WARNING"):
                     self.assertTrue(self.bot._handle_message(1, "work"))
                 self.skill.run.assert_called_once()
@@ -272,6 +279,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(trace["metrics"]["stop_reason"], "context_length_exceeded")
         self.assertEqual(trace["steps"][0]["context_chars"], 1000)
         self.assertIn("Increase the model's loaded context length", trace["final_reply"])
+        self.assertIn("reduce concurrent requests", trace["final_reply"])
         self.assertIn("Completed actions", trace["final_reply"])
 
     def test_reduced_cap_applies_to_readback_and_later_results_only_in_current_turn(self) -> None:
@@ -355,12 +363,15 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
 
     def test_initial_prompt_overflow_reports_error_without_retrying(self) -> None:
-        self.bot.llm.http_client.post_json.side_effect = ContextLengthExceededError("context full")
+        self.bot.llm.http_client.post_json.return_value = {
+            "error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded."},
+        }
         with self.assertLogs(level="WARNING"):
             self.assertFalse(self.bot._handle_message(1, "work"))
         self.bot.llm.http_client.post_json.assert_called_once()
         self.skill.run.assert_not_called()
         self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
+        self.assertIn("reduce concurrent requests", self.traces[-1]["final_reply"])
         self.assertNotIn("Completed actions", self.traces[-1]["final_reply"])
 
     def test_reader_is_only_exposed_when_limits_are_enabled(self) -> None:

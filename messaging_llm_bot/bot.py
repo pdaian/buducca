@@ -3823,8 +3823,8 @@ class BotRunner:
                     self._request_state.stop_reason = "context_length_exceeded"
                     trace_payload["error"] = "context_length_exceeded"
                     trace_payload["final_reply"] = (
-                        "The language model's context window is too small for this request. "
-                        "Increase the model's loaded context length or narrow the request."
+                        "The language model ran out of context space for this request. "
+                        "Increase the model's loaded context length, reduce concurrent requests, or narrow the request."
                     )
                     if self._get_trace_steps():
                         trace_payload["final_reply"] += (

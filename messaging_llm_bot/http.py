@@ -45,7 +45,8 @@ def _is_context_length_error(payload: Any) -> bool:
     return isinstance(message, str) and bool(re.search(
         r"request \(\d+ tokens\) exceeds the available context size \(\d+ tokens\)"
         r"|trying to keep the first \d+ tokens when (?:the )?context (?:the )?(?:length|size) is only \d+"
-        r"|maximum context length is \d+ tokens.{0,100}(?:requested|resulted in) \d+ tokens",
+        r"|maximum context length is \d+ tokens.{0,100}(?:requested|resulted in) \d+ tokens"
+        r"|\bcontext (?:size|length) has been exceeded\b",
         message, re.IGNORECASE | re.DOTALL,
     ))
 
@@ -123,12 +124,13 @@ class HttpClient:
             raise RequestTimeoutError(f"Request timed out for {safe_url}") from None
         except HTTPError as err:
             try:
-                raw = err.read(8192) if err.code in (400, 413) else b""
+                # llama.cpp also reports exhausted KV cache as a server error.
+                raw = err.read(8192) if err.code in (400, 413, 500) else b""
             except (OSError, ValueError, HTTPException):
                 raw = b""
             finally:
                 err.close()
-            if err.code in (400, 413) and _is_context_length_error(raw):
+            if err.code in (400, 413, 500) and _is_context_length_error(raw):
                 raise ContextLengthExceededError(
                     f"HTTP {err.code} for {safe_url}: model context window exceeded"
                 ) from None
