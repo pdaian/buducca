@@ -194,6 +194,7 @@ class BotRunner:
         self._normalize_recent_message_files()
         self._load_unanswered_recent_keys()
         self._last_hourly_slot = self._load_last_hourly_slot()
+        self._last_hourly_context_error_slot = ""
         self._skills = self._load_runtime_skills()
         self._recent_handled_queries: dict[tuple[str, str, str], tuple[str | None, str]] = {}
         self._request_slots = threading.BoundedSemaphore(self.config.runtime.max_concurrent_requests)
@@ -1441,7 +1442,7 @@ class BotRunner:
 
         slot = self._current_hourly_slot()
         slot_key = slot.isoformat()
-        if self._last_hourly_slot == slot_key:
+        if slot_key in (self._last_hourly_slot, self._last_hourly_context_error_slot):
             return
 
         if self._run_hourly_task(hourly_text, slot):
@@ -1472,8 +1473,8 @@ class BotRunner:
 
         logging.info("Running hourly routine slot=%s target=%s", slot.isoformat(), target or "none")
         self._set_active_reply_footer("")
-        try:
-            with self._request_context(self._conversation_scope_key("hourly", slot.isoformat())):
+        with self._request_context(self._conversation_scope_key("hourly", slot.isoformat())):
+            try:
                 with self._typing_indicator(backend, conversation_id):
                     prompt = self._build_messages(
                         scheduler_conversation_key,
@@ -1490,14 +1491,32 @@ class BotRunner:
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"hourly slot={slot.isoformat()}",
                     )
-        except RequestTimeoutError:
-            logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
-            self._clear_conversation_history(scheduler_conversation_key)
-            return False
-        except Exception:
-            logging.exception("Hourly routine failed slot=%s", slot.isoformat())
-            self._clear_conversation_history(scheduler_conversation_key)
-            return False
+            except ContextLengthExceededError:
+                self._last_hourly_context_error_slot = slot.isoformat()
+                self._clear_conversation_history(scheduler_conversation_key)
+                logging.warning(
+                    "Hourly routine exceeded the model context window slot=%s; skipping further attempts for this slot. "
+                    "Increase the model's loaded context length or narrow the hourly instructions. "
+                    "Completed actions are recorded in the trace; review them before retrying.",
+                    slot.isoformat(),
+                )
+                self._request_state.stop_reason = "context_length_exceeded"
+                self._write_message_trace({
+                    "backend": "hourly",
+                    "conversation_id": slot.isoformat(),
+                    "text": hourly_prompt,
+                    "last_prompt": prompt,
+                    "error": "context_length_exceeded",
+                })
+                return False
+            except RequestTimeoutError:
+                logging.warning("Hourly routine timed out slot=%s", slot.isoformat())
+                self._clear_conversation_history(scheduler_conversation_key)
+                return False
+            except Exception:
+                logging.exception("Hourly routine failed slot=%s", slot.isoformat())
+                self._clear_conversation_history(scheduler_conversation_key)
+                return False
         normalized_reply = reply.strip()
         self._clear_conversation_history(scheduler_conversation_key)
         if normalized_reply and normalized_reply != _HOURLY_NO_ACTION_REPLY:
@@ -2196,6 +2215,11 @@ class BotRunner:
             allow_follow_up = not skill_call["done"] or not done_was_explicit or context_result != raw_skill_result
             trace_steps[-1]["context_chars"] = len(context_result)
             trace_steps[-1]["result_truncated"] = context_result != raw_skill_result
+            if result_message_indexes and main_prompt_block:
+                # Keep the task reminder only in the latest follow-up. The
+                # original request remains unchanged at the start of the chain.
+                previous_result = prompt[result_message_indexes[-1]]
+                previous_result["content"] = previous_result["content"].removeprefix(main_prompt_block + "\n\n")
             prompt.append({"role": "assistant", "content": model_reply})
             result_message_indexes.append(len(prompt))
             prompt.append(
@@ -2218,16 +2242,20 @@ class BotRunner:
                     prompt,
                 )
             self._set_active_skill_chain_length(step_index + 1)
-            for recovery_attempt in range(3):
+            for recovery_attempt in range(4):
                 try:
                     model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                     break
                 except ContextLengthExceededError:
-                    if result_limit is None or recovery_attempt == 2:
+                    if result_limit is None or recovery_attempt == 3:
                         raise
-                    result_limit = max(512, min(2000, result_limit // 2))
+                    previous_prompt_chars = sum(len(message["content"]) for message in prompt)
+                    largest_result_chars = max(step["context_chars"] for step in trace_steps)
+                    result_limit = max(512, min(2000, result_limit // 2, largest_result_chars // 2))
                     self._request_state.skill_result_chars = result_limit
-                    compacted = False
+                    # Under context pressure, rely on the original request
+                    # instead of repeating it in follow-up messages.
+                    main_prompt_block = ""
                     for step, message_index in zip(trace_steps, result_message_indexes):
                         excerpt = bound_skill_result(
                             step["skill_result"], step=step["step"], max_chars=result_limit,
@@ -2235,7 +2263,6 @@ class BotRunner:
                         if len(excerpt) < step["context_chars"]:
                             step["context_chars"] = len(excerpt)
                             step["result_truncated"] = True
-                            compacted = True
                         prompt[message_index]["content"] = self._continue_skill_chain_prompt(
                             step["skill_call"]["name"], excerpt,
                             allow_follow_up_skill=(
@@ -2245,11 +2272,13 @@ class BotRunner:
                             main_prompt_block=main_prompt_block,
                             skill_args=step["skill_call"]["args"],
                         )
-                    if not compacted:
+                    prompt_chars = sum(len(message["content"]) for message in prompt)
+                    if prompt_chars >= previous_prompt_chars:
                         raise
                     logging.warning(
                         "LLM context window exceeded; retrying follow-up with skill results capped at %s "
-                        "characters (recovery %s/2)", result_limit, recovery_attempt + 1,
+                        "characters (prompt_chars=%s -> %s, recovery %s/3)",
+                        result_limit, previous_prompt_chars, prompt_chars, recovery_attempt + 1,
                     )
             if summarized_skill_result != raw_skill_result and self.config.runtime.max_skill_result_chars is None:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
