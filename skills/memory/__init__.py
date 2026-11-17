@@ -8,8 +8,49 @@ from assistant_framework.memory import delete_record, list_records, read_record,
 from assistant_framework.workspace import Workspace
 
 NAME = "memory"
-DESCRIPTION = "Validated reads and writes for assistant/people, assistant/tasks, assistant/routines, and assistant/facts."
-ARGS_SCHEMA = '{"action":"get|list|upsert|delete","area":"people|tasks|routines|facts","id":"optional","record":{"...":"..."}}'
+DESCRIPTION = (
+    "Read or maintain structured workspace records in assistant/people, tasks, routines, or facts. "
+    "action defaults to get; get/delete require id, list requires area. upsert requires record: "
+    "people need name, facts need statement, tasks need title, routines need title and schedule. "
+    "Read before updating: upsert replaces the whole record, so preserve retained fields and put its ID "
+    "inside record.id. Omitted IDs derive from name/title/statement and may collide. "
+    "Use learn for a concise fact needed in every prompt, taskwarrior for its separate task database, "
+    "and add_reminder for directly delivered reminder messages."
+)
+ARGS_SCHEMA = """
+{
+  action?: "get" | "list" | "upsert" | "delete";
+  area: "people" | "tasks" | "routines" | "facts";
+  id?: string;
+  record?: {
+    id?: string;
+    name?: string;
+    notes?: string;
+    contact?: string;
+    statement?: string;
+    source?: string;
+    confidence?: string;
+    title?: string;
+    status?: string;
+    due_at?: string;
+    remind_at?: string;
+    kind?: string;
+    details?: string;
+    notify_target?: { backend: string; conversation_id: string | number };
+    enabled?: boolean;
+    instructions?: string;
+    schedule?: {
+      frequency: "hourly" | "daily" | "weekly";
+      interval?: number;
+      hour?: number;
+      minute?: number;
+      weekday?: number;
+      timezone?: string;
+    };
+    next_run_at?: string;
+  };
+}
+""".strip()
 
 
 def run(workspace: Workspace, args: dict[str, Any]) -> str:

@@ -3,11 +3,11 @@ import json
 import socket
 import traceback
 import unittest
-from http.client import IncompleteRead
+from http.client import IncompleteRead, RemoteDisconnected
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
-from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError
+from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError, StreamError
 
 
 class HttpClientTests(unittest.TestCase):
@@ -205,6 +205,23 @@ class HttpClientTests(unittest.TestCase):
                 list(HttpClient(1).post_json_stream("https://example.invalid?key=PRIVATE", {}))
         self.assertNotIn("PRIVATE", str(caught.exception))
         self.assertTrue(response.closed)
+
+    def test_stream_disconnects_are_classified_without_leaking_transport_details(self) -> None:
+        for failure in (IncompleteRead(b"PRIVATE"), RemoteDisconnected("PRIVATE"), ConnectionResetError("PRIVATE")):
+            class InterruptedResponse(io.BytesIO):
+                def __next__(self):
+                    raise failure
+
+            response = InterruptedResponse()
+            response.headers = {"Content-Type": "text/event-stream"}
+            with self.subTest(failure=type(failure).__name__), patch("messaging_llm_bot.http.urlopen", return_value=response):
+                with self.assertRaises(StreamError) as caught:
+                    list(HttpClient(1).post_json_stream("https://user:password@example.invalid?key=PRIVATE", {}))
+            self.assertIn("Interrupted event stream", str(caught.exception))
+            rendered = "".join(traceback.format_exception(caught.exception))
+            for secret in ("PRIVATE", "password", "user:"):
+                self.assertNotIn(secret, rendered)
+            self.assertTrue(response.closed)
 
     def test_stream_consumer_can_close_before_done(self) -> None:
         response = io.BytesIO(b'data: {}\n\ndata: [DONE]\n\n')

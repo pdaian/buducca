@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .config import LLMConfig, LLMRunnerConfig, _effective_llm_runners
-from .http import ContextLengthExceededError, HttpClient, _is_context_length_error, _safe_url
+from .http import ContextLengthExceededError, HttpClient, StreamError, _is_context_length_error, _safe_url
 from .llm_progress import RequestProgress
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
@@ -277,6 +277,7 @@ class OpenAICompatibleClient:
         continuation_attempt = 0
         token_limit_override: dict[str, int] = {}
         empty_reply_retry = False
+        stream_fallback = False
 
         while True:
             payload = {
@@ -292,6 +293,8 @@ class OpenAICompatibleClient:
             if payload.get("max_completion_tokens") is not None:
                 payload.pop("max_tokens", None)
             payload.setdefault("stream", callable(getattr(self.http_client, "post_json_stream", None)))
+            if stream_fallback:
+                payload["stream"] = False
             if payload["stream"]:
                 payload["stream_options"] = {"include_usage": True, **payload.get("stream_options", {})}
             else:
@@ -313,9 +316,11 @@ class OpenAICompatibleClient:
                 "continuation": continuation_attempt > 0,
                 "empty_reply_retry": empty_reply_retry,
                 "stream": payload["stream"],
+                "stream_fallback": stream_fallback,
                 "usage": {},
             }
             empty_reply_error = None
+            stream_error = None
             progress = RequestProgress(request_key, runner_index, runner.model_tag or runner.model, started)
             template_options = payload.get("chat_template_kwargs")
             thinking = template_options.get("enable_thinking", "default") if isinstance(template_options, dict) else "default"
@@ -348,8 +353,10 @@ class OpenAICompatibleClient:
                         self._observe_response(progress, data)
                     if not isinstance(data, dict):
                         raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
-                    if data.get("error") is not None and _is_context_length_error(data):
-                        raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
+                    if data.get("error") is not None:
+                        if _is_context_length_error(data):
+                            raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
+                        raise RuntimeError(f"LLM endpoint returned an error from {_safe_url(url)}")
                     choice = self._extract_primary_choice(data)
                     request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
                     reply_part = self._extract_reply_text(choice.get("message"))
@@ -363,6 +370,11 @@ class OpenAICompatibleClient:
                         )
                         request_metrics["error"] = type(empty_reply_error).__name__
                         request_metrics["empty_reply_reason"] = empty_reply_error.reason
+            except StreamError as exc:
+                request_metrics["error"] = type(exc).__name__
+                if not payload["stream"] or not callable(getattr(self.http_client, "post_json", None)):
+                    raise
+                stream_error = exc
             except BaseException as exc:
                 request_metrics["error"] = type(exc).__name__
                 raise
@@ -381,11 +393,20 @@ class OpenAICompatibleClient:
                     progress.log("completed", outcome=f"finish_reason={request_metrics['finish_reason'] or 'unknown'}")
 
             total_duration_ms += duration_ms
+            self._merge_usage_counts(aggregated_usage, request_metrics["usage"])
+            if stream_error is not None:
+                # Restart only this model request; never reuse an incomplete answer.
+                stream_fallback = True
+                logging.warning(
+                    "LLM stream failed: runner=%s model=%s reason=%s; retrying once without streaming "
+                    "with the same prompt and reasoning settings",
+                    runner_index, runner.model_tag or runner.model, stream_error,
+                )
+                continue
             if self.debug:
                 logging.debug("LLM response payload: %s", data)
                 logging.debug("LLM request completed in %.2fms", duration_ms)
 
-            self._merge_usage_counts(aggregated_usage, data.get("usage"))
             if empty_reply_error is not None:
                 token_field = "max_completion_tokens" if payload.get("max_completion_tokens") is not None else "max_tokens"
                 token_limit = payload.get(token_field)
@@ -454,7 +475,7 @@ class OpenAICompatibleClient:
                 if data.get("error") is not None:
                     if _is_context_length_error(data):
                         raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
-                    raise RuntimeError(f"LLM endpoint returned a streaming error from {_safe_url(url)}")
+                    raise StreamError(f"LLM endpoint returned a streaming error from {_safe_url(url)}")
                 choices = data.get("choices")
                 if not isinstance(choices, list) or any(not isinstance(choice, dict) for choice in choices):
                     raise RuntimeError("Malformed response from LLM endpoint: expected a choices list")
@@ -486,7 +507,7 @@ class OpenAICompatibleClient:
         if full_response is not None:
             return full_response
         if not saw_delta or not finish_reason:
-            raise RuntimeError("Incomplete response from LLM endpoint: missing completion finish reason")
+            raise StreamError("Incomplete response from LLM endpoint: missing completion finish reason")
         return {
             "choices": [{
                 "message": {"content": "".join(content) if content else None, "refusal": "".join(refusal)},

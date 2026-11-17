@@ -1,6 +1,7 @@
 # Advance todos skill
 
 ## What it does
+
 Shifts each selected Taskwarrior todo's due date **by a fixed amount**, added
 to its existing due date. Positive amounts move dates later; negative amounts
 bring them earlier. Without a date range, defaults to **overdue** unfinished
@@ -9,6 +10,7 @@ them. With both dates, selects unfinished tasks due within that inclusive range.
 Calls the harness user's `task` CLI directly.
 
 ## Args schema
+
 ```ts
 {
   amount: string;
@@ -32,8 +34,7 @@ Calls the harness user's `task` CLI directly.
   captured at the start of selection. Tasks due later today or in the future are
   excluded. Use this scope for requests to advance overdue todos.
 - Set `scope: "all"` only when the request includes future tasks. This selects
-  all pending and waiting tasks with due dates. **This is an explicit opt-in to
-  the previous no-range behavior.** The amount is added once to each original
+  all pending and waiting tasks with due dates. The amount is added once to each original
   due date, preserving the spacing between tasks.
 - Supply **both** `start_date` and `end_date` as `YYYY-MM-DD` to restrict
   selection to an inclusive range of due dates in the harness's local
@@ -51,6 +52,7 @@ not calendar-month or local-wall-clock arithmetic. Returned due timestamps use
 Taskwarrior's UTC format, `YYYYMMDDTHHMMSSZ`.
 
 ## Selection and execution
+
 Selects pending and waiting tasks that have a due date. Completed/deleted tasks,
 recurring templates, and tasks without a due date are excluded. Existing
 recurring instances can be advanced individually; the recurring schedule and
@@ -73,6 +75,7 @@ Taskwarrior settings are edited directly. Requires `task` on `PATH` and the
 Python standard library; no extra installation or skill registration is needed.
 
 ## Results and retries
+
 Results are JSON with `ok`, `dry_run`, `scope` (`overdue`, `all`, or `date_range`),
 signed `amount_seconds`, `matched`, `updated_count`, and `updated`. Each change includes
 `uuid`, `description`, `old_due`, and `new_due`. A preview adds `changes` and has
@@ -91,6 +94,7 @@ explicit absolute due dates to resolve uncertain outcomes. The skill is not
 idempotent and does not store a retry ledger.
 
 ## Usage
+
 ```bash
 # Move overdue unfinished todos two days later.
 python3 -m assistant_framework.cli skill advancetodos --args '{"amount":"2d"}'

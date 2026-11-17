@@ -2,15 +2,17 @@ import io
 import json
 import threading
 import unittest
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 from assistant_framework.skills import Skill
+from assistant_framework.workspace import Workspace
 from messaging_llm_bot.bot import BotRunner
 from messaging_llm_bot.config import BotConfig, LLMConfig, RuntimeConfig, TelegramConfig
 from messaging_llm_bot.http import ContextLengthExceededError, HttpClient
+from skills import file as file_skill
 
 
 class RuntimeControlTests(unittest.TestCase):
@@ -46,6 +48,136 @@ class RuntimeControlTests(unittest.TestCase):
     @classmethod
     def call(cls, name="echo", args=None, *, done=False):
         return cls.response(json.dumps({"skill_call": {"name": name, "args": args or {}, "done": done}}))
+
+    @contextmanager
+    def file_workspace(self, contents):
+        workspace = Mock(spec=Workspace)
+        workspace.resolve.side_effect = lambda path: Mock(exists=lambda: path in contents)
+        workspace.read_text.side_effect = lambda path, default="": contents.get(path, default)
+        skill = Skill(**file_skill.register())
+        with patch("messaging_llm_bot.bot.SkillManager.load", side_effect=lambda: {"file": skill}), \
+                patch.object(self.bot, "_workspace", workspace):
+            self.bot._refresh_skills()
+            yield workspace
+
+    def test_file_prompt_exposes_configured_cap_without_inventing_token_capacity(self) -> None:
+        with self.file_workspace({}), patch("messaging_llm_bot.bot.CollectorManager.load_manifests", return_value=[]):
+            for cap in (512, 4000, None):
+                with self.subTest(cap=cap):
+                    self.bot.config.runtime.max_skill_result_chars = cap
+                    prompt = self.bot._build_system_prompt()
+                    self.assertIn("remaining token capacity are not known", prompt)
+                    if cap is None:
+                        self.assertIn("no runtime character cap", prompt)
+                        self.assertNotIn("read_skill_result", prompt)
+                    else:
+                        self.assertIn(f"cap of {cap} characters per call", prompt)
+                        self.assertIn("read_skill_result", prompt)
+
+    def test_sequential_file_reads_report_remaining_calls_and_stop_at_chain_limit(self) -> None:
+        self.bot.config.runtime.max_skill_chain_steps = 3
+        prompts = []
+        replies = iter([
+            self.call("file", {"path": "first.txt", "read_mode": "head", "read_line_limit": 2}),
+            self.call("file", {"command": " READ ", "path": "first.txt", "start_line": 3, "end_line": 4}),
+            self.call("file", {"action": "read", "path": "second.txt"}),
+            self.response("Both files inspected"),
+        ])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            return next(replies)
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.file_workspace({"first.txt": "one\ntwo\nthree\nfour", "second.txt": "other evidence"}):
+            self.assertTrue(self.bot._handle_message(1, "Read both files"))
+        steps = self.traces[-1]["steps"]
+        self.assertEqual([step["skill_result"] for step in steps], [
+            "first.txt:\none\ntwo", "first.txt:\nthree\nfour", "second.txt:\nother evidence",
+        ])
+        for index, remaining in enumerate((2, 1, 0), start=1):
+            self.assertIn(f"Remaining skill-chain calls: {remaining}", prompts[index][-1]["content"])
+        self.assertIn("Current read context cap: 4000", prompts[1][-1]["content"])
+        self.assertIn("start_line one past the last fully inspected line", prompts[2][-1]["content"])
+        self.assertNotIn("If you need another skill call", prompts[3][-1]["content"])
+        self.assertNotIn("stop_reason", self.traces[-1]["metrics"])
+
+    def test_truncated_file_result_is_recovered_across_calls_without_rereading_files(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 512
+        original = "first.txt:\n" + "é🙂" * 300 + "\n\nsecond.txt:\nother evidence"
+        recovered = []
+        prompts = []
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            steps = self.bot._get_trace_steps()
+            if not steps:
+                return self.call("file", {"paths": ["first.txt", "second.txt"]})
+            if len(steps) == 1:
+                return self.call("read_skill_result", {"step": 1, "offset": 0, "limit": 10000})
+            page = steps[-1]["skill_result"]
+            header, _, body = page.partition("\n")
+            recovered.append(body)
+            offset = int(header.rsplit("next offset ", 1)[1].rstrip("]"))
+            if offset == len(original):
+                return self.response("Both files recovered")
+            return self.call("read_skill_result", {"step": 1, "offset": offset, "limit": 10000})
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.file_workspace({"first.txt": "é🙂" * 300, "second.txt": "other evidence"}) as workspace:
+            self.assertTrue(self.bot._handle_message(1, "Read both files completely"))
+            self.assertEqual(workspace.read_text.call_count, 2)
+        steps = self.traces[-1]["steps"]
+        self.assertEqual(steps[0]["skill_result"], original)
+        self.assertEqual("".join(recovered), original)
+        self.assertTrue(all(step["context_chars"] <= 512 for step in steps))
+        self.assertTrue(all(step["skill_call"]["args"]["step"] == 1 for step in steps[1:]))
+        self.assertIn("same original step", prompts[-1][-1]["content"])
+        self.assertIn("next offset", prompts[-1][-1]["content"])
+
+    def test_file_advice_updates_after_context_recovery_even_for_a_small_latest_read(self) -> None:
+        prompts = []
+        replies = iter([
+            self.call("file", {"path": "large.txt"}),
+            self.call("file", {"path": "small.txt"}),
+            ContextLengthExceededError("context full"),
+            self.call("read_skill_result", {"step": 1, "offset": 3000, "limit": 10000}),
+            self.response("Done"),
+        ])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.file_workspace({"large.txt": "x" * 6000, "small.txt": "small"}) as workspace, self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "Read the files"))
+            self.assertEqual(workspace.read_text.call_count, 2)
+        self.assertIn("Current read context cap: 4000", prompts[2][-1]["content"])
+        for message in (prompts[3][2], prompts[3][4], prompts[4][-1]):
+            self.assertIn("Current read context cap: 2000", message["content"])
+        steps = self.traces[-1]["steps"]
+        self.assertEqual(steps[0]["context_chars"], 2000)
+        self.assertFalse(steps[1]["result_truncated"])
+        self.assertLessEqual(steps[2]["result_chars"], 2000)
+
+    def test_disabled_cap_and_file_mutations_do_not_suggest_unavailable_recovery(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = None
+        with self.file_workspace({}):
+            read_prompt = self.bot._continue_skill_chain_prompt(
+                "file", "content", allow_follow_up_skill=True, skill_args={"action": "read"},
+            )
+            self.assertIn("No runtime read context cap", read_prompt)
+            self.assertNotIn("read_skill_result", read_prompt)
+            for args in ({"action": "write"}, {"command": "append"}, {"action": "list", "command": "read"}):
+                prompt = self.bot._continue_skill_chain_prompt(
+                    "file", "complete", allow_follow_up_skill=True, skill_args=args,
+                )
+                self.assertNotIn("read context cap", prompt)
+                self.assertNotIn("read_skill_result", prompt)
 
     def test_final_answer_at_chain_limit_is_returned(self) -> None:
         self.bot.config.runtime.max_skill_chain_steps = 1
@@ -240,6 +372,50 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertEqual(trace["metrics"]["requests"][1]["error"], "ContextLengthExceededError")
                 self.assertEqual(self.bot.config.runtime.max_skill_result_chars, 4000)
                 self.assertTrue(all(response.closed for response in [*responses, error]))
+
+    def test_stream_fallback_recovers_follow_up_without_repeating_completed_skills(self) -> None:
+        for context_error in (False, True):
+            with self.subTest(context_error=context_error):
+                self.skill.run.reset_mock()
+                self.skill.run.return_value = "x" * 6000
+                self.bot.llm.http_client = HttpClient(30)
+                responses = []
+                for data in (self.call(), self.response("Recovered")):
+                    response = io.BytesIO(json.dumps(data).encode())
+                    response.headers = {"Content-Type": "application/json"}
+                    responses.append(response)
+                # Even a complete-looking skill call from a failed stream must be discarded.
+                events = [
+                    {"choices": [{"delta": {"reasoning_content": "private reasoning"}}]},
+                    {"choices": [{"delta": self.call()["choices"][0]["message"]}], "usage": {"completion_tokens": 400}},
+                    {"error": {"message": "PRIVATE server error"}},
+                ]
+                failed_stream = io.BytesIO(b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events))
+                failed_stream.headers = {"Content-Type": "text/event-stream"}
+                responses.insert(1, failed_stream)
+                if context_error:
+                    overflow = io.BytesIO(b'{"error":{"message":"Context size has been exceeded."}}')
+                    overflow.headers = {"Content-Type": "application/json"}
+                    responses.insert(2, overflow)
+                self.bot.config.runtime.max_llm_requests_per_turn = len(responses)
+                with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="WARNING"):
+                    self.assertTrue(self.bot._handle_message(1, "work"))
+                self.skill.run.assert_called_once()
+                payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(payloads[2]["messages"], payloads[1]["messages"])
+                self.assertFalse(payloads[2]["stream"])
+                trace = self.traces[-1]
+                self.assertTrue(trace["final_reply"].startswith("Recovered"))
+                self.assertEqual(len(trace["steps"]), 1)
+                self.assertEqual(trace["steps"][0]["context_chars"], 2000 if context_error else 4000)
+                self.assertEqual(trace["metrics"]["request_count"], len(responses))
+                metrics = trace["metrics"]["requests"]
+                self.assertEqual(metrics[1]["error"], "StreamError")
+                self.assertEqual(metrics[1]["usage"], {"completion_tokens": 400})
+                if context_error:
+                    self.assertEqual(metrics[2]["error"], "ContextLengthExceededError")
+                    self.assertLess(len(payloads[3]["messages"][-1]["content"]), len(payloads[2]["messages"][-1]["content"]))
+                self.assertTrue(all(response.closed for response in responses))
 
     def test_recovery_compacts_previous_results_and_retains_readback(self) -> None:
         result = "start" + "x" * 3000 + "MIDDLE EVIDENCE" + "y" * 3000 + "end"

@@ -6,7 +6,19 @@ from pathlib import Path
 from assistant_framework.workspace import Workspace
 
 NAME = "browse_attachments"
-DESCRIPTION = "Browse structured metadata for files saved under workspace attachments."
+DESCRIPTION = (
+    "Discover saved attachments when the filename is unknown. Returns JSON items with path, storage date, "
+    "size_bytes, and any OCR sidecar path; it does not read the original content. "
+    "date optionally filters a YYYY-MM-DD folder; max_items defaults to 20, ordered by descending path. "
+    "include_ocr_text defaults to false and only includes existing sidecars. Use read_attachment for a selected file."
+)
+ARGS_SCHEMA = """
+{
+  max_items?: number;
+  date?: string;
+  include_ocr_text?: boolean;
+}
+""".strip()
 
 
 def _iter_attachment_files(root: Path) -> list[Path]:
@@ -56,4 +68,5 @@ def register() -> dict[str, object]:
         "name": NAME,
         "description": DESCRIPTION,
         "run": run,
+        "args_schema": ARGS_SCHEMA,
     }

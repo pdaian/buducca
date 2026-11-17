@@ -17,9 +17,10 @@ DESCRIPTION = (
     "Read tasks first and use their full UUIDs in tasks for modify/done; numeric IDs can change. "
     "add requires description. modify requires tasks and at least one of description/project/due. "
     "done requires tasks. Empty project/due clears that field; omitted fields stay unchanged. "
-    "due accepts Taskwarrior dates such as 2026-11-20 or tomorrow in the harness timezone. "
+    "due accepts absolute dates or expressions such as tomorrow in the harness timezone; '2d' means now plus two days. "
     "Descriptions are literal text. JSON results use ok; inspect error on failure. "
-    "Inspect affected tasks before retrying a failed write. Use advancetodos to shift existing due dates."
+    "Inspect affected tasks before retrying a failed write. Use advancetodos to shift existing due dates. "
+    "These tasks are separate from memory records under assistant/tasks."
 )
 ARGS_SCHEMA = """
 {

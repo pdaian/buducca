@@ -29,12 +29,26 @@ The reminder service runs independently of chat requests and hourly model routin
 - `update` requires `id` and at least one field to change. Omitted fields remain unchanged. A new `at` or `unix_time` resets the recurrence anchor. Changing only `timezone` or `frequency` preserves the next scheduled instant and anchors future repetitions there.
 - `remove` takes only `id`; `list` takes no other arguments. List returns the active records and IDs. Completed one-off reminders are no longer active.
 
+## Guidance
+
+- Resolve relative dates against the current conversation time and use the
+  intended IANA timezone. Ask only when an unresolved time or destination would
+  materially change the reminder. Pass either `at` or `unix_time`, never both.
+- Use the returned ID for edits and report the saved time, timezone, and repeat
+  frequency. List existing reminders before retrying an uncertain add; repeated
+  adds create separate IDs and can produce duplicate messages.
+- Save the text that should actually be delivered. Delivery does not research
+  current information or execute instructions embedded in the message.
+- Use [taskwarrior](../taskwarrior/README.md) for its task database and
+  [memory](../memory/README.md) for structured workspace records. These stores
+  do not synchronize automatically with this reminder journal.
+
 ## Examples
 
 Create a one-off message in the current chat:
 
 ```json
-{"skill_call":{"name":"add_reminder","args":{"message":"Leave for the appointment","at":"2027-01-05T14:25","frequency":"once"},"done":true}}
+{"skill_call":{"name":"add_reminder","args":{"message":"Leave for the appointment","at":"2027-01-05T14:25","frequency":"once"},"done":false}}
 ```
 
 Create a weekly reminder from a standalone harness:
@@ -50,6 +64,10 @@ Add returns JSON containing `status` and `reminder`, including the generated `id
 {"operation":"update","id":"<returned ID>","message":"Review and plan the coming week","at":"2027-01-04T09:30"}
 {"operation":"remove","id":"<returned ID>"}
 ```
+
+Example timestamps must be replaced with a future occurrence appropriate to the
+request. `done: false` lets the model inspect the result before confirming it;
+validation errors are plain text rather than a success record.
 
 ## Delivery and storage
 

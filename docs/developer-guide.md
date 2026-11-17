@@ -14,8 +14,8 @@
 - Prompt assembly lives in `messaging_llm_bot/bot.py` via `_build_system_prompt()` and `_build_agent_context_sections()`.
 - Default base prompt and prompt-related config live in `messaging_llm_bot/config.py`.
 - Stable role, tool, and policy instructions stay in the system message. Minute-specific request time is appended to the final user message so compatible providers can reuse a longer prompt-cache prefix.
-- Default prompt inclusion is intentionally narrow: only general learnings from `workspace/learnings` are auto-included.
-- Other stored workspace memory such as birthdays, contacts, notes, tasks, routines, structured facts, and collector outputs should be described for discovery, but not expanded by default.
+- Default prompt inclusion is intentionally narrow: general learnings from `workspace/learnings` are auto-included. Structured facts explicitly marked `source: "learn"` also receive bounded previews in the request context.
+- Other stored workspace memory and collector outputs are available for discovery and targeted retrieval, rather than expanded by default.
 
 ### How skill docs reach the agent prompt
 
@@ -37,7 +37,7 @@ Concretely, for a skill like `skills/file/README.md`:
 - `## What it does` does not go into the model prompt.
 - other sections such as examples, notes, or warnings do not go into the model prompt.
 
-`## What it does` is currently used for human-facing `/skill <name>` help, via `messaging_llm_bot/bot.py::_build_skill_command_help()` and `_read_skill_doc_section()`.
+`## What it does` is used for human-facing `/skill <name>` help, via `messaging_llm_bot/bot.py::_build_skill_command_help()` and `assistant_framework.skills.read_skill_doc_section()`.
 
 If you want to verify what the model actually received, inspect the assembled prompt directly:
 
@@ -58,29 +58,27 @@ The `inspect` command shows the exact split between:
 - human-facing help: `## What it does` from the skill README
 - implementation location: source and README paths
 
-## Skills and local models
+## Writing skill guidance
 
-This matters more with local or weaker OpenAI-compatible models than with frontier hosted models.
+Hosted and local models receive the same catalog, not the implementation or full
+README. Keep the model-visible contract concise and sufficient to select and call
+the skill correctly:
 
-Why:
-
-- The runtime does not expose Python callables, full README prose, or hidden implementation details to the model. It exposes a compressed tool catalog.
-- That catalog is mostly the skill `description` plus `args_schema`, injected into the `[Tools]` section of the system prompt.
-- A local model therefore selects tools from a sparse symbolic interface, not from rich latent knowledge of your repo.
-
-Practical consequences:
-
-- Skill descriptions need to be concrete. Vague descriptions increase false negatives, where the model fails to pick a skill that exists.
-- Args schemas need to be narrow and legible. Local models are more likely to hallucinate fields when the schema is missing or loose.
-- README depth still matters, but mainly for operators using `/skill <name>` and for developers reading the repo. It is not a substitute for prompt-facing metadata.
-
-Scientifically, this setup behaves like a lossy interface layer:
-
-- implementation space: Python module, arbitrary logic, filesystem effects
-- documentation space: full README, examples, caveats
-- inference space: short prompt-visible summary consumed by the model
-
-For local models with shorter effective context or weaker tool-use priors, information lost at that boundary is rarely recovered. The reliable path is to keep the prompt surface explicit and minimal, then verify it with `trace last-prompt` or `skills inspect`.
+- Lead `DESCRIPTION` with the capability and when it applies. Distinguish nearby
+  skills when confusion would change the result, such as workspace memory versus
+  Taskwarrior, or attachment discovery versus reading content.
+- Keep conditional requirements, important defaults, result meaning, and
+  non-obvious retry risks in the description. Put extended examples and setup
+  details in the README; do not repeat the entire argument list in prose.
+- Define `ARGS_SCHEMA` with explicit types and `?` for optional fields. The
+  TypeScript-like text is prompt guidance, not executable JSON Schema validation;
+  `run()` must still validate its inputs. Do not present example values as types.
+- Preserve stable argument names, aliases, and action policy behavior when
+  revising guidance. Describe observed limits rather than promising full reads,
+  guaranteed delivery, deduplication, or rollback that the skill does not provide.
+- Check the actual loaded manifest with `skills inspect`. Keep its schema and
+  the README schema consistent, and verify examples against implementation and
+  current upstream documentation when external commands are involved.
 
 ## Plugin layout
 
@@ -138,6 +136,8 @@ At `runtime.log_level: "INFO"` (the default), model requests also emit detailed 
 
 The built-in HTTP client requests streaming and `stream_options.include_usage: true` by default. This uses the compatible SSE protocol and usage/reasoning fields described in [LM Studio's API changelog](https://lmstudio.ai/docs/developer/api-changelog). A server that responds with ordinary JSON remains supported. For endpoints that reject streaming, set the runner's `extra_body.stream` to `false`; waiting heartbeats remain active, while previews and usage arrive with the complete response. To disable just the usage request, set `extra_body.stream_options.include_usage` to `false`. Missing usage and first-token timing are marked unavailable, and a stream that ends without completion is treated as a failed attempt. Full request/response payload logging still requires debug mode.
 
+If a stream reports an error, disconnects, or ends without completion, the client retries the current prompt once per runner using `stream: false`. This can recover a streaming failure during extended reasoning or reveal a specific error that the stream hid; [LM Studio users have reported context errors appearing only with streaming disabled](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1806). The retry preserves reasoning and output limits, discards incomplete output, and consumes the turn's request budget. Completed skills are not repeated, and reported usage from the failed attempt is retained. Continuations and output-limit recovery stay non-streaming for that runner attempt; later calls use the configured streaming setting again. A failed fallback follows normal runner failover. Explicit context errors use the existing context recovery instead, while malformed events and request timeouts do not trigger this fallback. The configured timeout remains in effect, including while waiting for a non-streaming response.
+
 LM Studio/llama.cpp can return `Context size has been exceeded.` as a streaming error or HTTP 500 when it cannot find free KV-cache space. The client classifies this as `ContextLengthExceededError` for streaming and ordinary JSON responses, preserving the existing bounded skill-result recovery and context-limit reply without exposing the error body. Other HTTP 500 errors remain generic. In [llama.cpp's server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-context.cpp), this failure can follow repeated `failed to find free space in the KV cache` warnings and successively smaller batches. Those retries can explain a slowdown before failure; they do not establish CPU offload or GPU-memory exhaustion. A failure with `first_token=unavailable`, no content/reasoning, and `chunks=1` may have received only the error event. `idle=0` then reflects that event's arrival, not prompt-processing progress.
 
 For this failure, compare the server's loaded context and concurrent predictions with `runtime.max_concurrent_requests`, `llm.history_messages`, and the requested output limit. Start with one concurrent request when diagnosing cache pressure, including other clients that share the server. Leave context room for both the prompt and generation; `max_tokens` does not increase the loaded context. If increasing context, check the memory requirement first with [LM Studio's `lms load --estimate-only`](https://lmstudio.ai/docs/cli/local-models/load). The bot's `model_tag` is only a display label; use `api_model` in the request log to identify the requested model.
@@ -151,16 +151,21 @@ If an answer is empty with `finish_reason: "length"` or `"max_tokens"` and a pos
 ## Add a new skill
 
 1. Create `skills/<name>/__init__.py`.
-2. Expose either:
-   - `register()` returning metadata and callable, or
-   - module constants + `run(workspace, args)`.
-3. Add `skills/<name>/README.md` with behavior, dependencies, config, and examples.
-4. Run tests.
+2. Expose `register()` returning `name`, `description`, and the `run(workspace, args)` callable. Module constants alone do not register a skill. Return text from `run()`.
+3. Define `ARGS_SCHEMA` (or return `args_schema` from `register()`). Add `build_action` for actions that need the runtime's policy/audit path, and `requires_llm_response` when results need interpretation before delivery.
+4. Add `skills/<name>/README.md` with behavior, dependencies, configuration, and relevant examples.
+5. Validate loading, argument handling, and meaningful behavior without contacting live services or changing user data.
 
 For agent-facing skills, keep the README explicit:
+
 - Add a `## What it does` section. The bot surfaces this section in `/skill <name>` help.
 - Keep `ARGS_SCHEMA` accurate, or provide a matching `## Args schema` block in the README.
 - Document common scope forms directly when a skill accepts one item or many, such as `path` vs `paths`.
+
+CLI examples use `--workspace workspace` by default. Pass `--workspace .` when
+an example reads repository files. Direct CLI execution calls `run()` without
+the bot's action-policy checks, result caps, or model follow-up; document any
+relevant difference instead of assuming chat behavior applies.
 
 ## Add a new collector
 

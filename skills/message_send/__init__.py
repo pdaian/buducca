@@ -15,10 +15,12 @@ from messaging_llm_bot.whatsapp_client import WhatsAppClient
 
 NAME = "message_send"
 DESCRIPTION = (
-    "Send outbound messages through configured messaging backends. "
-    "Supports telegram (bot or user mode), signal, and whatsapp. "
-    "Use args.backend for one backend or 'all', args.message, and args.recipient for single-backend sends "
-    "or args.recipients for per-backend fanout."
+    "Send an authorized message through configured Telegram, Signal, or WhatsApp backends. "
+    "Supply message and backend, with recipient for one backend or a recipients map for multiple. "
+    "Telegram needs an integer chat ID; resolve destinations from user input or saved contacts. "
+    "backend='all' selects every configured backend, so use it only for requested fanout. "
+    "Read-only backends cannot send. Inspect per-backend results; failed/uncertain sends can have completed, "
+    "so check delivery before retrying. Use a normal reply for the current chat unless a separate send is needed."
 )
 ARGS_SCHEMA = """
 {

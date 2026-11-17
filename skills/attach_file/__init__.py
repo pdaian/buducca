@@ -14,9 +14,11 @@ from messaging_llm_bot.whatsapp_client import WhatsAppClient
 
 NAME = "attach_file"
 DESCRIPTION = (
-    "Send a workspace file attachment through a configured messaging backend. "
-    "Use args.backend, args.path, and args.recipient or args.recipients. "
-    "Optional args.caption adds message text alongside the file."
+    "Send an existing workspace file through configured Telegram, Signal, or WhatsApp backends. "
+    "Use for an authorized attachment send, with a verified path and destination. "
+    "One backend accepts recipient; multiple backends need a recipients map. Telegram needs an integer chat ID. "
+    "caption is optional; backend='all' is unsupported. Read-only backends cannot send. "
+    "Inspect each backend's result before reporting success or retrying; a timeout may follow a completed send."
 )
 ARGS_SCHEMA = """
 {

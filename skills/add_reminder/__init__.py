@@ -10,14 +10,14 @@ from assistant_framework.workspace import Workspace
 
 NAME = "add_reminder"
 DESCRIPTION = (
-    "Add, list, update, or remove timed reminder messages by stable ID. "
-    "Frequency: once (default), daily, or weekly on the first occurrence's weekday. "
-    "Pass message and at (ISO-8601 date/time) or unix_time for the first occurrence; "
-    "seconds round up to the next minute. Daily/weekly repeats keep the local time in timezone. "
-    "The harness defaults destination to the current conversation and timezone to the configured timezone; "
-    "outside chat pass backend, conversation_id, and timezone (otherwise UTC). "
-    "Update/remove require id; update preserves omitted fields. List discovers IDs. "
-    "Messages are delivered directly by an independent service while the bot runs, without an LLM call."
+    "Schedule prepared reminder messages, or list/update/remove them by stable ID. "
+    "operation defaults to add: supply message and one future at (ISO-8601 datetime) or unix_time (epoch seconds). "
+    "Seconds round up to the next minute. frequency defaults to once; daily/weekly retain local time in "
+    "the IANA timezone, with weekly using the first occurrence's weekday. Chat adds default to the current "
+    "conversation and configured timezone; standalone adds require backend/conversation_id and default to UTC. "
+    "List takes only operation; remove takes operation/id; update needs id and changed fields, preserving others. "
+    "Use returned IDs and inspect list before retrying an uncertain add. An independent service sends "
+    "the saved message without an LLM call while the bot runs."
 )
 ARGS_SCHEMA = """
 {

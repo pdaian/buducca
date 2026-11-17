@@ -7,8 +7,10 @@ from assistant_framework.workspace import Workspace
 
 NAME = "file_delete"
 DESCRIPTION = (
-    "Delete workspace files in bulk. "
-    "Use args.paths as a list of file paths or args.path for a single file."
+    "Permanently delete specific workspace files using path or paths. "
+    "Use for requested file removal after resolving the intended targets. Directories are refused; "
+    "use file only when directory deletion is intended. Results report each file separately; "
+    "missing files and partial failures do not imply that nothing was deleted."
 )
 ARGS_SCHEMA = """
 {

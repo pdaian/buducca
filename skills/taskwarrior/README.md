@@ -1,12 +1,18 @@
 # Taskwarrior skill
 
 ## What it does
+
 Manages Taskwarrior todos directly through the harness user's `task` CLI: list,
 add, modify, and mark done. Results are JSON with an `ok` flag. Use
 [`advancetodos`](../advancetodos/README.md) to shift a set of existing due dates by
 a fixed duration.
 
+This is the harness user's Taskwarrior database, separate from structured
+workspace tasks managed by [memory](../memory/README.md). A due date does not
+create a bot reminder; use [add_reminder](../add_reminder/README.md) for delivery.
+
 ## Args schema
+
 ```ts
 {
   action?: "list" | "add" | "modify" | "done";
@@ -30,6 +36,7 @@ for the chosen action produce an error before running Taskwarrior.
 | `done` | Non-empty `tasks` | None | `targets`, `output` |
 
 ## Agent guidance
+
 - Read tasks before selecting targets. Prefer full UUIDs from the result;
   numeric IDs can change between commands. `tasks` accepts individual positive
   IDs or full UUIDs, not filters, ID ranges, or arbitrary command arguments.
@@ -59,6 +66,7 @@ this README supplies operator help and reference details. Both skills require
 a model response after execution so JSON results and errors can be explained.
 
 ## Usage
+
 ```bash
 python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"list","filter":["status:pending","project:Home"]}'
 python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"add","description":"Buy milk","project":"Home","due":"tomorrow"}'
@@ -67,6 +75,7 @@ python3 -m assistant_framework.cli skill taskwarrior --args '{"action":"done","t
 ```
 
 ## Runtime and compatibility
+
 Requires `task` on `PATH` and the Python standard library. The shared adapter in
 `assistant_framework/taskwarrior.py` uses CLI JSON export rather than reading
 Taskwarrior's storage files. It inherits the harness user's configuration,
@@ -89,11 +98,11 @@ arguments. This fixes both filtered listing and the UUID readback used by
 `advancetodos` without depending on database internals.
 
 The command/JSON boundary avoids dependence on Taskwarrior 2.x text storage or
-3.x database internals. The result format now consistently uses JSON:
+3.x database internals. Results use JSON:
 `{"ok":true,"action":"list","tasks":[...]}`,
 `{"ok":true,"action":"modify","targets":[...],"output":"..."}`, or
-`{"ok":false,"action":"modify","error":"..."}`. Callers that previously
-consumed mutation/error prose must decode this envelope.
+`{"ok":false,"action":"modify","error":"..."}`. Decode `ok` before interpreting
+the action-specific fields; a successful command is not a verified change count.
 
 The interface follows Taskwarrior's [application integration guidance](https://taskwarrior.org/docs/3rd-party/),
 [command syntax](https://taskwarrior.org/docs/man/task.1/), and

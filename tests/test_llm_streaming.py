@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
-from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError
+from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError, StreamError
 from messaging_llm_bot.llm_client import EmptyReplyError, OpenAICompatibleClient, RequestBudgetExceeded
 
 
@@ -19,6 +19,12 @@ def stream_response(events, *, done=True):
         body += b"data: [DONE]\n\n"
     response = io.BytesIO(body)
     response.headers = {"Content-Type": "text/event-stream"}
+    return response
+
+
+def json_response(data):
+    response = io.BytesIO(json.dumps(data).encode("utf-8"))
+    response.headers = {"Content-Type": "application/json"}
     return response
 
 
@@ -242,7 +248,53 @@ class LLMStreamingTests(unittest.TestCase):
         self.assertIn("5 tok", footer)
         self.assertTrue(any("continuation=1/2" in line for line in logs.output))
 
-    def test_interrupted_stream_fails_over_and_retains_partial_usage(self) -> None:
+    def test_failed_stream_retries_same_prompt_without_streaming(self) -> None:
+        options = {
+            "stream": True, "stream_options": {"include_usage": True},
+            "max_completion_tokens": 8192, "reasoning_effort": "high",
+            "chat_template_kwargs": {"enable_thinking": True, "custom_flag": True},
+        }
+        self.client._runners[0].extra_body = options
+        for tail, done in (([{"error": {"message": "PRIVATE server error"}}], True), ([], False), ([], True)):
+            with self.subTest(tail=tail, done=done):
+                responses = [
+                    stream_response([
+                        chunk({"reasoning_content": "private reasoning"}, usage={"completion_tokens": 400}),
+                        chunk({"content": "discard this incomplete answer"}),
+                        *tail,
+                    ], done=done),
+                    json_response({
+                        "choices": [{"message": {"content": "Recovered"}, "finish_reason": "stop"}],
+                        "usage": {"completion_tokens": 5},
+                    }),
+                ]
+                with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="INFO") as logs:
+                    with self.client.request_budget(2):
+                        self.assertEqual(self.client.generate_reply(self.messages), "Recovered")
+                first, retry = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(retry, {**{key: value for key, value in first.items() if key != "stream_options"}, "stream": False})
+                self.assertEqual(retry["messages"], self.messages)
+                self.assertNotIn("private reasoning", repr(retry))
+                self.assertIs(self.client._runners[0].extra_body, options)
+                self.assertTrue(options["stream"])
+                metrics = self.client.pop_last_request_metrics()
+                self.assertEqual([item["stream"] for item in metrics], [True, False])
+                self.assertEqual([item["stream_fallback"] for item in metrics], [False, True])
+                self.assertEqual(metrics[0]["error"], "StreamError")
+                self.assertEqual(metrics[0]["usage"], {"completion_tokens": 400})
+                self.assertNotIn("error", metrics[1])
+                self.assertIn("405 tok", self.client.pop_last_reply_footer())
+                self.assertEqual(sum("LLM request completed:" in line for line in logs.output), 1)
+                self.assertNotIn("PRIVATE", "\n".join(logs.output))
+                self.assertTrue(all(response.closed for response in responses))
+
+        response = stream_response([chunk({"content": "Next answer"}, finish="stop")])
+        with patch("messaging_llm_bot.http.urlopen", return_value=response) as request:
+            self.assertEqual(self.client.generate_reply(self.messages), "Next answer")
+        self.assertTrue(json.loads(request.call_args.args[0].data)["stream"])
+        self.assertFalse(self.client.pop_last_request_metrics()[0]["stream_fallback"])
+
+    def test_stream_recovery_is_bounded_and_fails_over_after_failed_fallback(self) -> None:
         self.config.runners = [
             LLMRunnerConfig(base_url=f"http://runner{index}.invalid/v1", api_key="k", model=f"m{index}")
             for index in range(2)
@@ -250,25 +302,92 @@ class LLMStreamingTests(unittest.TestCase):
         client = OpenAICompatibleClient(self.config, HttpClient(30))
         responses = [
             stream_response([chunk({"content": "partial"}, usage={"completion_tokens": 2})], done=False),
+            json_response({"error": {"message": "PRIVATE server error"}}),
             stream_response([chunk({"content": "recovered"}, finish="stop", usage={"completion_tokens": 3})]),
         ]
         with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="INFO") as logs:
             self.assertEqual(client.generate_reply(self.messages), "recovered")
-        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_count, 3)
         metrics = client.pop_last_request_metrics()
-        self.assertEqual(metrics[0]["error"], "RuntimeError")
+        self.assertEqual(metrics[0]["error"], "StreamError")
         self.assertEqual(metrics[0]["usage"], {"completion_tokens": 2})
         self.assertEqual(metrics[0]["content_chars"], 7)
-        self.assertEqual(metrics[1]["runner_index"], 1)
+        self.assertEqual([item["runner_index"] for item in metrics], [0, 0, 1])
+        self.assertEqual([item["stream"] for item in metrics], [True, False, True])
+        self.assertEqual(metrics[1]["error"], "RuntimeError")
+        self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+        self.assertNotIn("PRIVATE", "\n".join(logs.output))
         self.assertEqual(sum("LLM request completed:" in line for line in logs.output), 1)
         self.assertTrue(all(response.closed for response in responses))
+
+    def test_stream_recovery_consumes_request_budget(self) -> None:
+        response = stream_response([chunk({"reasoning": "private reasoning"})], done=False)
+        with patch("messaging_llm_bot.http.urlopen", return_value=response) as request, self.assertLogs(level="WARNING"):
+            with self.client.request_budget(1), self.assertRaises(RequestBudgetExceeded):
+                self.client.generate_reply(self.messages)
+        request.assert_called_once()
+        self.assertEqual(self.client.pop_last_request_metrics()[0]["error"], "StreamError")
+        self.assertEqual(self.client.pop_last_reply_footer(), "")
+        self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
+        self.assertEqual(self.client.get_runner_statuses()[0].concurrent_requests, 0)
+        self.assertTrue(response.closed)
+
+    def test_nonstreaming_fallback_preserves_context_error_and_failure_status(self) -> None:
+        for error, exception in (
+            ({"error": {"message": "PRIVATE server error"}}, RuntimeError),
+            ({"error": {"message": "Context size has been exceeded. PRIVATE"}}, ContextLengthExceededError),
+        ):
+            responses = [stream_response([], done=False), json_response(error)]
+            with self.subTest(error=error), patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="INFO") as logs:
+                with self.assertRaises(exception) as caught:
+                    self.client.generate_reply(self.messages)
+            self.assertNotIsInstance(caught.exception, StreamError)
+            self.assertEqual(request.call_count, 2)
+            self.assertNotIn("PRIVATE", str(caught.exception))
+            self.assertNotIn("PRIVATE", "\n".join(logs.output))
+            self.assertFalse(any("LLM request completed:" in line for line in logs.output))
+            metrics = self.client.pop_last_request_metrics()
+            self.assertEqual([item["error"] for item in metrics], ["StreamError", exception.__name__])
+            self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
+            self.assertEqual(self.client.get_runner_statuses()[0].concurrent_requests, 0)
+            self.assertEqual(self.client.pop_last_reply_footer(), "")
+            self.assertTrue(all(response.closed for response in responses))
+
+    def test_nonstreaming_fallback_keeps_continuation_and_empty_reply_recovery(self) -> None:
+        responses = [
+            stream_response([chunk({"reasoning": "private reasoning"})], done=False),
+            json_response({"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}),
+            json_response({"choices": [{"message": {"content": "Hello wor"}, "finish_reason": "length"}]}),
+            json_response({"choices": [{"message": {"content": "ld"}, "finish_reason": "stop"}]}),
+        ]
+        with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="WARNING"):
+            with self.client.request_budget(4):
+                self.assertEqual(self.client.generate_reply(self.messages), "Hello world")
+        payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+        self.assertEqual([payload["stream"] for payload in payloads], [True, False, False, False])
+        self.assertEqual([payload["max_tokens"] for payload in payloads], [4096, 4096, 8192, 8192])
+        self.assertEqual(payloads[3]["messages"][-2], {"role": "assistant", "content": "Hello wor"})
+        metrics = self.client.pop_last_request_metrics()
+        self.assertEqual([item["continuation"] for item in metrics], [False, False, False, True])
+        self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, False, True, False])
+        self.assertTrue(all(response.closed for response in responses))
+
+    def test_stream_timeout_keeps_configured_timeout_and_does_not_trigger_fallback(self) -> None:
+        with patch("messaging_llm_bot.http.urlopen", side_effect=TimeoutError("PRIVATE")) as request, self.assertLogs(level="WARNING"):
+            with self.assertRaises(RequestTimeoutError):
+                self.client.generate_reply(self.messages)
+        request.assert_called_once()
+        self.assertEqual(request.call_args.kwargs["timeout"], 30)
+        self.assertEqual(self.client.pop_last_request_metrics()[0]["error"], "RequestTimeoutError")
 
     def test_malformed_or_error_streams_never_report_success(self) -> None:
         for events in ([chunk({"content": "partial"})], [], [{"choices": None}],
                        [{"choices": [{"index": 0, "delta": "bad"}]}],
                        [{"error": {"message": "PRIVATE error body"}}]):
             response = stream_response(events)
-            with self.subTest(events=events), patch("messaging_llm_bot.http.urlopen", return_value=response), self.assertLogs(level="INFO") as logs:
+            with self.subTest(events=events), patch("messaging_llm_bot.http.urlopen", return_value=response), patch.object(
+                self.client.http_client, "post_json", return_value={"error": {"message": "PRIVATE error body"}},
+            ), self.assertLogs(level="INFO") as logs:
                 with self.assertRaises(RuntimeError) as caught:
                     self.client.generate_reply(self.messages)
             self.assertNotIn("PRIVATE", str(caught.exception))

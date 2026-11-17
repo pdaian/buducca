@@ -3,7 +3,12 @@ from __future__ import annotations
 from assistant_framework.workspace import Workspace
 
 NAME = "summarize_workspace"
-DESCRIPTION = "Summarize workspace files and their sizes."
+DESCRIPTION = (
+    "Inventory workspace file paths and byte sizes in ascending path order, excluding attachments. "
+    "max_items defaults to 20. This does not read or summarize file contents and is not a recent-activity view. "
+    "Use file/search_files for content and browse_attachments for inbound files; a limited inventory is not complete."
+)
+ARGS_SCHEMA = "{ max_items?: number }"
 
 
 def run(workspace: Workspace, args: dict) -> str:
@@ -30,4 +35,5 @@ def register() -> dict[str, object]:
         "name": NAME,
         "description": DESCRIPTION,
         "run": run,
+        "args_schema": ARGS_SCHEMA,
     }

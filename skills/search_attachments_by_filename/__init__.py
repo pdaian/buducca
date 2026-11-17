@@ -8,10 +8,18 @@ from assistant_framework.workspace import Workspace
 
 NAME = "search_attachments_by_filename"
 DESCRIPTION = (
-    "Search files under attachments by filename. "
-    "Args: query (required substring match), date (optional YYYY-MM-DD), max_items (optional, default 20)."
+    "Find saved attachments by a case-insensitive filename substring, with optional YYYY-MM-DD storage date. "
+    "query is literal, not a glob, regex, or content search. Returns JSON items with path/date/size_bytes "
+    "in descending path order, excluding OCR sidecars; max_items defaults to 20. "
+    "Use read_attachment for content and browse_attachments when the filename is unknown."
 )
-ARGS_SCHEMA = '{"query":"required","date":"optional/YYYY-MM-DD","max_items":20}'
+ARGS_SCHEMA = """
+{
+  query: string;
+  date?: string;
+  max_items?: number;
+}
+""".strip()
 
 
 def _iter_attachment_files(root: Path) -> list[Path]:

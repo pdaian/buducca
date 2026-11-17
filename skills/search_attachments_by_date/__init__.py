@@ -8,10 +8,17 @@ from assistant_framework.workspace import Workspace
 
 NAME = "search_attachments_by_date"
 DESCRIPTION = (
-    "List files under attachments for a specific date folder. "
-    "Args: date (required YYYY-MM-DD), max_items (optional, default 20)."
+    "Find saved attachments in one YYYY-MM-DD storage folder, not by dates mentioned inside documents. "
+    "Returns JSON items with path/date/size_bytes in descending path order, excluding OCR sidecars; "
+    "max_items defaults to 20. Use read_attachment on a returned path to inspect content. "
+    "An empty items list means no stored files matched that folder."
 )
-ARGS_SCHEMA = '{"date":"required/YYYY-MM-DD","max_items":20}'
+ARGS_SCHEMA = """
+{
+  date: string;
+  max_items?: number;
+}
+""".strip()
 
 
 def _iter_attachment_files(root: Path) -> list[Path]:

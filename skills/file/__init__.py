@@ -9,22 +9,40 @@ from assistant_framework.workspace import Workspace
 
 NAME = "file"
 DESCRIPTION = (
-    "Manage workspace files and directories in bulk. "
-    "Use args.action (or args.command) with: read/list/browse/write/append/move/copy/delete/"
-    "replace_text/create_dir/delete_dir. "
-    "Paths are workspace-relative. File actions accept args.path or args.paths. "
-    "read supports full, head, tail, and range modes with read_mode/read_line_limit/start_line/end_line. "
-    "move/copy support exact destinations via args.destinations or a shared args.destination_dir. "
-    "replace_text updates one or more files using args.find and optional args.replace/regex/case_sensitive."
+    "Read, list, or edit workspace files/directories by exact path or paths; action defaults to read. "
+    "Use workspace-relative paths, search_files to find text, and browse_attachments for inbound files. "
+    "For large reads use head/tail with read_line_limit, or range with 1-based inclusive start_line/end_line. "
+    "read_line_limit alone means tail. Use done=false to inspect results; recover truncated text before "
+    "advancing, and batch only what fits the current result cap. Never overwrite a file from a partial read. "
+    "write replaces content; append adds exactly the supplied text. Pair contents/destinations with paths, "
+    "or use shared content/destination_dir. replace_text needs find; omitted replace deletes matches, "
+    "and max_replacements_per_file=0 replaces all. delete/delete_dir recursively remove directories; "
+    "file_delete removes files only. Bulk writes can partially succeed; inspect affected paths before retrying."
 )
-ARGS_SCHEMA = (
-    '{"action":"read|list|browse|write|append|move|copy|delete|replace_text|create_dir|delete_dir",'
-    '"path":"optional","paths":["optional"],"directories":["optional"],"contents":["optional"],'
-    '"content":"optional","destination_dir":"optional","destinations":["optional"],'
-    '"read_mode":"full|head|tail|range","read_line_limit":25,"start_line":1,"end_line":25,'
-    '"recursive":false,"include_hidden":false,"max_entries":200,"find":"optional",'
-    '"replace":"optional","regex":false,"case_sensitive":true,"max_replacements_per_file":0}'
-)
+ARGS_SCHEMA = """
+{
+  action?: "read" | "list" | "browse" | "write" | "append" | "move" | "copy" | "delete" | "replace_text" | "create_dir" | "delete_dir";
+  path?: string;
+  paths?: string[];
+  directories?: string[];
+  contents?: string[];
+  content?: string;
+  destination_dir?: string;
+  destinations?: string[];
+  read_mode?: "full" | "head" | "tail" | "range";
+  read_line_limit?: number;
+  start_line?: number;
+  end_line?: number;
+  recursive?: boolean;
+  include_hidden?: boolean;
+  max_entries?: number;
+  find?: string;
+  replace?: string;
+  regex?: boolean;
+  case_sensitive?: boolean;
+  max_replacements_per_file?: number;
+}
+""".strip()
 _ATTACHMENTS_ROOT = "attachments"
 
 

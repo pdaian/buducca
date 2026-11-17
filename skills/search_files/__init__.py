@@ -10,18 +10,26 @@ from assistant_framework.workspace import Workspace
 
 NAME = "search_files"
 DESCRIPTION = (
-    "Search workspace text files with literal or regex matching across a single file, "
-    "a list of files, or a directory tree. "
-    "Args: pattern (required), path or paths (optional file or directory scope), "
-    "regex (optional bool), case_sensitive (optional bool), max_matches (optional int, default 50), "
-    "context_lines (optional int), file_pattern (optional glob or list of globs), "
-    "and include_hidden (optional bool)."
+    "Find matching lines in UTF-8 workspace files when the content is known but the path is not. "
+    "pattern is literal and case-insensitive by default; regex/case_sensitive opt in. Scope with path/paths "
+    "and file_pattern globs when known. Hidden paths are excluded unless include_hidden=true; attachments "
+    "are always excluded. max_matches defaults to 50 matching lines; context_lines defaults to 0. "
+    "Results give paths and 1-based line numbers. Read relevant ranges with file before editing or "
+    "drawing conclusions from a capped search; no matches applies only to the searched scope."
 )
-ARGS_SCHEMA = (
-    '{"pattern":"required","path":"optional/file/or/dir","paths":["optional/file/or/dir"],'
-    '"regex":false,"case_sensitive":false,"max_matches":50,"context_lines":0,'
-    '"file_pattern":"optional/*.py/or/list","include_hidden":false}'
-)
+ARGS_SCHEMA = """
+{
+  pattern: string;
+  path?: string;
+  paths?: string[];
+  regex?: boolean;
+  case_sensitive?: boolean;
+  max_matches?: number;
+  context_lines?: number;
+  file_pattern?: string | string[];
+  include_hidden?: boolean;
+}
+""".strip()
 
 _DEFAULT_MAX_MATCHES = 50
 _ATTACHMENTS_ROOT = "attachments"

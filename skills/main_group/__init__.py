@@ -10,7 +10,12 @@ from assistant_framework.workspace import Workspace
 from messaging_llm_bot.config import ContactConfig, WORKSPACE_CONTACT_MAP_FILES, load_config
 
 NAME = "main_group"
-DESCRIPTION = "Save the main group target used for hourly scheduled output. Persists assistant/main_group.json."
+DESCRIPTION = (
+    "Save the destination for future hourly output in assistant/main_group.json. "
+    "Supply backend and conversation_id, or group/name matching a saved contact alias; backend disambiguates "
+    "aliases shared across platforms. This replaces the saved target, without sending a message, "
+    "creating a group, or enabling a schedule. Use message_send for an immediate authorized send."
+)
 ARGS_SCHEMA = """
 {
   group?: string;

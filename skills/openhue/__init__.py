@@ -10,11 +10,24 @@ from assistant_framework.workspace import Workspace
 
 NAME = "openhue"
 DESCRIPTION = (
-    "Control OpenHue lights by id or name. "
-    "Use args.action with one of: list/on/off/toggle. "
-    "For on/off/toggle pass args.lights as a list of ids and/or names. "
-    "Optional args: brightness (1-254), transition_ms."
+    "List or control lights through the configured OpenHue command adapter. action defaults to list; "
+    "on/off/toggle need lights containing IDs or names. List to resolve targets; use IDs for duplicate names. "
+    "This adapter uses brightness 1-254 and transition_ms >= 0, which differ from the current upstream CLI; "
+    "compatible command overrides may be needed. timeout_seconds defaults to 20 per command. "
+    "Prefer on/off for a desired state; repeating toggle after an uncertain result can undo a change. "
+    "Report changed, missing, and failed lights separately."
 )
+ARGS_SCHEMA = """
+{
+  action?: "list" | "on" | "off" | "toggle";
+  lights?: string[];
+  brightness?: number;
+  transition_ms?: number;
+  timeout_seconds?: number;
+  list_command?: string | string[];
+  set_command_template?: string | string[];
+}
+""".strip()
 
 
 def _coerce_command(value: Any, *, field_name: str) -> list[str]:
@@ -227,4 +240,5 @@ def register() -> dict[str, Any]:
         "name": NAME,
         "description": DESCRIPTION,
         "run": run,
+        "args_schema": ARGS_SCHEMA,
     }

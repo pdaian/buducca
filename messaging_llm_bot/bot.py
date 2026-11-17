@@ -714,11 +714,21 @@ class BotRunner:
 
             if "file" in self._skills:
                 configured_actions = ", ".join(self.config.runtime.file_skill_actions)
+                result_limit = self.config.runtime.max_skill_result_chars
+                read_context = (
+                    f"File read results share a cap of {result_limit} characters per call across all requested paths. "
+                    "Truncated results remain available through read_skill_result in the current turn."
+                    if result_limit is not None else
+                    "File read results have no runtime character cap; use small line ranges to avoid overflowing context."
+                )
                 skill_rules.extend(
                     [
                         "For file-based personal assistant tasks, prefer the file skill instead of expecting task-specific skills.",
                         "There is no separate `read_file` skill: read files with the `file` skill using args.action=`read`.",
                         "If you do not know the exact path yet, use `search_files` first, then call `file` with the confirmed path.",
+                        read_context,
+                        "The model's total context window and remaining token capacity are not known here; a result character cap is not a token budget. Earlier reads, instructions, history, and the final answer also need context space.",
+                        "Track inspected paths and ranges across calls. Read only missing evidence, keep concise findings, and stop when the task is answered; disclose any relevant unread portions.",
                         f"Configured file skill actions: {configured_actions}.",
                         "Use args.action exactly as configured and include concrete file paths under the workspace.",
                         f"File organization guidance: {self.config.llm.file_task_layout_prompt.strip()}",
@@ -2006,7 +2016,45 @@ class BotRunner:
         *,
         allow_follow_up_skill: bool,
         main_prompt_block: str = "",
+        skill_args: dict[str, Any] | None = None,
     ) -> str:
+        args = skill_args or {}
+        action = args.get("action")
+        if action is None:
+            action = args.get("command", "read")
+        is_file_read = skill_name == "file" and str(action).strip().lower() == "read"
+        read_advice: list[str] = []
+        if is_file_read or skill_name == "read_skill_result":
+            result_limit = getattr(self._request_state, "skill_result_chars", None)
+            if result_limit is None:
+                result_limit = self.config.runtime.max_skill_result_chars
+            read_advice.append(
+                f"Current read context cap: {result_limit} characters per result."
+                if result_limit is not None else
+                "No runtime read context cap is configured; keep reads small enough for the model context."
+            )
+            remaining_steps = max(0, self.config.runtime.max_skill_chain_steps - len(self._get_trace_steps()))
+            read_advice.append(f"Remaining skill-chain calls: {remaining_steps} (including result recovery).")
+            if remaining_steps == 0:
+                allow_follow_up_skill = False
+            if allow_follow_up_skill:
+                if skill_name == "read_skill_result":
+                    read_advice.append(
+                        "To continue this stored result, keep the same original step and use the returned next offset. "
+                        "Offsets are zero-based characters, not file line numbers. Stop paging when the end equals the total length."
+                    )
+                else:
+                    read_advice.append(
+                        "Choose the next missing file or line range from the evidence already read. "
+                        "For sequential ranges, use start_line one past the last fully inspected line; "
+                        "line limits alone do not bound characters."
+                    )
+                    if result_limit is not None:
+                        read_advice.append(
+                            "If truncated, recover needed text using the step in the read_skill_result notice, "
+                            "or request a smaller file range. Do not repeat the same full read."
+                        )
+            read_advice.append("Answer from inspected evidence; state any relevant gaps instead of claiming unread content was covered.")
         if allow_follow_up_skill:
             guidance = (
                 "If you need another skill call, respond with valid JSON skill_call and done=false. "
@@ -2018,6 +2066,8 @@ class BotRunner:
         if main_prompt_block:
             parts.append(main_prompt_block)
         parts.append(f"Skill `{skill_name}` returned:\n{skill_result}")
+        if read_advice:
+            parts.append("\n".join(read_advice))
         parts.append(guidance)
         return "\n\n".join(parts)
 
@@ -2156,6 +2206,7 @@ class BotRunner:
                         context_result,
                         allow_follow_up_skill=allow_follow_up,
                         main_prompt_block=main_prompt_block,
+                        skill_args=skill_call["args"],
                     ),
                 }
             )
@@ -2175,23 +2226,27 @@ class BotRunner:
                     if result_limit is None or recovery_attempt == 2:
                         raise
                     result_limit = max(512, min(2000, result_limit // 2))
+                    self._request_state.skill_result_chars = result_limit
                     compacted = False
                     for step, message_index in zip(trace_steps, result_message_indexes):
                         excerpt = bound_skill_result(
                             step["skill_result"], step=step["step"], max_chars=result_limit,
                         )
-                        if len(excerpt) >= step["context_chars"]:
-                            continue
+                        if len(excerpt) < step["context_chars"]:
+                            step["context_chars"] = len(excerpt)
+                            step["result_truncated"] = True
+                            compacted = True
                         prompt[message_index]["content"] = self._continue_skill_chain_prompt(
                             step["skill_call"]["name"], excerpt,
-                            allow_follow_up_skill=True, main_prompt_block=main_prompt_block,
+                            allow_follow_up_skill=(
+                                step["result_truncated"] or not step["skill_call"]["done"]
+                                or not self._done_flag_was_explicit(step["model_reply"])
+                            ),
+                            main_prompt_block=main_prompt_block,
+                            skill_args=step["skill_call"]["args"],
                         )
-                        step["context_chars"] = len(excerpt)
-                        step["result_truncated"] = True
-                        compacted = True
                     if not compacted:
                         raise
-                    self._request_state.skill_result_chars = result_limit
                     logging.warning(
                         "LLM context window exceeded; retrying follow-up with skill results capped at %s "
                         "characters (recovery %s/2)", result_limit, recovery_attempt + 1,
