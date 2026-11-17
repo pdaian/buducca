@@ -58,6 +58,35 @@ class RequestBudgetExceeded(RuntimeError):
     """The next endpoint attempt would exceed this turn's configured budget."""
 
 
+class EmptyReplyError(RuntimeError):
+    """The endpoint completed a request without a usable answer."""
+
+    def __init__(self, finish_reason: str, *, has_reasoning: bool = False) -> None:
+        if finish_reason in {"length", "max_tokens"}:
+            self.reason = "output_limit"
+            message = (
+                "The language model reached a generation limit before producing a usable answer. "
+                "Increase llm.max_tokens or the runner's extra_body.max_completion_tokens, "
+                "and check that the model has enough context space."
+            )
+        elif finish_reason == "content_filter":
+            self.reason = "content_filter"
+            message = "The language model filtered its response and returned no answer."
+        elif has_reasoning:
+            self.reason = "reasoning_only"
+            message = (
+                "The language model returned reasoning but no final answer. "
+                "Check the model server's chat template and reasoning/output settings."
+            )
+        else:
+            self.reason = "empty_reply"
+            message = (
+                "The language model returned an empty answer. "
+                "Check the model server's logs, chat template, and response format."
+            )
+        super().__init__(message)
+
+
 @dataclass
 class _RequestBudget:
     limit: int
@@ -245,8 +274,11 @@ class OpenAICompatibleClient:
         aggregated_reply = ""
         total_duration_ms = 0.0
         aggregated_usage: dict[str, int] = {}
+        continuation_attempt = 0
+        token_limit_override: dict[str, int] = {}
+        empty_reply_retry = False
 
-        for continuation_attempt in range(_MAX_CONTINUATION_ATTEMPTS + 1):
+        while True:
             payload = {
                 "model": runner.model,
                 "messages": continuation_messages,
@@ -256,6 +288,9 @@ class OpenAICompatibleClient:
             if self.config.max_tokens is not None:
                 payload["max_tokens"] = self.config.max_tokens
             payload.update(runner.extra_body)
+            payload.update(token_limit_override)
+            if payload.get("max_completion_tokens") is not None:
+                payload.pop("max_tokens", None)
             payload.setdefault("stream", callable(getattr(self.http_client, "post_json_stream", None)))
             if payload["stream"]:
                 payload["stream_options"] = {"include_usage": True, **payload.get("stream_options", {})}
@@ -276,9 +311,11 @@ class OpenAICompatibleClient:
                 "model": runner.model,
                 "model_tag": runner.model_tag or runner.model,
                 "continuation": continuation_attempt > 0,
+                "empty_reply_retry": empty_reply_retry,
                 "stream": payload["stream"],
                 "usage": {},
             }
+            empty_reply_error = None
             progress = RequestProgress(request_key, runner_index, runner.model_tag or runner.model, started)
             template_options = payload.get("chat_template_kwargs")
             thinking = template_options.get("enable_thinking", "default") if isinstance(template_options, dict) else "default"
@@ -315,6 +352,17 @@ class OpenAICompatibleClient:
                         raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
                     choice = self._extract_primary_choice(data)
                     request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
+                    reply_part = self._extract_reply_text(choice.get("message"))
+                    if not reply_part:
+                        observed = progress.metrics()
+                        empty_reply_error = EmptyReplyError(
+                            request_metrics["finish_reason"],
+                            has_reasoning=bool(
+                                observed["reasoning_chars"] or observed["usage"].get("reasoning_tokens")
+                            ),
+                        )
+                        request_metrics["error"] = type(empty_reply_error).__name__
+                        request_metrics["empty_reply_reason"] = empty_reply_error.reason
             except BaseException as exc:
                 request_metrics["error"] = type(exc).__name__
                 raise
@@ -325,7 +373,10 @@ class OpenAICompatibleClient:
                 self._thread_state.request_metrics.append(request_metrics)
                 self._unregister_request(runner_index, request_key)
                 if "error" in request_metrics:
-                    progress.log("failed", level=logging.WARNING, outcome=f"error={request_metrics['error']}")
+                    progress.log(
+                        "failed", level=logging.WARNING,
+                        outcome=f"error={request_metrics['error']} finish_reason={request_metrics.get('finish_reason') or 'unknown'}",
+                    )
                 else:
                     progress.log("completed", outcome=f"finish_reason={request_metrics['finish_reason'] or 'unknown'}")
 
@@ -334,20 +385,42 @@ class OpenAICompatibleClient:
                 logging.debug("LLM response payload: %s", data)
                 logging.debug("LLM request completed in %.2fms", duration_ms)
 
-            with self._selection_lock:
-                self._last_success_at[runner_index] = datetime.now(timezone.utc).isoformat()
             self._merge_usage_counts(aggregated_usage, data.get("usage"))
-            reply_part = self._extract_reply_text(choice.get("message"))
-            if reply_part:
-                aggregated_reply += reply_part
+            if empty_reply_error is not None:
+                token_field = "max_completion_tokens" if payload.get("max_completion_tokens") is not None else "max_tokens"
+                token_limit = payload.get(token_field)
+                if (
+                    empty_reply_error.reason == "output_limit" and not token_limit_override
+                    and isinstance(token_limit, int) and not isinstance(token_limit, bool) and token_limit > 0
+                ):
+                    # Retry the same prompt once; there is no visible answer to continue.
+                    # Preserve reasoning settings and never replay completed skills.
+                    token_limit_override[token_field] = max(4096, token_limit * 2)
+                    empty_reply_retry = True
+                    logging.warning(
+                        "LLM produced no answer before the generation limit: runner=%s model=%s "
+                        "finish_reason=%s; retrying once with %s=%s (was %s)",
+                        runner_index, runner.model_tag or runner.model, request_metrics["finish_reason"],
+                        token_field, token_limit_override[token_field], token_limit,
+                    )
+                    continue
+                raise empty_reply_error
+
+            aggregated_reply += reply_part
+            empty_reply_retry = False
 
             finish_reason = str(choice.get("finish_reason") or "").strip().lower()
-            if not self._should_continue_after_finish_reason(finish_reason, reply_part):
+            if (
+                not self._should_continue_after_finish_reason(finish_reason, reply_part)
+                or continuation_attempt >= _MAX_CONTINUATION_ATTEMPTS
+            ):
                 self._thread_state.reply_footer = self._format_reply_footer(
                     runner,
                     data={"usage": aggregated_usage},
                     duration_ms=total_duration_ms,
                 )
+                with self._selection_lock:
+                    self._last_success_at[runner_index] = datetime.now(timezone.utc).isoformat()
                 return aggregated_reply
 
             logging.warning(
@@ -358,18 +431,12 @@ class OpenAICompatibleClient:
                 continuation_attempt + 1,
                 _MAX_CONTINUATION_ATTEMPTS,
             )
+            continuation_attempt += 1
             continuation_messages = [
                 *messages,
                 {"role": "assistant", "content": aggregated_reply},
                 {"role": "user", "content": _CONTINUATION_PROMPT},
             ]
-
-        self._thread_state.reply_footer = self._format_reply_footer(
-            runner,
-            data={"usage": aggregated_usage},
-            duration_ms=total_duration_ms,
-        )
-        return aggregated_reply
 
     def _read_streamed_reply(
         self, url: str, payload: dict[str, Any], headers: dict[str, str], progress: RequestProgress,
@@ -474,9 +541,10 @@ class OpenAICompatibleClient:
         if not isinstance(message, dict):
             return ""
         content = message.get("content")
+        reply = ""
         if isinstance(content, str):
-            return cls._sanitize_reply_text(content)
-        if isinstance(content, list):
+            reply = cls._sanitize_reply_text(content)
+        elif isinstance(content, list):
             parts: list[str] = []
             for item in content:
                 if not isinstance(item, dict):
@@ -489,7 +557,9 @@ class OpenAICompatibleClient:
                     sanitized = cls._sanitize_reply_text(text)
                     if sanitized:
                         parts.append(sanitized)
-            return "\n".join(parts).strip()
+            reply = "\n".join(parts).strip()
+        if reply:
+            return reply
         refusal = message.get("refusal")
         if isinstance(refusal, str):
             return cls._sanitize_reply_text(refusal)

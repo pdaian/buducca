@@ -121,6 +121,58 @@ class BotTraceMetricsTests(unittest.TestCase):
                 self.assertEqual(trace["metrics"]["requests"][-1]["error"], type(error).__name__)
                 self.assertEqual(self.bot._request_state.llm_requests, [])
 
+    def test_empty_reply_reports_generation_limit_without_recording_success(self) -> None:
+        response = self.response(None, {"completion_tokens": 400})
+        response["choices"][0]["finish_reason"] = "length"
+        self.bot.llm.http_client.post_json.return_value = response
+
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "hello"))
+
+        trace = self.traces[-1]
+        self.assertEqual(trace["error"], "empty_model_reply")
+        self.assertEqual(trace["metrics"]["stop_reason"], "output_limit")
+        self.assertEqual(trace["metrics"]["request_count"], 2)
+        self.assertEqual(trace["metrics"]["continuation_count"], 0)
+        self.assertEqual(trace["metrics"]["usage"]["completion_tokens"], 800)
+        self.assertIn("generation limit", trace["final_reply"])
+        self.assertIn("max_completion_tokens", trace["final_reply"])
+        self.bot._send_message.assert_called_once_with("telegram", "1", trace["final_reply"])
+        self.bot._append_agenta_query_log.assert_not_called()
+        self.assertFalse(self.bot._history[1])
+        self.assertIsNone(self.bot.llm.get_runner_statuses()[0].last_success_at)
+
+    def test_empty_skill_follow_up_recovery_does_not_repeat_completed_action(self) -> None:
+        for recovered in (True, False):
+            with self.subTest(recovered=recovered):
+                self.skill.run.reset_mock()
+                empty = self.response(None, {"completion_tokens": 400})
+                empty["choices"][0]["finish_reason"] = "length"
+                self.bot.llm.http_client.post_json.side_effect = [
+                    self.response('{"skill_call": {"name": "echo", "args": {}, "done": false}}'),
+                    empty,
+                    self.response("finished") if recovered else empty,
+                ]
+
+                with self.assertLogs(level="WARNING"):
+                    self.assertEqual(self.bot._handle_message(1, "run echo"), recovered)
+
+                self.skill.run.assert_called_once()
+                trace = self.traces[-1]
+                self.assertEqual(trace["last_action"]["name"], "echo")
+                self.assertEqual(trace["last_skill_result"], "skill result")
+                self.assertEqual(trace["metrics"]["request_count"], 3)
+                self.assertEqual(trace["metrics"]["skill_chain_length"], 1)
+                self.assertEqual(trace["metrics"]["requests"][1]["error"], "EmptyReplyError")
+                self.assertTrue(trace["metrics"]["requests"][2]["empty_reply_retry"])
+                calls = self.bot.llm.http_client.post_json.call_args_list[-3:]
+                self.assertEqual(calls[1].args[1]["messages"], calls[2].args[1]["messages"])
+                if recovered:
+                    self.assertTrue(trace["final_reply"].startswith("finished"))
+                else:
+                    self.assertEqual(trace["error"], "empty_model_reply")
+                    self.assertIn("Completed actions are recorded in the trace", trace["final_reply"])
+
     def test_operator_command_does_not_reuse_previous_request_metrics(self) -> None:
         self.bot.llm.http_client.post_json.return_value = self.response("hello", {"total_tokens": 10})
         self.assertTrue(self.bot._handle_message(1, "hello"))

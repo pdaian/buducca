@@ -39,7 +39,7 @@ from assistant_framework.traces import build_trace_metrics, write_trace
 from .config import AndroidConfig, BotConfig, ContactConfig, WORKSPACE_CONTACT_MAP_FILES
 from .http import ContextLengthExceededError, HttpClient, RequestTimeoutError
 from .interfaces import IncomingAttachment, IncomingMessage
-from .llm_client import OpenAICompatibleClient, RequestBudgetExceeded
+from .llm_client import EmptyReplyError, OpenAICompatibleClient, RequestBudgetExceeded
 from .reminder_service import ReminderService
 from .android_client import AndroidClient, AndroidFrontendUnavailableError
 from .signal_client import SignalClient, SignalFrontendUnavailableError
@@ -3826,6 +3826,18 @@ class BotRunner:
                         "The language model's context window is too small for this request. "
                         "Increase the model's loaded context length or narrow the request."
                     )
+                    if self._get_trace_steps():
+                        trace_payload["final_reply"] += (
+                            " Completed actions are recorded in the trace; please review them before retrying."
+                        )
+                    self._write_message_trace(trace_payload)
+                    self._send_message(backend, conversation_id, trace_payload["final_reply"])
+                    return False
+                except EmptyReplyError as exc:
+                    logging.warning("Empty LLM reply for %s conversation=%s: %s", backend, conversation_id, exc)
+                    self._request_state.stop_reason = exc.reason
+                    trace_payload["error"] = "empty_model_reply"
+                    trace_payload["final_reply"] = str(exc)
                     if self._get_trace_steps():
                         trace_payload["final_reply"] += (
                             " Completed actions are recorded in the trace; please review them before retrying."

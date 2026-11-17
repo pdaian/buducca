@@ -8,7 +8,7 @@
       "model_tag": "hosted-efficient",
       "extra_body": {
         "reasoning_effort": "low",
-        "max_completion_tokens": 800
+        "max_completion_tokens": 4096
       }
     }
   ],

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
 from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError
-from messaging_llm_bot.llm_client import OpenAICompatibleClient, RequestBudgetExceeded
+from messaging_llm_bot.llm_client import EmptyReplyError, OpenAICompatibleClient, RequestBudgetExceeded
 
 
 def chunk(delta=None, *, finish=None, usage=None, index=0):
@@ -163,11 +163,55 @@ class LLMStreamingTests(unittest.TestCase):
 
     def test_refusal_and_content_parts_are_preserved(self) -> None:
         for delta, expected in (({"refusal": "Cannot help."}, "Cannot help."),
+                                ({"content": "", "refusal": "Cannot help."}, "Cannot help."),
+                                ({"content": "<think>private</think>", "refusal": "Cannot help."}, "Cannot help."),
                                 ({"content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]}, "first\nsecond")):
             with self.subTest(delta=delta), patch("messaging_llm_bot.http.urlopen", return_value=stream_response([
                 chunk(delta, finish="stop"),
             ])):
                 self.assertEqual(self.client.generate_reply(self.messages), expected)
+
+    def test_reasoning_only_stream_retries_without_exposing_reasoning(self) -> None:
+        for reasoning in (
+            {"reasoning_content": "private reasoning"},
+            {"reasoning": "private reasoning"},
+            {"content": "<think>private reasoning"},
+        ):
+            responses = [
+                stream_response([
+                    chunk(reasoning, finish="length"),
+                    {"choices": [], "usage": {"completion_tokens": 400, "completion_tokens_details": {"reasoning_tokens": 400}}},
+                ]),
+                stream_response([chunk({"content": "answer"}, finish="stop", usage={"completion_tokens": 5})]),
+            ]
+            with self.subTest(reasoning=reasoning), patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request:
+                with self.assertLogs(level="WARNING"), self.client.request_budget(2):
+                    self.assertEqual(self.client.generate_reply(self.messages), "answer")
+                first, retry = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(retry, {**first, "max_tokens": first["max_tokens"] * 2})
+                self.assertEqual(retry["messages"], self.messages)
+                self.assertNotIn("private reasoning", repr(retry))
+                metrics = self.client.pop_last_request_metrics()
+                self.assertEqual(metrics[0]["error"], "EmptyReplyError")
+                self.assertEqual(metrics[0]["finish_reason"], "length")
+                self.assertEqual(metrics[0]["usage"]["reasoning_tokens"], 400)
+                self.assertEqual(metrics[0]["reasoning_chars"], len("private reasoning"))
+                self.assertTrue(metrics[1]["empty_reply_retry"])
+                self.assertIn("405 tok", self.client.pop_last_reply_footer())
+                self.assertTrue(all(response.closed for response in responses))
+
+    def test_empty_json_fallback_is_a_failed_request(self) -> None:
+        response = io.BytesIO(json.dumps({
+            "choices": [{"message": {"content": None, "reasoning": "private reasoning"}, "finish_reason": "stop"}],
+        }).encode())
+        response.headers = {"Content-Type": "application/json"}
+        with patch("messaging_llm_bot.http.urlopen", return_value=response), self.assertLogs(level="INFO") as logs:
+            with self.assertRaises(EmptyReplyError) as caught:
+                self.client.generate_reply(self.messages)
+        self.assertEqual(caught.exception.reason, "reasoning_only")
+        self.assertFalse(any("LLM request completed:" in line for line in logs.output))
+        self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
+        self.assertTrue(response.closed)
 
     def test_continuation_keeps_metrics_and_consumes_request_budget(self) -> None:
         responses = [

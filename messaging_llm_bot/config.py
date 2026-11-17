@@ -100,7 +100,7 @@ class LLMConfig:
         "tool use is needed."
     )
     temperature: float | None = 0.2
-    max_tokens: int | None = 400
+    max_tokens: int | None = 4096
     history_messages: int = 8
     system_prompt_timezone: str = "America/New_York"
     file_task_layout_prompt: str = "Use the file skill as the default tool for personal tracking and organization tasks. Keep files under assistant/ grouped by domain (for example assistant/notes/, assistant/lists/, assistant/health/, assistant/finance/, assistant/people/, assistant/travel/). Prefer JSONL for append-only logs, JSON for mutable lists, and Markdown for readable notes."

@@ -122,7 +122,7 @@ Modern request options do not justify a provider SDK dependency by themselves. P
   "model": "gpt-5.6-luna",
   "extra_body": {
     "reasoning_effort": "low",
-    "max_completion_tokens": 800
+    "max_completion_tokens": 4096
   }
 }
 ```
@@ -139,6 +139,10 @@ At `runtime.log_level: "INFO"` (the default), model requests also emit detailed 
 The built-in HTTP client requests streaming and `stream_options.include_usage: true` by default. This uses the compatible SSE protocol and usage/reasoning fields described in [LM Studio's API changelog](https://lmstudio.ai/docs/developer/api-changelog). A server that responds with ordinary JSON remains supported. For endpoints that reject streaming, set the runner's `extra_body.stream` to `false`; waiting heartbeats remain active, while previews and usage arrive with the complete response. To disable just the usage request, set `extra_body.stream_options.include_usage` to `false`. Missing usage and first-token timing are marked unavailable, and a stream that ends without completion is treated as a failed attempt. Full request/response payload logging still requires debug mode.
 
 The current client does not implement the Responses API or native function-tool objects. Those are optional future transports in [agent-modernization.md](./agent-modernization.md); the existing JSON skill protocol remains the local/provider-neutral contract.
+
+An empty answer is a failed model request, even when HTTP succeeds. In particular, a reasoning model can spend its entire generation budget before producing visible output: [OpenAI's completion limit includes reasoning tokens](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). The default and example output limits are 4,096 tokens; models or tasks that need more reasoning may require a higher limit and enough loaded context space. A runner's `max_completion_tokens` takes precedence over the legacy `max_tokens` field.
+
+If an answer is empty with `finish_reason: "length"` or `"max_tokens"` and a positive output limit was sent, the client retries that prompt once per runner with twice the limit (at least 4,096 tokens). This retry preserves reasoning settings, consumes the existing request budget, and does not rerun completed skills. It does not modify saved config. Persistent empty answers and other empty completions use runner failover, then report a specific generation-limit, reasoning-only, filtered-response, or empty-response error. Failed attempts retain usage and finish reasons in traces and do not update runner success status or chat history. Check the INFO-level request logs for the limit, `finish_reason`, `reasoning_chars`, and reported reasoning tokens. The old "I couldn't produce a usable reply" fallback alone is not evidence of VRAM exhaustion; server logs are needed to establish a memory failure.
 
 ## Add a new skill
 
