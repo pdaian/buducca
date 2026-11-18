@@ -132,9 +132,10 @@ class BotTraceMetricsTests(unittest.TestCase):
         trace = self.traces[-1]
         self.assertEqual(trace["error"], "empty_model_reply")
         self.assertEqual(trace["metrics"]["stop_reason"], "output_limit")
-        self.assertEqual(trace["metrics"]["request_count"], 2)
+        self.assertEqual(trace["metrics"]["request_count"], 3)
         self.assertEqual(trace["metrics"]["continuation_count"], 0)
-        self.assertEqual(trace["metrics"]["usage"]["completion_tokens"], 800)
+        self.assertEqual(trace["metrics"]["usage"]["completion_tokens"], 1200)
+        self.assertEqual([item["max_tokens"] for item in trace["metrics"]["requests"]], [4096, 8192, 32768])
         self.assertIn("generation limit", trace["final_reply"])
         self.assertIn("max_completion_tokens", trace["final_reply"])
         self.bot._send_message.assert_called_once_with("telegram", "1", trace["final_reply"])
@@ -151,6 +152,7 @@ class BotTraceMetricsTests(unittest.TestCase):
                 self.bot.llm.http_client.post_json.side_effect = [
                     self.response('{"skill_call": {"name": "echo", "args": {}, "done": false}}'),
                     empty,
+                    empty,
                     self.response("finished") if recovered else empty,
                 ]
 
@@ -161,12 +163,15 @@ class BotTraceMetricsTests(unittest.TestCase):
                 trace = self.traces[-1]
                 self.assertEqual(trace["last_action"]["name"], "echo")
                 self.assertEqual(trace["last_skill_result"], "skill result")
-                self.assertEqual(trace["metrics"]["request_count"], 3)
+                self.assertEqual(trace["metrics"]["request_count"], 4)
                 self.assertEqual(trace["metrics"]["skill_chain_length"], 1)
                 self.assertEqual(trace["metrics"]["requests"][1]["error"], "EmptyReplyError")
                 self.assertTrue(trace["metrics"]["requests"][2]["empty_reply_retry"])
-                calls = self.bot.llm.http_client.post_json.call_args_list[-3:]
+                self.assertTrue(trace["metrics"]["requests"][3]["empty_reply_retry"])
+                calls = self.bot.llm.http_client.post_json.call_args_list[-4:]
                 self.assertEqual(calls[1].args[1]["messages"], calls[2].args[1]["messages"])
+                self.assertEqual(calls[1].args[1]["messages"], calls[3].args[1]["messages"])
+                self.assertEqual([call.args[1]["max_tokens"] for call in calls[1:]], [4096, 8192, 32768])
                 if recovered:
                     self.assertTrue(trace["final_reply"].startswith("finished"))
                 else:

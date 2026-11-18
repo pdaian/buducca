@@ -11,6 +11,8 @@ Both the bot and the framework CLI can load either a single JSON file or a confi
 
 `llm.temperature` and `llm.max_tokens` may be `null` when a backend uses newer request fields. Runner `extra_body` values are merged into the outgoing JSON request, except that `model` and `messages` cannot be overridden. See [`docs/agent-modernization.md`](../docs/agent-modernization.md) for current model profiles.
 
+The hosted example reserves up to 32,768 completion tokens for reasoning and the answer. Existing configurations keep their explicit limits; changing this example does not update `config/llm.json`. For generation-limit errors, increase the active runner's `extra_body.max_completion_tokens` (which takes precedence over `llm.max_tokens`), or `llm.max_tokens` for legacy backends. The model must support the output limit and have context room for both the prompt and generation. Empty token-limited answers receive up to two automatic retries of the current model request, with larger limits; completed skills are not repeated. See [model-client compatibility](../docs/developer-guide.md#model-client-compatibility) for the retry limits and trace fields.
+
 Validate the configuration before starting any frontend:
 
 ```bash

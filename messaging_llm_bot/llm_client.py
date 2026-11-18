@@ -21,6 +21,7 @@ _CONTINUATION_PROMPT = (
     "or add commentary about continuing. Output only the remaining continuation."
 )
 _MAX_CONTINUATION_ATTEMPTS = 2
+_EMPTY_REPLY_RETRY_MIN_TOKENS = (4096, 32768)
 _USAGE_METRIC_PATHS = {
     "completion_tokens": (("completion_tokens",),),
     "prompt_tokens": (("prompt_tokens",),),
@@ -277,6 +278,7 @@ class OpenAICompatibleClient:
         continuation_attempt = 0
         token_limit_override: dict[str, int] = {}
         empty_reply_retry = False
+        empty_reply_retries = 0
         stream_fallback = False
 
         while True:
@@ -318,6 +320,7 @@ class OpenAICompatibleClient:
                 "stream": payload["stream"],
                 "stream_fallback": stream_fallback,
                 "usage": {},
+                **{key: payload[key] for key in ("max_tokens", "max_completion_tokens") if key in payload},
             }
             empty_reply_error = None
             stream_error = None
@@ -411,17 +414,22 @@ class OpenAICompatibleClient:
                 token_field = "max_completion_tokens" if payload.get("max_completion_tokens") is not None else "max_tokens"
                 token_limit = payload.get(token_field)
                 if (
-                    empty_reply_error.reason == "output_limit" and not token_limit_override
+                    empty_reply_error.reason == "output_limit"
+                    and empty_reply_retries < len(_EMPTY_REPLY_RETRY_MIN_TOKENS)
                     and isinstance(token_limit, int) and not isinstance(token_limit, bool) and token_limit > 0
                 ):
-                    # Retry the same prompt once; there is no visible answer to continue.
-                    # Preserve reasoning settings and never replay completed skills.
-                    token_limit_override[token_field] = max(4096, token_limit * 2)
+                    # Retry only this prompt, preserving reasoning and completed skills.
+                    # Keep the small first retry; sustained reasoning gets more room on the last.
+                    token_limit_override[token_field] = max(
+                        _EMPTY_REPLY_RETRY_MIN_TOKENS[empty_reply_retries], token_limit * 2,
+                    )
+                    empty_reply_retries += 1
                     empty_reply_retry = True
                     logging.warning(
                         "LLM produced no answer before the generation limit: runner=%s model=%s "
-                        "finish_reason=%s; retrying once with %s=%s (was %s)",
+                        "finish_reason=%s; retry=%s/%s with %s=%s (was %s)",
                         runner_index, runner.model_tag or runner.model, request_metrics["finish_reason"],
+                        empty_reply_retries, len(_EMPTY_REPLY_RETRY_MIN_TOKENS),
                         token_field, token_limit_override[token_field], token_limit,
                     )
                     continue

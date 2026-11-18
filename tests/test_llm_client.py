@@ -135,7 +135,48 @@ class LLMClientTests(unittest.TestCase):
                     self.assertEqual(metrics[0]["usage"]["reasoning_tokens"], limit)
                     self.assertNotIn("error", metrics[1])
                     self.assertIn(f"{limit + 5} tok", client.pop_last_reply_footer())
-                    self.assertTrue(any("retrying once" in line for line in logs.output))
+                    self.assertTrue(any("retry=1/2" in line for line in logs.output))
+                    self.assertIsNotNone(client.get_runner_statuses()[0].last_success_at)
+
+    def test_reasoning_can_recover_after_exhausting_the_first_larger_limit(self) -> None:
+        messages = [{"role": "user", "content": "hello"}]
+        for token_field in ("max_tokens", "max_completion_tokens"):
+            for limit, expected_limits in ((400, [400, 4096, 32768]), (4096, [4096, 8192, 32768]),
+                                           (32768, [32768, 65536, 131072])):
+                with self.subTest(token_field=token_field, limit=limit):
+                    http = SequencedHttpClient([
+                        {
+                            "choices": [{"message": {"content": None, "reasoning_content": "private reasoning"},
+                                         "finish_reason": "length"}],
+                            "usage": {"completion_tokens": tokens, "completion_tokens_details": {"reasoning_tokens": tokens}},
+                        }
+                        for tokens in expected_limits[:2]
+                    ] + [{"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+                          "usage": {"completion_tokens": 5}}])
+                    options = {token_field: limit, "reasoning_effort": "high", "chat_template_kwargs": {"enable_thinking": True}}
+                    client = OpenAICompatibleClient(LLMConfig(
+                        base_url="https://example.invalid/v1", model="m", extra_body=options,
+                    ), http)
+
+                    with self.assertLogs(level="WARNING") as logs, client.request_budget(3):
+                        self.assertEqual(client.generate_reply(messages), "answer")
+
+                    first = http.calls[0][1]
+                    self.assertEqual([call[1] for call in http.calls], [
+                        {**first, token_field: tokens} for tokens in expected_limits
+                    ])
+                    self.assertEqual(first["messages"], messages)
+                    self.assertEqual(options[token_field], limit)
+                    self.assertNotIn("private reasoning", repr(http.calls))
+                    metrics = client.pop_last_request_metrics()
+                    self.assertEqual([item[token_field] for item in metrics], expected_limits)
+                    other_field = "max_tokens" if token_field == "max_completion_tokens" else "max_completion_tokens"
+                    self.assertTrue(all(other_field not in item for item in metrics))
+                    self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, True, True])
+                    self.assertEqual([item["continuation"] for item in metrics], [False, False, False])
+                    self.assertEqual(sum(item["usage"]["completion_tokens"] for item in metrics), sum(expected_limits[:2]) + 5)
+                    self.assertIn(f"{sum(expected_limits[:2]) + 5} tok", client.pop_last_reply_footer())
+                    self.assertTrue(any("retry=2/2" in line for line in logs.output))
                     self.assertIsNotNone(client.get_runner_statuses()[0].last_success_at)
 
     def test_empty_reply_recovery_is_bounded_and_does_not_change_later_requests(self) -> None:
@@ -146,12 +187,12 @@ class LLMClientTests(unittest.TestCase):
         with self.assertLogs(level="INFO") as logs, self.assertRaises(EmptyReplyError) as caught:
             client.generate_reply([])
         self.assertEqual(caught.exception.reason, "output_limit")
-        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(len(http.calls), 3)
         self.assertEqual(client.pop_last_reply_footer(), "")
         self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
         self.assertEqual(client.get_runner_statuses()[0].concurrent_requests, 0)
         self.assertFalse(any("LLM request completed:" in line for line in logs.output))
-        self.assertEqual([item["error"] for item in client.pop_last_request_metrics()], ["EmptyReplyError"] * 2)
+        self.assertEqual([item["error"] for item in client.pop_last_request_metrics()], ["EmptyReplyError"] * 3)
 
         http.response = {"choices": [{"message": {"content": "next answer"}, "finish_reason": "stop"}]}
         self.assertEqual(client.generate_reply([]), "next answer")
@@ -183,17 +224,17 @@ class LLMClientTests(unittest.TestCase):
                 self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
                 self.assertIsNotNone(client.get_runner_statuses()[1].last_success_at)
 
-    def test_persistent_empty_reply_fails_over_after_one_retry(self) -> None:
+    def test_persistent_empty_reply_fails_over_after_two_retries(self) -> None:
         empty = {"choices": [{"message": {"content": None}, "finish_reason": "length"}]}
-        http = SequencedHttpClient([empty, empty, {"choices": [{"message": {"content": "recovered"}}]}])
+        http = SequencedHttpClient([empty, empty, empty, {"choices": [{"message": {"content": "recovered"}}]}])
         client = OpenAICompatibleClient(LLMConfig(max_tokens=400, runners=[
             LLMRunnerConfig(base_url="https://one.invalid/v1", model="one"),
             LLMRunnerConfig(base_url="https://two.invalid/v1", model="two"),
         ]), http)
         with self.assertLogs(level="WARNING"):
             self.assertEqual(client.generate_reply([]), "recovered")
-        self.assertEqual([call[1]["max_tokens"] for call in http.calls], [400, 4096, 400])
-        self.assertEqual([item["runner_index"] for item in client.pop_last_request_metrics()], [0, 0, 1])
+        self.assertEqual([call[1]["max_tokens"] for call in http.calls], [400, 4096, 32768, 400])
+        self.assertEqual([item["runner_index"] for item in client.pop_last_request_metrics()], [0, 0, 0, 1])
         self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
 
     def test_recovered_reply_can_still_continue_a_partial_answer(self) -> None:
@@ -219,6 +260,24 @@ class LLMClientTests(unittest.TestCase):
         with self.assertLogs(level="WARNING"):
             self.assertEqual(client.generate_reply([]), "partpartpart")
         self.assertEqual(len(http.calls), 3)
+
+    def test_continuation_does_not_reset_empty_reply_retry_allowance(self) -> None:
+        empty = {"choices": [{"message": {"content": None}, "finish_reason": "length"}]}
+        http = SequencedHttpClient([
+            empty, empty,
+            {"choices": [{"message": {"content": "partial answer"}, "finish_reason": "length"}]},
+            empty,
+        ])
+        client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid/v1", model="m"), http)
+        with self.assertLogs(level="WARNING"), self.assertRaises(EmptyReplyError):
+            client.generate_reply([])
+        self.assertEqual([call[1]["max_tokens"] for call in http.calls], [4096, 8192, 32768, 32768])
+        self.assertEqual(http.calls[-1][1]["messages"][-2], {"role": "assistant", "content": "partial answer"})
+        metrics = client.pop_last_request_metrics()
+        self.assertEqual([item["continuation"] for item in metrics], [False, False, False, True])
+        self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, True, True, False])
+        self.assertEqual(client.pop_last_reply_footer(), "")
+        self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
 
     def test_generate_reply_strips_think_text_from_content_parts(self) -> None:
         http = StubHttpClient(
@@ -781,18 +840,20 @@ class RequestBudgetTests(unittest.TestCase):
         self.assertEqual(self.client.pop_last_reply_footer(), "")
 
     def test_empty_reply_recovery_cannot_bypass_budget_or_fail_over(self) -> None:
-        self.http.responses = [
-            {"choices": [{"message": {"content": None}, "finish_reason": "length"}], "usage": {"total_tokens": 4}},
-            self.reply,
-        ]
-        with self.assertLogs(level="WARNING"), self.client.request_budget(1), self.assertRaises(RequestBudgetExceeded):
-            self.client.generate_reply(self.messages)
-        self.assertEqual(len(self.http.calls), 1)
-        metrics = self.client.pop_last_request_metrics()
-        self.assertEqual(metrics[0]["error"], "EmptyReplyError")
-        self.assertEqual(metrics[0]["usage"], {"total_tokens": 4})
-        self.assertEqual(self.client.pop_last_reply_footer(), "")
-        self.assertTrue(all(status.last_success_at is None for status in self.client.get_runner_statuses()))
+        empty = {"choices": [{"message": {"content": None}, "finish_reason": "length"}], "usage": {"total_tokens": 4}}
+        for budget in (1, 2):
+            with self.subTest(budget=budget):
+                self.http.calls.clear()
+                self.http.responses = [empty] * budget + [self.reply]
+                with self.assertLogs(level="WARNING"), self.client.request_budget(budget), self.assertRaises(RequestBudgetExceeded):
+                    self.client.generate_reply(self.messages)
+                self.assertEqual(len(self.http.calls), budget)
+                metrics = self.client.pop_last_request_metrics()
+                self.assertEqual([item["error"] for item in metrics], ["EmptyReplyError"] * budget)
+                self.assertEqual([item["usage"] for item in metrics], [{"total_tokens": 4}] * budget)
+                self.assertEqual(len({item["runner_index"] for item in metrics}), 1)
+                self.assertEqual(self.client.pop_last_reply_footer(), "")
+                self.assertTrue(all(status.last_success_at is None for status in self.client.get_runner_statuses()))
 
     def test_budget_spans_calls_and_is_removed_after_failure(self) -> None:
         self.http.responses = [self.reply, self.reply]

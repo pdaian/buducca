@@ -190,7 +190,7 @@ Model names change quickly. Treat this table as a dated starting point and confi
       "model_tag": "hosted-efficient",
       "extra_body": {
         "reasoning_effort": "low",
-        "max_completion_tokens": 4096
+        "max_completion_tokens": 32768
       }
     }
   ],

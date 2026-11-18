@@ -229,6 +229,49 @@ class LLMStreamingTests(unittest.TestCase):
         self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
         self.assertTrue(response.closed)
 
+    def test_second_empty_reply_retry_preserves_streaming_and_context_errors(self) -> None:
+        for context_error in (False, True):
+            with self.subTest(context_error=context_error):
+                self.config.extra_body = {"max_completion_tokens": 4096, "reasoning_effort": "high"}
+                client = OpenAICompatibleClient(self.config, HttpClient(30))
+                responses = [
+                    stream_response([
+                        chunk({"reasoning_content": "private reasoning"}, finish="length"),
+                        {"choices": [], "usage": {"completion_tokens": tokens}},
+                    ]) for tokens in (4096, 8192)
+                ] + [stream_response(
+                    [{"error": {"type": "exceed_context_size_error", "message": "SECRET"}}]
+                    if context_error else [chunk({"content": "answer"}, finish="stop")]
+                )]
+                with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="WARNING"):
+                    with client.request_budget(3):
+                        if context_error:
+                            with self.assertRaises(ContextLengthExceededError):
+                                client.generate_reply(self.messages)
+                        else:
+                            self.assertEqual(client.generate_reply(self.messages), "answer")
+                payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(payloads, [
+                    {**payloads[0], "max_completion_tokens": tokens} for tokens in (4096, 8192, 32768)
+                ])
+                self.assertEqual(payloads[0]["messages"], self.messages)
+                self.assertEqual(payloads[0]["reasoning_effort"], "high")
+                self.assertTrue(all(payload["stream"] for payload in payloads))
+                self.assertTrue(all("max_tokens" not in payload for payload in payloads))
+                metrics = client.pop_last_request_metrics()
+                self.assertEqual([item["max_completion_tokens"] for item in metrics], [4096, 8192, 32768])
+                self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, True, True])
+                self.assertEqual([item["usage"] for item in metrics], [{"completion_tokens": 4096}, {"completion_tokens": 8192}, {}])
+                self.assertNotIn("private reasoning", repr(metrics))
+                self.assertTrue(all(response.closed for response in responses))
+                if context_error:
+                    self.assertEqual(metrics[-1]["error"], "ContextLengthExceededError")
+                    self.assertEqual(client.pop_last_reply_footer(), "")
+                    self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+                else:
+                    self.assertNotIn("error", metrics[-1])
+                    self.assertIsNotNone(client.get_runner_statuses()[0].last_success_at)
+
     def test_continuation_keeps_metrics_and_consumes_request_budget(self) -> None:
         responses = [
             stream_response([chunk({"content": "Hello wor"}, finish="length", usage={"completion_tokens": 2})]),
@@ -357,19 +400,20 @@ class LLMStreamingTests(unittest.TestCase):
         responses = [
             stream_response([chunk({"reasoning": "private reasoning"})], done=False),
             json_response({"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}),
+            json_response({"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}),
             json_response({"choices": [{"message": {"content": "Hello wor"}, "finish_reason": "length"}]}),
             json_response({"choices": [{"message": {"content": "ld"}, "finish_reason": "stop"}]}),
         ]
         with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="WARNING"):
-            with self.client.request_budget(4):
+            with self.client.request_budget(5):
                 self.assertEqual(self.client.generate_reply(self.messages), "Hello world")
         payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
-        self.assertEqual([payload["stream"] for payload in payloads], [True, False, False, False])
-        self.assertEqual([payload["max_tokens"] for payload in payloads], [4096, 4096, 8192, 8192])
-        self.assertEqual(payloads[3]["messages"][-2], {"role": "assistant", "content": "Hello wor"})
+        self.assertEqual([payload["stream"] for payload in payloads], [True, False, False, False, False])
+        self.assertEqual([payload["max_tokens"] for payload in payloads], [4096, 4096, 8192, 32768, 32768])
+        self.assertEqual(payloads[4]["messages"][-2], {"role": "assistant", "content": "Hello wor"})
         metrics = self.client.pop_last_request_metrics()
-        self.assertEqual([item["continuation"] for item in metrics], [False, False, False, True])
-        self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, False, True, False])
+        self.assertEqual([item["continuation"] for item in metrics], [False, False, False, False, True])
+        self.assertEqual([item["empty_reply_retry"] for item in metrics], [False, False, True, True, False])
         self.assertTrue(all(response.closed for response in responses))
 
     def test_stream_timeout_keeps_configured_timeout_and_does_not_trigger_fallback(self) -> None:
