@@ -337,6 +337,47 @@ class BotRunner:
             requests.extend(getattr(self.llm, "pop_last_request_metrics", lambda: [])())
             self._request_state.llm_requests = requests
 
+    @staticmethod
+    def _trim_prompt_history(
+        prompt: list[dict[str, str]],
+        current_request: dict[str, str] | None,
+        *,
+        remove_all: bool = False,
+    ) -> bool:
+        # Only completed turns before the original request are expendable.
+        # Match the message by identity so equal text in history stays distinct.
+        history_end = next((index for index, message in enumerate(prompt) if message is current_request), 0)
+        if history_end <= 1 or prompt[0].get("role") != "system":
+            return False
+        history = prompt[1:history_end]
+        if len(history) % 2 or any(
+            message.get("role") != ("user" if index % 2 == 0 else "assistant")
+            for index, message in enumerate(history)
+        ):
+            return False
+        turns = len(history) // 2
+        removed_messages = len(history) if remove_all else 2 * ((turns + 1) // 2)
+        previous_prompt_chars = sum(len(message["content"]) for message in prompt)
+        del prompt[1:1 + removed_messages]
+        logging.warning(
+            "LLM context window exceeded; retrying with %s older conversation turns omitted "
+            "(%s remaining, prompt_chars=%s -> %s)",
+            removed_messages // 2, turns - removed_messages // 2,
+            previous_prompt_chars, sum(len(message["content"]) for message in prompt),
+        )
+        return True
+
+    def _generate_initial_model_reply(self, prompt: list[dict[str, str]], *, disable_thinking: bool = False) -> str:
+        current_request = prompt[-1] if prompt else None
+        for recovery_attempt in range(4):
+            try:
+                return self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+            except ContextLengthExceededError:
+                if recovery_attempt == 3 or not self._trim_prompt_history(
+                    prompt, current_request, remove_all=recovery_attempt == 2,
+                ):
+                    raise
+
     def _write_message_trace(self, payload: dict[str, Any]) -> None:
         steps = self._get_trace_steps()
         payload["steps"] = steps
@@ -1381,7 +1422,7 @@ class BotRunner:
                         sender_contact=sender_contact,
                     )
                     self._set_active_skill_chain_length(0)
-                    model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+                    model_reply = self._generate_initial_model_reply(prompt, disable_thinking=disable_thinking)
                     reply = self._coerce_reply_text(
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"scheduled reminder id={record.get('id', '')}",
@@ -1486,7 +1527,7 @@ class BotRunner:
                         sender_contact=sender_contact,
                     )
                     self._set_active_skill_chain_length(0)
-                    model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+                    model_reply = self._generate_initial_model_reply(prompt, disable_thinking=disable_thinking)
                     reply = self._coerce_reply_text(
                         self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
                         context=f"hourly slot={slot.isoformat()}",
@@ -2161,13 +2202,14 @@ class BotRunner:
         model_reply = initial_model_reply
         trace_steps: list[dict[str, Any]] = []
         self._set_trace_steps(trace_steps)
+        current_request = prompt[-1] if prompt else None
         main_prompt_block = ""
         if prompt and prompt[-1].get("role") == "user":
             main_prompt_block = self._extract_main_prompt_block(prompt[-1].get("content", ""))
         max_skill_chain_steps = self.config.runtime.max_skill_chain_steps
         result_limit = self.config.runtime.max_skill_result_chars
         self._request_state.skill_result_chars = result_limit
-        result_message_indexes: list[int] = []
+        result_messages: list[dict[str, str]] = []
         result_guard = RepeatedResultGuard(self.config.runtime.max_repeated_skill_results)
         for step_index in range(max_skill_chain_steps + 1):
             skill_call = self._try_parse_skill_call(model_reply)
@@ -2215,13 +2257,12 @@ class BotRunner:
             allow_follow_up = not skill_call["done"] or not done_was_explicit or context_result != raw_skill_result
             trace_steps[-1]["context_chars"] = len(context_result)
             trace_steps[-1]["result_truncated"] = context_result != raw_skill_result
-            if result_message_indexes and main_prompt_block:
+            if result_messages and main_prompt_block:
                 # Keep the task reminder only in the latest follow-up. The
                 # original request remains unchanged at the start of the chain.
-                previous_result = prompt[result_message_indexes[-1]]
+                previous_result = result_messages[-1]
                 previous_result["content"] = previous_result["content"].removeprefix(main_prompt_block + "\n\n")
             prompt.append({"role": "assistant", "content": model_reply})
-            result_message_indexes.append(len(prompt))
             prompt.append(
                 {
                     "role": "user",
@@ -2234,6 +2275,7 @@ class BotRunner:
                     ),
                 }
             )
+            result_messages.append(prompt[-1])
             if self._debug_enabled:
                 logging.debug(
                     "Skill chain step %s/%s prompt before intermediate LLM call: %s",
@@ -2242,44 +2284,52 @@ class BotRunner:
                     prompt,
                 )
             self._set_active_skill_chain_length(step_index + 1)
-            for recovery_attempt in range(4):
+            result_recovery_attempts = 0
+            history_recovery_attempts = 0
+            while True:
                 try:
                     model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                     break
                 except ContextLengthExceededError:
-                    if result_limit is None or recovery_attempt == 3:
+                    if result_limit is not None and result_recovery_attempts < 3:
+                        previous_prompt_chars = sum(len(message["content"]) for message in prompt)
+                        largest_result_chars = max(step["context_chars"] for step in trace_steps)
+                        result_limit = max(512, min(2000, result_limit // 2, largest_result_chars // 2))
+                        self._request_state.skill_result_chars = result_limit
+                        # Under context pressure, rely on the original request
+                        # instead of repeating it in follow-up messages.
+                        main_prompt_block = ""
+                        for step, result_message in zip(trace_steps, result_messages):
+                            excerpt = bound_skill_result(
+                                step["skill_result"], step=step["step"], max_chars=result_limit,
+                            )
+                            if len(excerpt) < step["context_chars"]:
+                                step["context_chars"] = len(excerpt)
+                                step["result_truncated"] = True
+                            result_message["content"] = self._continue_skill_chain_prompt(
+                                step["skill_call"]["name"], excerpt,
+                                allow_follow_up_skill=(
+                                    step["result_truncated"] or not step["skill_call"]["done"]
+                                    or not self._done_flag_was_explicit(step["model_reply"])
+                                ),
+                                main_prompt_block=main_prompt_block,
+                                skill_args=step["skill_call"]["args"],
+                            )
+                        prompt_chars = sum(len(message["content"]) for message in prompt)
+                        if prompt_chars < previous_prompt_chars:
+                            result_recovery_attempts += 1
+                            logging.warning(
+                                "LLM context window exceeded; retrying follow-up with skill results capped at %s "
+                                "characters (prompt_chars=%s -> %s, recovery %s/3)",
+                                result_limit, previous_prompt_chars, prompt_chars, result_recovery_attempts,
+                            )
+                            continue
+                        result_recovery_attempts = 3
+                    if history_recovery_attempts == 3 or not self._trim_prompt_history(
+                        prompt, current_request, remove_all=history_recovery_attempts == 2,
+                    ):
                         raise
-                    previous_prompt_chars = sum(len(message["content"]) for message in prompt)
-                    largest_result_chars = max(step["context_chars"] for step in trace_steps)
-                    result_limit = max(512, min(2000, result_limit // 2, largest_result_chars // 2))
-                    self._request_state.skill_result_chars = result_limit
-                    # Under context pressure, rely on the original request
-                    # instead of repeating it in follow-up messages.
-                    main_prompt_block = ""
-                    for step, message_index in zip(trace_steps, result_message_indexes):
-                        excerpt = bound_skill_result(
-                            step["skill_result"], step=step["step"], max_chars=result_limit,
-                        )
-                        if len(excerpt) < step["context_chars"]:
-                            step["context_chars"] = len(excerpt)
-                            step["result_truncated"] = True
-                        prompt[message_index]["content"] = self._continue_skill_chain_prompt(
-                            step["skill_call"]["name"], excerpt,
-                            allow_follow_up_skill=(
-                                step["result_truncated"] or not step["skill_call"]["done"]
-                                or not self._done_flag_was_explicit(step["model_reply"])
-                            ),
-                            main_prompt_block=main_prompt_block,
-                            skill_args=step["skill_call"]["args"],
-                        )
-                    prompt_chars = sum(len(message["content"]) for message in prompt)
-                    if prompt_chars >= previous_prompt_chars:
-                        raise
-                    logging.warning(
-                        "LLM context window exceeded; retrying follow-up with skill results capped at %s "
-                        "characters (prompt_chars=%s -> %s, recovery %s/3)",
-                        result_limit, previous_prompt_chars, prompt_chars, recovery_attempt + 1,
-                    )
+                    history_recovery_attempts += 1
             if summarized_skill_result != raw_skill_result and self.config.runtime.max_skill_result_chars is None:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
@@ -3885,7 +3935,7 @@ class BotRunner:
                         if forced_runner_index is not None and callable(force_runner):
                             stack.enter_context(force_runner(forced_runner_index))
                         self._set_active_skill_chain_length(0)
-                        model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
+                        model_reply = self._generate_initial_model_reply(prompt, disable_thinking=disable_thinking)
                         trace_payload["initial_model_reply"] = model_reply
                         reply = self._coerce_reply_text(
                             self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),

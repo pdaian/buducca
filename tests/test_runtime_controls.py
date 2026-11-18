@@ -60,6 +60,19 @@ class RuntimeControlTests(unittest.TestCase):
             self.bot._refresh_skills()
             yield workspace
 
+    @contextmanager
+    def conversation_history(self, turns=4, *, conversation_key=1):
+        history = [
+            {"role": role, "content": f"Earlier {role} {turn}"}
+            for turn in range(turns) for role in ("user", "assistant")
+        ]
+        self.bot._history[conversation_key].extend(history)
+        with patch.object(self.bot, "_build_messages", wraps=BotRunner._build_messages.__get__(self.bot)), \
+                patch.object(self.bot, "_build_system_prompt", return_value="Keep all system instructions."), \
+                patch("messaging_llm_bot.bot.search_workspace", return_value=[]), \
+                patch("messaging_llm_bot.bot.build_structured_memory_context", return_value="Keep workspace context."):
+            yield history
+
     def test_file_prompt_exposes_configured_cap_without_inventing_token_capacity(self) -> None:
         with self.file_workspace({}), patch("messaging_llm_bot.bot.CollectorManager.load_manifests", return_value=[]):
             for cap in (512, 4000, None):
@@ -641,6 +654,223 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
         self.assertIn("reduce concurrent requests", self.traces[-1]["final_reply"])
         self.assertNotIn("Completed actions", self.traces[-1]["final_reply"])
+
+    def test_initial_overflow_omits_oldest_complete_turns_only_for_current_prompt(self) -> None:
+        prompts = []
+        replies = iter([ContextLengthExceededError("context full"), self.response("Recovered"), self.response("Next turn")])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.conversation_history() as history:
+            with self.assertLogs(level="WARNING"):
+                self.assertTrue(self.bot._handle_message(1, "/nothink work"))
+            self.assertEqual(prompts[0][1:-1], history)
+            self.assertEqual(prompts[1], [prompts[0][0], *history[4:], prompts[0][-1]])
+            self.assertEqual(list(self.bot._history[1])[:-2], history)
+            self.assertEqual(self.traces[-1]["last_prompt"], prompts[1])
+            self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
+            self.assertEqual(self.traces[-1]["metrics"]["requests"][0]["error"], "ContextLengthExceededError")
+            self.assertNotIn("stop_reason", self.traces[-1]["metrics"])
+            for call in self.bot.llm.http_client.post_json.call_args_list:
+                self.assertFalse(call.args[1]["chat_template_kwargs"]["enable_thinking"])
+            self.assertTrue(self.bot._handle_message(1, "new work"))
+            self.assertEqual(prompts[2][1:1 + len(history)], history)
+        self.skill.run.assert_not_called()
+
+    def test_initial_history_recovery_is_bounded_and_tries_without_history(self) -> None:
+        prompts = []
+
+        def reject(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            raise ContextLengthExceededError("context full")
+
+        self.bot.llm.http_client.post_json.side_effect = reject
+        with self.conversation_history(turns=8) as history, self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.assertEqual([len(prompt) for prompt in prompts], [18, 10, 6, 2])
+        self.assertEqual(prompts[-1], [prompts[0][0], prompts[0][-1]])
+        self.assertEqual(list(self.bot._history[1]), history)
+        self.assertEqual(self.traces[-1]["metrics"]["request_count"], 4)
+        self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
+        self.skill.run.assert_not_called()
+
+    def test_history_recovery_consumes_the_turn_budget(self) -> None:
+        self.bot.config.runtime.max_llm_requests_per_turn = 1
+        self.bot.llm.http_client.post_json.side_effect = ContextLengthExceededError("context full")
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.bot.llm.http_client.post_json.assert_called_once()
+        self.assertEqual(list(self.bot._history[1]), history)
+        self.assertEqual(self.traces[-1]["error"], "request_budget_exceeded")
+        self.assertEqual(self.traces[-1]["metrics"]["request_count"], 1)
+        self.skill.run.assert_not_called()
+
+    def test_history_is_not_trimmed_for_unrelated_errors(self) -> None:
+        with self.conversation_history() as history:
+            for error in (RuntimeError("HTTP 400"), RequestTimeoutError("timeout")):
+                with self.subTest(error=type(error).__name__):
+                    self.bot.llm.http_client.post_json.reset_mock()
+                    self.bot.llm.http_client.post_json.side_effect = error
+                    with self.assertLogs(level="WARNING"):
+                        self.assertFalse(self.bot._handle_message(1, "work"))
+                    self.bot.llm.http_client.post_json.assert_called_once()
+                    self.assertEqual(self.traces[-1]["last_prompt"][1:-1], history)
+                    self.assertEqual(list(self.bot._history[1]), history)
+
+    def test_follow_up_shrinks_results_before_history_and_preserves_chain_readback(self) -> None:
+        result = "start" + "x" * 3000 + "MIDDLE EVIDENCE" + "y" * 3000 + "end"
+        self.skill.run.return_value = result
+        prompts = []
+        caps = []
+        replies = iter([
+            self.call(args={"step": 1}), *[ContextLengthExceededError("context full")] * 4,
+            self.call(args={"step": 2}), ContextLengthExceededError("context full"),
+            self.call("read_skill_result", {"step": 1, "offset": 3005, "limit": 15}), self.response("Done"),
+        ])
+
+        def respond(_url, payload, **_kwargs):
+            prompts.append(json.loads(json.dumps(payload["messages"])))
+            caps.append([step["context_chars"] for step in self.bot._get_trace_steps()])
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "work"))
+        self.assertEqual(caps[1:6], [[4000], [2000], [1000], [512], [512]])
+        for prompt in prompts[1:5]:
+            self.assertEqual(prompt[:len(prompts[0])], prompts[0])
+        self.assertEqual(prompts[5][1:5], history[4:])
+        self.assertEqual(prompts[7][1:3], history[6:])
+        for prompt in prompts[5:]:
+            self.assertEqual(prompt[0], prompts[0][0])
+            request_index = prompt.index(prompts[0][-1])
+            chain = prompt[request_index + 1:]
+            self.assertEqual([message["role"] for message in chain], ["assistant", "user"] * (len(chain) // 2))
+            self.assertEqual(chain[0], prompts[1][-2])
+            self.assertIn("Skill `echo` returned:", chain[1]["content"])
+        self.assertIn("MIDDLE EVIDENCE", prompts[-1][-1]["content"])
+        self.assertEqual(self.skill.run.call_count, 2)
+        self.assertEqual(list(self.bot._history[1])[:-2], history)
+        trace = self.traces[-1]
+        self.assertEqual(trace["metrics"]["request_count"], 9)
+        self.assertEqual([step["skill_result"] for step in trace["steps"][:2]], [result, result])
+        self.assertEqual([step["context_chars"] for step in trace["steps"][:2]], [512, 512])
+
+    def test_history_recovery_works_with_result_limits_disabled(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = None
+        self.skill.run.return_value = "x" * 6000
+        self.bot.llm.http_client.post_json.side_effect = [
+            self.call(), ContextLengthExceededError("context full"), self.response("Done"),
+        ]
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "work"))
+        self.skill.run.assert_called_once()
+        trace = self.traces[-1]
+        self.assertEqual(trace["last_prompt"][1:5], history[4:])
+        self.assertEqual(trace["metrics"]["request_count"], 3)
+        self.assertEqual(trace["steps"][0]["context_chars"], 6000)
+        self.assertFalse(trace["steps"][0]["result_truncated"])
+
+    def test_follow_up_history_recovery_stops_without_replaying_actions(self) -> None:
+        self.skill.run.return_value = "x" * 6000
+        self.bot.llm.http_client.post_json.side_effect = [
+            self.call(), *[ContextLengthExceededError("context full")] * 7,
+        ]
+        with self.conversation_history(turns=8) as history, self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.skill.run.assert_called_once()
+        self.assertEqual(list(self.bot._history[1]), history)
+        trace = self.traces[-1]
+        self.assertEqual(trace["metrics"]["request_count"], 8)
+        self.assertEqual(trace["error"], "context_length_exceeded")
+        self.assertEqual(len(trace["last_prompt"]), 4)
+        self.assertEqual(trace["steps"][0]["skill_result"], "x" * 6000)
+        self.assertIn("Completed actions", trace["final_reply"])
+
+    def test_history_recovery_preserves_equal_current_request_and_rejects_incomplete_turns(self) -> None:
+        messages = [
+            {"role": "system", "content": "Keep instructions."},
+            {"role": "user", "content": "work"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {"role": "user", "content": "work"},
+        ]
+        self.bot._build_messages = Mock(side_effect=lambda *_args, **_kwargs: [dict(m) for m in messages])
+        self.bot.llm.http_client.post_json.side_effect = [ContextLengthExceededError("context full"), self.response("Done")]
+        with self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "work"))
+        self.assertEqual(self.traces[-1]["last_prompt"], [messages[0], messages[-1]])
+
+        messages.pop(1)
+        self.bot.llm.http_client.post_json.reset_mock()
+        self.bot.llm.http_client.post_json.side_effect = ContextLengthExceededError("context full")
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.bot.llm.http_client.post_json.assert_called_once()
+        self.assertEqual(self.traces[-1]["last_prompt"], messages)
+
+    def test_history_recovery_is_isolated_between_concurrent_conversations(self) -> None:
+        barrier = threading.Barrier(2, timeout=3)
+        attempts = {"1": 0, "2": 0}
+        outcomes = []
+
+        def respond(_url, payload, **_kwargs):
+            conversation = "1" if "- chat_id: 1\n" in payload["messages"][-1]["content"] else "2"
+            attempts[conversation] += 1
+            if attempts[conversation] == 1:
+                barrier.wait()
+                if conversation == "1":
+                    raise ContextLengthExceededError("context full")
+            return self.response("Done")
+
+        self.bot.llm.http_client.post_json.side_effect = respond
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.bot._history[2].extend(history)
+            threads = [threading.Thread(target=lambda value=value: outcomes.append(self.bot._handle_message(value, "work")))
+                       for value in (1, 2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [True, True])
+        self.assertEqual(attempts, {"1": 2, "2": 1})
+        traces = {trace["conversation_id"]: trace for trace in self.traces}
+        self.assertEqual(traces["1"]["last_prompt"][1:-1], history[4:])
+        self.assertEqual(traces["2"]["last_prompt"][1:-1], history)
+        for conversation in (1, 2):
+            self.assertEqual(list(self.bot._history[conversation])[:-2], history)
+
+    def test_scheduled_requests_recover_initial_history_overflow(self) -> None:
+        slot = datetime(2026, 11, 18, 18, tzinfo=timezone.utc)
+        self.bot._workspace = Mock(spec=Workspace)
+        self.bot._resolve_hourly_target = Mock(return_value=None)
+        reminder = {"id": "test", "backend": "telegram", "conversation_id": "1",
+                    "unix_time": int(slot.timestamp()), "prompt": "work"}
+        for kind, key in (("reminder", 1), ("hourly", self.bot._history_key("hourly", slot.isoformat()))):
+            with self.subTest(kind=kind):
+                self.bot.llm.http_client.post_json.reset_mock()
+                self.bot.llm.http_client.post_json.side_effect = [
+                    ContextLengthExceededError("context full"), self.response("NO_ACTION"),
+                ]
+                with self.conversation_history(conversation_key=key) as history, self.assertLogs(level="WARNING"):
+                    if kind == "reminder":
+                        self.assertTrue(self.bot._run_due_reminder(reminder))
+                    else:
+                        self.assertTrue(self.bot._run_hourly_task("work", slot))
+                calls = self.bot.llm.http_client.post_json.call_args_list
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0].args[1]["messages"][1:-1], history)
+                self.assertEqual(calls[1].args[1]["messages"][1:-1], history[4:])
+        self.skill.run.assert_not_called()
 
     def test_reader_is_only_exposed_when_limits_are_enabled(self) -> None:
         self.assertIn("read_skill_result", self.bot._load_runtime_skills())
