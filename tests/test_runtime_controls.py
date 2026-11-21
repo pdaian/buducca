@@ -110,7 +110,7 @@ class RuntimeControlTests(unittest.TestCase):
         ])
         for index, remaining in enumerate((2, 1, 0), start=1):
             self.assertIn(f"Remaining skill-chain calls: {remaining}", prompts[index][-1]["content"])
-        self.assertIn("Current read context cap: 4000", prompts[1][-1]["content"])
+        self.assertIn("No runtime read context cap", prompts[1][-1]["content"])
         self.assertIn("start_line one past the last fully inspected line", prompts[2][-1]["content"])
         self.assertNotIn("If you need another skill call", prompts[3][-1]["content"])
         self.assertNotIn("stop_reason", self.traces[-1]["metrics"])
@@ -149,6 +149,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertIn("next offset", prompts[-1][-1]["content"])
 
     def test_file_advice_updates_after_context_recovery_even_for_a_small_latest_read(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         prompts = []
         replies = iter([
             self.call("file", {"path": "large.txt"}),
@@ -324,26 +325,65 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertTrue(self.bot._handle_message(1, "second"))
         self.assertIn("step is unavailable in this turn", self.traces[-1]["steps"][0]["skill_result"])
 
-    def test_default_limit_bounds_large_results_before_follow_up(self) -> None:
-        result = "start" + "x" * 33926 + "end!!"
-        self.skill.run.return_value = result
+    def test_default_returns_full_large_result_on_first_follow_up(self) -> None:
+        result = "start" + "é🙂" * 8000 + "MIDDLE EVIDENCE" + "y" * 16000 + "end"
+        for done in (False, True):
+            with self.subTest(done=done):
+                self.skill.run.reset_mock()
+                self.skill.run.return_value = result
+                self.bot.llm.http_client.post_json.reset_mock()
+                prompts = []
+                responses = iter([self.call(done=done), self.response("Done")])
+
+                def respond(_url, payload, **_kwargs):
+                    prompts.append(json.loads(json.dumps(payload["messages"])))
+                    return next(responses)
+
+                self.bot.llm.http_client.post_json.side_effect = respond
+                self.assertTrue(self.bot._handle_message(1, "read"))
+                self.assertEqual(len(prompts), 2)
+                self.assertIn(result, prompts[1][-1]["content"])
+                self.assertNotIn("read_skill_result", prompts[1][-1]["content"])
+                self.assertNotIn("read_skill_result", self.bot._skills)
+                steps = self.traces[-1]["steps"]
+                self.assertEqual(len(steps), 1)
+                self.assertEqual(steps[0]["result_chars"], len(result))
+                self.assertEqual(steps[0]["context_chars"], len(result))
+                self.assertEqual(steps[0]["skill_result"], result)
+                self.assertFalse(steps[0]["result_truncated"])
+                self.assertTrue(self.traces[-1]["final_reply"].startswith("Done"))
+                self.skill.run.assert_called_once()
+
+    def test_default_keeps_full_file_results_in_context_across_calls(self) -> None:
+        first = "start\n" + "é🙂" * 3000 + "\nMIDDLE EVIDENCE\n" + "y" * 3000 + "\nend"
         prompts = []
-        responses = iter([self.call(), self.response("Done")])
+        responses = iter([
+            self.call("file", {"path": "first.txt"}),
+            self.call("file", {"path": "second.txt"}),
+            self.response("Both files inspected"),
+        ])
 
         def respond(_url, payload, **_kwargs):
             prompts.append(json.loads(json.dumps(payload["messages"])))
             return next(responses)
 
         self.bot.llm.http_client.post_json.side_effect = respond
-        self.assertTrue(self.bot._handle_message(1, "read"))
-        self.assertNotIn(result, prompts[1][-1]["content"])
-        self.assertIn("read_skill_result", prompts[1][-1]["content"])
-        step = self.traces[-1]["steps"][0]
-        self.assertEqual(step["result_chars"], 33936)
-        self.assertEqual(step["context_chars"], 4000)
-        self.assertEqual(step["skill_result"], result)
+        with self.file_workspace({"first.txt": first, "second.txt": "other evidence"}) as workspace:
+            self.assertTrue(self.bot._handle_message(1, "Read both files completely"))
+            self.assertEqual(workspace.read_text.call_count, 2)
+        self.assertEqual(len(prompts), 3)
+        for prompt in prompts[1:]:
+            self.assertIn("first.txt:\n" + first, prompt[2]["content"])
+            self.assertNotIn("read_skill_result", str(prompt))
+        self.assertIn("second.txt:\nother evidence", prompts[-1][-1]["content"])
+        steps = self.traces[-1]["steps"]
+        self.assertEqual(len(steps), 2)
+        for step in steps:
+            self.assertEqual(step["context_chars"], step["result_chars"])
+            self.assertFalse(step["result_truncated"])
 
     def test_context_overflow_recovers_without_repeating_skill(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         for streaming, status in ((False, 400), (True, 400), (False, 500), (True, 500), (True, 200)):
             with self.subTest(streaming=streaming, status=status):
                 self.skill.run.reset_mock()
@@ -387,6 +427,7 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertTrue(all(response.closed for response in [*responses, error]))
 
     def test_stream_fallback_recovers_follow_up_without_repeating_completed_skills(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         for context_error in (False, True):
             with self.subTest(context_error=context_error):
                 self.skill.run.reset_mock()
@@ -431,6 +472,7 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertTrue(all(response.closed for response in responses))
 
     def test_recovery_compacts_previous_results_and_retains_readback(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         result = "start" + "x" * 3000 + "MIDDLE EVIDENCE" + "y" * 3000 + "end"
         self.skill.run.return_value = result
         prompts = []
@@ -457,6 +499,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.traces[-1]["steps"][0]["skill_result"], result)
 
     def test_context_recovery_is_bounded_and_reports_actionable_error(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         self.skill.run.return_value = "x" * 5000
         self.bot.llm.http_client.post_json.side_effect = [self.call(), *[ContextLengthExceededError("context full")] * 4]
         with self.assertLogs(level="WARNING"):
@@ -472,6 +515,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertIn("Completed actions", trace["final_reply"])
 
     def test_context_recovery_reaches_minimum_cap_without_repeating_skill(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         result = "x" * 6000
         self.skill.run.return_value = result
         caps = []
@@ -515,6 +559,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.skill.run.call_count, 2)
 
     def test_recovery_shrinks_results_already_below_half_the_configured_cap(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         for size in (600, 1500, 2000):
             with self.subTest(size=size):
                 result = "x" * size
@@ -564,6 +609,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertFalse(any(step["result_truncated"] for step in self.traces[-1]["steps"]))
 
     def test_reduced_cap_applies_to_readback_and_later_results_only_in_current_turn(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         result = "x" * 6000
         self.skill.run.return_value = result
         self.bot.llm.http_client.post_json.side_effect = [
@@ -584,6 +630,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.traces[-1]["steps"][0]["context_chars"], 4000)
 
     def test_context_recovery_consumes_existing_request_budget(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         self.bot.config.runtime.max_llm_requests_per_turn = 2
         self.skill.run.return_value = "x" * 5000
         self.bot.llm.http_client.post_json.side_effect = [self.call(), ContextLengthExceededError("context full")]
@@ -594,6 +641,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
 
     def test_context_recovery_does_not_change_concurrent_conversation_limits(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         self.skill.run.return_value = "x" * 6000
         barrier = threading.Barrier(2, timeout=3)
         attempts = {"1": 0, "2": 0}
@@ -625,6 +673,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.bot.config.runtime.max_skill_result_chars, 4000)
 
     def test_unrelated_bad_request_does_not_trigger_context_recovery(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         self.skill.run.return_value = "x" * 5000
         self.bot.llm.http_client.post_json.side_effect = [self.call(), RuntimeError("HTTP 400 for https://example.invalid")]
         with self.assertLogs(level="ERROR"):
@@ -724,6 +773,7 @@ class RuntimeControlTests(unittest.TestCase):
                     self.assertEqual(list(self.bot._history[1]), history)
 
     def test_follow_up_shrinks_results_before_history_and_preserves_chain_readback(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         result = "start" + "x" * 3000 + "MIDDLE EVIDENCE" + "y" * 3000 + "end"
         self.skill.run.return_value = result
         prompts = []
@@ -765,8 +815,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual([step["skill_result"] for step in trace["steps"][:2]], [result, result])
         self.assertEqual([step["context_chars"] for step in trace["steps"][:2]], [512, 512])
 
-    def test_history_recovery_works_with_result_limits_disabled(self) -> None:
-        self.bot.config.runtime.max_skill_result_chars = None
+    def test_default_history_recovery_preserves_full_skill_results(self) -> None:
         self.skill.run.return_value = "x" * 6000
         self.bot.llm.http_client.post_json.side_effect = [
             self.call(), ContextLengthExceededError("context full"), self.response("Done"),
@@ -781,6 +830,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertFalse(trace["steps"][0]["result_truncated"])
 
     def test_follow_up_history_recovery_stops_without_replaying_actions(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         self.skill.run.return_value = "x" * 6000
         self.bot.llm.http_client.post_json.side_effect = [
             self.call(), *[ContextLengthExceededError("context full")] * 7,
@@ -873,11 +923,11 @@ class RuntimeControlTests(unittest.TestCase):
         self.skill.run.assert_not_called()
 
     def test_reader_is_only_exposed_when_limits_are_enabled(self) -> None:
-        self.assertIn("read_skill_result", self.bot._load_runtime_skills())
-        self.bot.config.runtime.max_skill_result_chars = None
         self.assertNotIn("read_skill_result", self.bot._load_runtime_skills())
         self.bot.config.runtime.max_skill_result_chars = 512
         self.assertIn("read_skill_result", self.bot._load_runtime_skills())
+        self.bot.config.runtime.max_skill_result_chars = None
+        self.assertNotIn("read_skill_result", self.bot._load_runtime_skills())
 
     def test_malformed_skill_result_is_reported_to_the_model(self) -> None:
         self.skill.run.return_value = {"unexpected": "object"}
@@ -928,6 +978,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.bot._send_message.assert_not_called()
 
     def test_hourly_context_failure_records_work_and_skips_same_slot(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         slot = datetime(2026, 11, 17, 18, tzinfo=timezone.utc)
         self.bot._current_hourly_slot = Mock(return_value=slot)
         self.bot._resolve_hourly_target = Mock(return_value=None)
@@ -968,6 +1019,7 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(status["last_hourly_slot"], next_slot.isoformat())
 
     def test_hourly_context_recovery_completes_slot_without_replaying_actions(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
         slot = datetime(2026, 11, 17, 18, tzinfo=timezone.utc)
         self.bot._current_hourly_slot = Mock(return_value=slot)
         self.bot._resolve_hourly_target = Mock(return_value=("telegram", "1"))
