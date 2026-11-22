@@ -148,7 +148,8 @@ class LLMStreamingTests(unittest.TestCase):
         for streaming, json_fallback in ((False, False), (True, False), (True, True)):
             for error in errors:
                 with self.subTest(streaming=streaming, json_fallback=json_fallback, error=error):
-                    self.client._runners[0].extra_body = {"stream": streaming}
+                    # Disable cache reuse so this test isolates classification.
+                    self.client._runners[0].extra_body = {"stream": streaming, "cache_prompt": False}
                     if streaming and not json_fallback:
                         response = stream_response([error])
                     else:
@@ -201,6 +202,32 @@ class LLMStreamingTests(unittest.TestCase):
                 self.assertTrue(first.closed)
                 self.assertTrue(second.closed)
                 self.assertEqual(options["max_completion_tokens"], 4096)
+
+    def test_cache_retry_discards_partial_stream_and_keeps_usage_through_continuation(self) -> None:
+        responses = [
+            stream_response([
+                chunk({"content": "discard this partial answer"}, usage={"completion_tokens": 4}),
+                {"error": "Context size has been exceeded. PRIVATE"},
+            ]),
+            stream_response([chunk({"content": "Hello wor"}, finish="length", usage={"completion_tokens": 3})]),
+            stream_response([chunk({"content": "ld"}, finish="stop", usage={"completion_tokens": 1})]),
+        ]
+        with patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="WARNING") as logs:
+            with self.client.request_budget(3):
+                self.assertEqual(self.client.generate_reply(self.messages), "Hello world")
+        payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+        self.assertEqual(payloads[1], {**payloads[0], "cache_prompt": False})
+        self.assertFalse(payloads[2]["cache_prompt"])
+        self.assertEqual(payloads[2]["messages"][-2], {"role": "assistant", "content": "Hello wor"})
+        self.assertNotIn("discard this", repr(payloads))
+        metrics = self.client.pop_last_request_metrics()
+        self.assertEqual([item["cache_prompt_retry"] for item in metrics], [False, True, True])
+        self.assertEqual([item["continuation"] for item in metrics], [False, False, True])
+        self.assertEqual([item["usage"]["completion_tokens"] for item in metrics], [4, 3, 1])
+        self.assertEqual(metrics[0]["context_error_kind"], "capacity")
+        self.assertIn("8 tok", self.client.pop_last_reply_footer())
+        self.assertNotIn("PRIVATE", repr(metrics) + "\n".join(logs.output))
+        self.assertTrue(all(response.closed for response in responses))
 
     def test_explicit_stream_options_are_preserved_without_mutating_config(self) -> None:
         options = {"include_usage": False, "custom_flag": True}
@@ -412,7 +439,7 @@ class LLMStreamingTests(unittest.TestCase):
     def test_nonstreaming_fallback_preserves_context_error_and_failure_status(self) -> None:
         for error, exception in (
             ({"error": {"message": "PRIVATE server error"}}, RuntimeError),
-            ({"error": {"message": "Context size has been exceeded. PRIVATE"}}, ContextLengthExceededError),
+            ({"error": {"code": "context_length_exceeded", "message": "PRIVATE"}}, ContextLengthExceededError),
         ):
             responses = [stream_response([], done=False), json_response(error)]
             with self.subTest(error=error), patch("messaging_llm_bot.http.urlopen", side_effect=responses) as request, self.assertLogs(level="INFO") as logs:

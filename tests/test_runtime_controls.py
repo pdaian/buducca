@@ -382,12 +382,15 @@ class RuntimeControlTests(unittest.TestCase):
             self.assertEqual(step["context_chars"], step["result_chars"])
             self.assertFalse(step["result_truncated"])
 
-    def test_context_overflow_recovers_without_repeating_skill(self) -> None:
-        self.bot.config.runtime.max_skill_result_chars = 4000
-        for streaming, status in ((False, 400), (True, 400), (False, 500), (True, 500), (True, 200)):
-            with self.subTest(streaming=streaming, status=status):
+    def test_context_errors_on_second_request_recover_without_repeating_skill(self) -> None:
+        for streaming, status, cap in (
+            (False, 400, 4000), (True, 400, 4000), (False, 500, 4000), (True, 500, 4000), (True, 200, 4000),
+            (False, 500, None), (True, 500, None), (False, 200, None), (True, 200, None),
+        ):
+            with self.subTest(streaming=streaming, status=status, cap=cap):
+                self.bot.config.runtime.max_skill_result_chars = cap
                 self.skill.run.reset_mock()
-                result = "start" + "x" * 6000 + "end"
+                result = "start" + "x" * 6000 + "end" if cap else "short skill result"
                 self.skill.run.return_value = result
                 self.bot.llm.http_client = HttpClient(1)
                 self.bot.llm._runners[0].extra_body = {"stream": streaming}
@@ -405,8 +408,8 @@ class RuntimeControlTests(unittest.TestCase):
                     error_body = {"error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded."}}
                 raw = json.dumps(error_body).encode()
                 if status == 200:
-                    error = io.BytesIO(b"data: " + raw + b"\n\ndata: [DONE]\n\n")
-                    error.headers = {"Content-Type": "text/event-stream"}
+                    error = io.BytesIO(b"data: " + raw + b"\n\ndata: [DONE]\n\n" if streaming else raw)
+                    error.headers = {"Content-Type": "text/event-stream" if streaming else "application/json"}
                 else:
                     error = HTTPError("https://example.invalid/v1/chat/completions", status, "Error", {}, io.BytesIO(raw))
                 with patch("messaging_llm_bot.http.urlopen", side_effect=[responses[0], error, responses[1]]) as request, self.assertLogs(level="WARNING"):
@@ -416,14 +419,20 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertEqual(len(payloads), 3)
                 self.assertEqual(payloads[2]["messages"][:2], messages)
                 self.assertEqual(payloads[2]["messages"][2], payloads[1]["messages"][2])
-                self.assertLess(len(payloads[2]["messages"][-1]["content"]), len(payloads[1]["messages"][-1]["content"]))
+                if status == 400:
+                    self.assertLess(len(payloads[2]["messages"][-1]["content"]), len(payloads[1]["messages"][-1]["content"]))
+                    self.assertNotIn("cache_prompt", payloads[2])
+                else:
+                    self.assertEqual(payloads[2], {**payloads[1], "cache_prompt": False})
                 trace = self.traces[-1]
                 self.assertTrue(trace["final_reply"].startswith("Recovered"))
                 self.assertEqual(trace["steps"][0]["skill_result"], result)
-                self.assertEqual(trace["steps"][0]["context_chars"], 2000)
+                self.assertEqual(trace["steps"][0]["context_chars"], 2000 if status == 400 else cap or len(result))
                 self.assertEqual(trace["metrics"]["request_count"], 3)
                 self.assertEqual(trace["metrics"]["requests"][1]["error"], "ContextLengthExceededError")
-                self.assertEqual(self.bot.config.runtime.max_skill_result_chars, 4000)
+                self.assertEqual(trace["metrics"]["requests"][1]["context_error_kind"], "length" if status == 400 else "capacity")
+                self.assertEqual(trace["metrics"]["requests"][2]["cache_prompt_retry"], status != 400)
+                self.assertEqual(self.bot.config.runtime.max_skill_result_chars, cap)
                 self.assertTrue(all(response.closed for response in [*responses, error]))
 
     def test_stream_fallback_recovers_follow_up_without_repeating_completed_skills(self) -> None:
@@ -461,14 +470,14 @@ class RuntimeControlTests(unittest.TestCase):
                 trace = self.traces[-1]
                 self.assertTrue(trace["final_reply"].startswith("Recovered"))
                 self.assertEqual(len(trace["steps"]), 1)
-                self.assertEqual(trace["steps"][0]["context_chars"], 2000 if context_error else 4000)
+                self.assertEqual(trace["steps"][0]["context_chars"], 4000)
                 self.assertEqual(trace["metrics"]["request_count"], len(responses))
                 metrics = trace["metrics"]["requests"]
                 self.assertEqual(metrics[1]["error"], "StreamError")
                 self.assertEqual(metrics[1]["usage"], {"completion_tokens": 400})
                 if context_error:
                     self.assertEqual(metrics[2]["error"], "ContextLengthExceededError")
-                    self.assertLess(len(payloads[3]["messages"][-1]["content"]), len(payloads[2]["messages"][-1]["content"]))
+                    self.assertEqual(payloads[3], {**payloads[2], "cache_prompt": False})
                 self.assertTrue(all(response.closed for response in responses))
 
     def test_recovery_compacts_previous_results_and_retains_readback(self) -> None:
@@ -693,20 +702,44 @@ class RuntimeControlTests(unittest.TestCase):
                 self.assertEqual(self.traces[-1]["metrics"]["request_count"], 2)
                 self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
 
-    def test_initial_prompt_overflow_reports_error_without_retrying(self) -> None:
+    def test_initial_capacity_error_stops_after_one_cache_retry_without_trimming_history(self) -> None:
         self.bot.llm.http_client.post_json.return_value = {
             "error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded."},
         }
-        with self.assertLogs(level="WARNING"):
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
             self.assertFalse(self.bot._handle_message(1, "work"))
-        self.bot.llm.http_client.post_json.assert_called_once()
+            self.assertEqual(list(self.bot._history[1]), history)
+        calls = self.bot.llm.http_client.post_json.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].args[1]["messages"][1:-1], history)
+        self.assertEqual(calls[1].args[1], {**calls[0].args[1], "cache_prompt": False})
         self.skill.run.assert_not_called()
         self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
-        self.assertIn("reduce concurrent requests", self.traces[-1]["final_reply"])
+        self.assertIn("context/KV-cache capacity failure", self.traces[-1]["final_reply"])
         self.assertIn("did not report enough token counts", self.traces[-1]["final_reply"])
-        self.assertIn("KV-cache pressure", self.traces[-1]["final_reply"])
+        self.assertIn("reloading the model", self.traces[-1]["final_reply"])
         self.assertEqual(self.traces[-1]["metrics"]["requests"][0]["context_error"], {})
         self.assertNotIn("Completed actions", self.traces[-1]["final_reply"])
+
+    def test_persistent_capacity_error_preserves_completed_results_and_history(self) -> None:
+        self.bot.config.runtime.max_skill_result_chars = 4000
+        self.skill.run.return_value = "x" * 6000
+        error = {"error": "Context size has been exceeded."}
+        self.bot.llm.http_client.post_json.side_effect = [self.call(), error, error]
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.assertFalse(self.bot._handle_message(1, "work"))
+            self.assertEqual(list(self.bot._history[1]), history)
+        self.skill.run.assert_called_once()
+        payloads = [call.args[1] for call in self.bot.llm.http_client.post_json.call_args_list]
+        self.assertEqual(len(payloads), 3)
+        self.assertEqual(payloads[1]["messages"][1:1 + len(history)], history)
+        self.assertEqual(payloads[2], {**payloads[1], "cache_prompt": False})
+        trace = self.traces[-1]
+        self.assertEqual(trace["steps"][0]["context_chars"], 4000)
+        self.assertEqual(trace["steps"][0]["skill_result"], "x" * 6000)
+        self.assertEqual(trace["metrics"]["request_count"], 3)
+        self.assertIn("context/KV-cache capacity failure", trace["final_reply"])
+        self.assertIn("Completed actions", trace["final_reply"])
 
     def test_prompt_overflow_reports_backend_counts_without_leaking_error_body(self) -> None:
         self.bot.llm.http_client.post_json.return_value = {

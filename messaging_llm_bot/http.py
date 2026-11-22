@@ -23,21 +23,28 @@ class StreamError(RuntimeError):
 class ContextLengthExceededError(RuntimeError):
     """The endpoint reported exhausted context capacity, possibly its KV cache."""
 
-    def __init__(self, message: str, *, details: dict[str, int] | None = None) -> None:
+    def __init__(
+        self, message: str, *, details: dict[str, int] | None = None, is_capacity_error: bool = False,
+    ) -> None:
         super().__init__(message)
         self.details = dict(details or {})
+        self.is_capacity_error = is_capacity_error
 
     @classmethod
     def from_payload(cls, payload: Any, message: str) -> ContextLengthExceededError | None:
-        details = _context_length_error_details(payload)
-        return cls(message, details=details) if details is not None else None
+        classified = _classify_context_error(payload)
+        if classified is None:
+            return None
+        details, is_capacity_error = classified
+        return cls(message, details=details, is_capacity_error=is_capacity_error)
 
 
-def _context_length_error_details(payload: Any) -> dict[str, int] | None:
-    """Retain only known numeric fields, never the provider's private error body."""
+def _classify_context_error(payload: Any) -> tuple[dict[str, int], bool] | None:
+    """Classify the failure and retain counts without the provider's private error body."""
     message = ""
     details: dict[str, int] = {}
     recognized = False
+    is_capacity_error = False
     if isinstance(payload, bytes):
         message = payload.decode("utf-8", errors="replace")
         try:
@@ -71,7 +78,6 @@ def _context_length_error_details(payload: Any) -> dict[str, int] | None:
             r"(?:\s*\((?P<prompt_tokens>[0-9]+) in (?:the )?messages\b)?",
             r"trying to keep the first [0-9]+ tokens when (?:the )?context (?:the )?(?:length|size) "
             r"is only (?P<context_window_tokens>[0-9]+)",
-            r"\bcontext (?:size|length) has been exceeded\b",
         )
         for pattern in patterns:
             match = re.search(pattern, message, re.IGNORECASE | re.DOTALL)
@@ -84,7 +90,17 @@ def _context_length_error_details(payload: Any) -> dict[str, int] | None:
                     if count > 0 or key == "prompt_tokens":
                         details.setdefault(key, count)
             break
-    return details if recognized else None
+        # llama.cpp emits this from failed KV-cache allocation during decode,
+        # independently of its prompt-length check. Do not infer an oversized
+        # prompt from this message or override an explicit length error code.
+        if not recognized and re.search(r"\bcontext (?:size|length) has been exceeded\b", message, re.IGNORECASE):
+            recognized = True
+            is_capacity_error = True
+    prompt_tokens = details.get("prompt_tokens")
+    context_tokens = details.get("context_window_tokens")
+    if prompt_tokens is not None and context_tokens is not None and prompt_tokens >= context_tokens:
+        is_capacity_error = False
+    return (details, is_capacity_error) if recognized else None
 
 
 def _safe_url(url: str) -> str:

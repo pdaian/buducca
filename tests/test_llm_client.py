@@ -260,7 +260,7 @@ class LLMClientTests(unittest.TestCase):
             {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 9000},
             {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 8192},
             {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 1000},
-            {"message": "Context size has been exceeded."},
+            {"code": "context_length_exceeded", "message": "Context size has been exceeded."},
         ]
         for error in cases:
             with self.subTest(error=error):
@@ -270,6 +270,60 @@ class LLMClientTests(unittest.TestCase):
                     client.generate_reply([{"role": "user", "content": "work"}])
                 self.assertEqual(len(http.calls), 1)
                 self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+
+    def test_cache_capacity_retry_preserves_settings_and_does_not_change_later_calls(self) -> None:
+        error = {"error": {"code": 500, "type": "server_error", "message": "Context size has been exceeded. SECRET"}}
+        response = {"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}]}
+        http = SequencedHttpClient([error, response, response])
+        options = {"cache_prompt": True, "max_completion_tokens": 4096, "reasoning_effort": "high"}
+        client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m", extra_body=options), http)
+        messages = [{"role": "user", "content": "work"}]
+        with self.assertLogs(level="WARNING") as logs, client.request_budget(3):
+            self.assertEqual(client.generate_reply(messages, disable_thinking=True), "answer")
+            metrics = client.pop_last_request_metrics()
+            self.assertEqual(client.generate_reply(messages, disable_thinking=True), "answer")
+        first, retry, later = [call[1] for call in http.calls]
+        self.assertEqual(retry, {**first, "cache_prompt": False})
+        self.assertEqual(later, first)
+        self.assertTrue(options["cache_prompt"])
+        self.assertFalse(retry["chat_template_kwargs"]["enable_thinking"])
+        self.assertEqual([item["cache_prompt_retry"] for item in metrics], [False, True])
+        self.assertEqual(metrics[0]["context_error_kind"], "capacity")
+        self.assertEqual(metrics[0]["context_error"], {})
+        self.assertNotIn("error", metrics[1])
+        self.assertNotIn("SECRET", repr(metrics) + "\n".join(logs.output))
+
+    def test_cache_capacity_retry_is_bounded_and_respects_disabled_cache_and_request_budget(self) -> None:
+        error = {"error": "Context size has been exceeded."}
+        for options, budget, expected_calls, exception in (
+            ({}, 3, 2, ContextLengthExceededError),
+            ({"cache_prompt": False}, 3, 1, ContextLengthExceededError),
+            ({}, 1, 1, RequestBudgetExceeded),
+        ):
+            with self.subTest(options=options, budget=budget):
+                http = StubHttpClient(error)
+                client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m", extra_body=options), http)
+                with self.assertLogs(level="WARNING"), client.request_budget(budget), self.assertRaises(exception):
+                    client.generate_reply([{"role": "user", "content": "work"}])
+                self.assertEqual(len(http.calls), expected_calls)
+                self.assertEqual(len(client.pop_last_request_metrics()), expected_calls)
+                self.assertTrue(all(call[1]["max_tokens"] == 4096 for call in http.calls))
+                self.assertEqual(client.pop_last_reply_footer(), "")
+                self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+                self.assertEqual(client.get_runner_statuses()[0].concurrent_requests, 0)
+
+    def test_cache_retry_does_not_leak_to_failover_runner(self) -> None:
+        error = {"error": "Context size has been exceeded."}
+        http = SequencedHttpClient([error, error, {"choices": [{"message": {"content": "recovered"}}]}])
+        client = OpenAICompatibleClient(LLMConfig(runners=[
+            LLMRunnerConfig(base_url="https://one.invalid/v1", model="one"),
+            LLMRunnerConfig(base_url="https://two.invalid/v1", model="two"),
+        ]), http)
+        with self.assertLogs(level="WARNING"), client.request_budget(3):
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "work"}]), "recovered")
+        self.assertEqual([call[1]["model"] for call in http.calls], ["one", "one", "two"])
+        self.assertEqual([call[1].get("cache_prompt") for call in http.calls], [None, False, None])
+        self.assertEqual([item["cache_prompt_retry"] for item in client.pop_last_request_metrics()], [False, True, False])
 
     def test_output_context_recovery_is_bounded_and_does_not_grow_past_capacity(self) -> None:
         overflow = {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}}

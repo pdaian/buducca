@@ -372,8 +372,8 @@ class BotRunner:
         for recovery_attempt in range(4):
             try:
                 return self._generate_model_reply(prompt, disable_thinking=disable_thinking)
-            except ContextLengthExceededError:
-                if recovery_attempt == 3 or not self._trim_prompt_history(
+            except ContextLengthExceededError as exc:
+                if exc.is_capacity_error or recovery_attempt == 3 or not self._trim_prompt_history(
                     prompt, current_request, remove_all=recovery_attempt == 2,
                 ):
                     raise
@@ -1536,8 +1536,8 @@ class BotRunner:
                 self._last_hourly_context_error_slot = slot.isoformat()
                 self._clear_conversation_history(scheduler_conversation_key)
                 logging.warning(
-                    "Hourly routine exceeded the model context window slot=%s; skipping further attempts for this slot. "
-                    "Increase the model's loaded context length or narrow the hourly instructions. "
+                    "Hourly routine hit a model context/capacity error slot=%s; skipping further attempts for this slot. "
+                    "Check the model server logs and loaded context/cache settings. "
                     "Completed actions are recorded in the trace; review them before retrying.",
                     slot.isoformat(),
                 )
@@ -2290,7 +2290,9 @@ class BotRunner:
                 try:
                     model_reply = self._generate_model_reply(prompt, disable_thinking=disable_thinking)
                     break
-                except ContextLengthExceededError:
+                except ContextLengthExceededError as exc:
+                    if exc.is_capacity_error:
+                        raise
                     if result_limit is not None and result_recovery_attempts < 3:
                         previous_prompt_chars = sum(len(message["content"]) for message in prompt)
                         largest_result_chars = max(step["context_chars"] for step in trace_steps)
@@ -3953,10 +3955,12 @@ class BotRunner:
                     self._send_message(backend, conversation_id, trace_payload["final_reply"])
                     return False
                 except ContextLengthExceededError as exc:
-                    logging.warning("LLM context window exceeded for %s conversation=%s", backend, conversation_id)
+                    logging.warning("LLM context/capacity error for %s conversation=%s", backend, conversation_id)
                     self._request_state.stop_reason = "context_length_exceeded"
                     trace_payload["error"] = "context_length_exceeded"
                     trace_payload["final_reply"] = (
+                        "The model server reported a context/KV-cache capacity failure. "
+                        if exc.is_capacity_error else
                         "The model server reported that its available context capacity was exceeded. "
                     )
                     context_tokens = exc.details.get("context_window_tokens")
@@ -3969,12 +3973,19 @@ class BotRunner:
                         trace_payload["final_reply"] += (
                             "It did not report enough token counts to establish that the prompt is too long. "
                         )
-                    trace_payload["final_reply"] += (
-                        "Context includes instructions, history, memory, skill results, and generated reasoning/output. "
-                        "Server KV-cache pressure can also cause this error. "
-                        "Check the loaded per-request context, output-token limit, and server logs; "
-                        "reduce concurrent requests or narrow the request."
-                    )
+                    if exc.is_capacity_error:
+                        trace_payload["final_reply"] += (
+                            "This can happen when the prompt fits, including on a second skill-chain request. "
+                            "Check the server logs and model runtime/cache settings; "
+                            "reloading the model may clear stale cache state."
+                        )
+                    else:
+                        trace_payload["final_reply"] += (
+                            "Context includes instructions, history, memory, skill results, and generated reasoning/output. "
+                            "Server KV-cache pressure can also cause this error. "
+                            "Check the loaded per-request context, output-token limit, and server logs; "
+                            "reduce concurrent requests or narrow the request."
+                        )
                     if self._get_trace_steps():
                         trace_payload["final_reply"] += (
                             " Completed actions are recorded in the trace; please review them before retrying."

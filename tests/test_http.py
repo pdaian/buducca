@@ -143,6 +143,24 @@ class HttpClientTests(unittest.TestCase):
                         self.assertNotIn("PRIVATE", repr(caught.exception.details))
                         self.assertTrue(error.closed)
 
+    def test_cache_capacity_signature_is_distinct_from_prompt_overflow(self) -> None:
+        for error, is_capacity_error in (
+            ("Context size has been exceeded. SECRET", True),
+            ({"code": 500, "type": "server_error", "message": "Context size has been exceeded."}, True),
+            ({"message": "Context length has been exceeded.", "n_ctx": 8192, "n_prompt_tokens": 100}, True),
+            ({"message": "Context size has been exceeded.", "n_ctx": 8192, "n_prompt_tokens": 8192}, False),
+            ({"message": "Context size has been exceeded.", "n_ctx": 8192, "n_prompt_tokens": 9000}, False),
+            ({"code": "context_length_exceeded", "message": "Context size has been exceeded."}, False),
+            ({"type": "exceed_context_size_error", "message": "Context size has been exceeded."}, False),
+            ({"message": "request (9000 tokens) exceeds the available context size (8192 tokens)"}, False),
+        ):
+            for payload in ({"error": error}, json.dumps({"error": error}).encode()):
+                with self.subTest(error=error, encoded=isinstance(payload, bytes)):
+                    classified = ContextLengthExceededError.from_payload(payload, "Safe message")
+                    self.assertIsNotNone(classified)
+                    self.assertEqual(classified.is_capacity_error, is_capacity_error)
+                    self.assertNotIn("SECRET", repr(vars(classified)) + str(classified))
+
     def test_http_500_context_errors_are_classified_without_treating_other_failures_as_overflow(self) -> None:
         url = "https://user:password@example.invalid/v1/chat/completions?key=PRIVATE"
         bodies = [

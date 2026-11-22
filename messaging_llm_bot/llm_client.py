@@ -281,6 +281,7 @@ class OpenAICompatibleClient:
         empty_reply_retry = False
         empty_reply_retries = 0
         stream_fallback = False
+        cache_prompt_retry = False
 
         while True:
             payload = {
@@ -293,6 +294,8 @@ class OpenAICompatibleClient:
                 payload["max_tokens"] = self.config.max_tokens
             payload.update(runner.extra_body)
             payload.update(token_limit_override)
+            if cache_prompt_retry:
+                payload["cache_prompt"] = False
             if payload.get("max_completion_tokens") is not None:
                 payload.pop("max_tokens", None)
             payload.setdefault("stream", callable(getattr(self.http_client, "post_json_stream", None)))
@@ -321,10 +324,11 @@ class OpenAICompatibleClient:
                 "empty_reply_retry": empty_reply_retry,
                 "stream": payload["stream"],
                 "stream_fallback": stream_fallback,
+                "cache_prompt_retry": cache_prompt_retry,
                 "message_count": len(continuation_messages),
                 "prompt_chars": prompt_chars,
                 "usage": {},
-                **{key: payload[key] for key in ("max_tokens", "max_completion_tokens") if key in payload},
+                **{key: payload[key] for key in ("max_tokens", "max_completion_tokens", "cache_prompt") if key in payload},
             }
             empty_reply_error = None
             stream_error = None
@@ -384,11 +388,12 @@ class OpenAICompatibleClient:
             except ContextLengthExceededError as exc:
                 request_metrics["error"] = type(exc).__name__
                 request_metrics["context_error"] = exc.details
+                request_metrics["context_error_kind"] = "capacity" if exc.is_capacity_error else "length"
                 context_error = exc
                 logging.warning(
-                    "LLM context capacity error: request_id=%s runner=%s reported_counts=%s "
+                    "LLM context error: request_id=%s runner=%s kind=%s reported_counts=%s "
                     "(missing counts are unknown; prompt_chars is not a token count)",
-                    request_key, runner_index, exc.details,
+                    request_key, runner_index, request_metrics["context_error_kind"], exc.details,
                 )
             except StreamError as exc:
                 request_metrics["error"] = type(exc).__name__
@@ -432,6 +437,19 @@ class OpenAICompatibleClient:
                         "LLM prompt fits reported context; retrying once with %s=%s (was %s), "
                         "runner=%s prompt_tokens=%s context_window_tokens=%s",
                         token_field, context_output_limit, token_limit, runner_index, prompt_tokens, context_tokens,
+                    )
+                    continue
+                if context_error.is_capacity_error and payload.get("cache_prompt") is not False:
+                    # A stale/reused KV cache can fail on the very next skill
+                    # follow-up even when the prompt fits. This llama.cpp error
+                    # signature permits one cold retry, without replaying skills
+                    # or discarding their results. Never send this extension for
+                    # ordinary context_length_exceeded errors.
+                    cache_prompt_retry = True
+                    logging.warning(
+                        "LLM server context/KV-cache capacity failure; retrying once with cache_prompt=false "
+                        "and the same prompt and reasoning settings, runner=%s model=%s",
+                        runner_index, runner.model_tag or runner.model,
                     )
                     continue
                 raise context_error
