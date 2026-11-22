@@ -3,7 +3,7 @@ import threading
 import time
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
-from messaging_llm_bot.http import RequestTimeoutError
+from messaging_llm_bot.http import ContextLengthExceededError, RequestTimeoutError
 from messaging_llm_bot.llm_client import EmptyReplyError, OpenAICompatibleClient, RequestBudgetExceeded
 
 
@@ -197,6 +197,141 @@ class LLMClientTests(unittest.TestCase):
         http.response = {"choices": [{"message": {"content": "next answer"}, "finish_reason": "stop"}]}
         self.assertEqual(client.generate_reply([]), "next answer")
         self.assertEqual(http.calls[-1][1]["max_tokens"], 400)
+
+    def test_output_reservation_recovers_without_changing_the_prompt_or_later_calls(self) -> None:
+        messages = [{"role": "system", "content": "Instructions"}, {"role": "user", "content": "Question"}]
+        for token_field in ("max_tokens", "max_completion_tokens"):
+            with self.subTest(token_field=token_field):
+                http = SequencedHttpClient([
+                    {"error": {"message": "This model's maximum context length is 8192 tokens. However, you requested "
+                                          "10000 tokens (6000 in the messages, 4000 in the completion). SECRET"}},
+                    {"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}]},
+                    {"choices": [{"message": {"content": "next answer"}, "finish_reason": "stop"}]},
+                ])
+                options = {token_field: 4000, "reasoning_effort": "high"}
+                client = OpenAICompatibleClient(LLMConfig(
+                    base_url="https://example.invalid/v1", model="m", extra_body=options,
+                ), http)
+                with self.assertLogs(level="WARNING") as logs, client.request_budget(2):
+                    self.assertEqual(client.generate_reply(messages), "answer")
+                first, retry = [call[1] for call in http.calls]
+                self.assertEqual(retry, {**first, token_field: 2192})
+                self.assertEqual(retry["messages"], messages)
+                self.assertEqual(options[token_field], 4000)
+                metrics = client.pop_last_request_metrics()
+                self.assertEqual(metrics[0]["context_error"], {
+                    "context_window_tokens": 8192, "prompt_tokens": 6000, "requested_tokens": 10000,
+                })
+                self.assertEqual(metrics[0]["usage"], {})
+                self.assertEqual(metrics[0]["message_count"], 2)
+                self.assertEqual(metrics[0]["prompt_chars"], len("InstructionsQuestion"))
+                self.assertNotIn("SECRET", repr(metrics) + "\n".join(logs.output))
+                self.assertNotIn("error", metrics[1])
+                self.assertIsNotNone(client.get_runner_statuses()[0].last_success_at)
+                self.assertEqual(client.generate_reply(messages), "next answer")
+                self.assertEqual(http.calls[-1][1][token_field], 4000)
+
+    def test_automatic_output_growth_recovers_at_reported_context_capacity(self) -> None:
+        for token_field in ("max_tokens", "max_completion_tokens"):
+            with self.subTest(token_field=token_field):
+                http = SequencedHttpClient([
+                    {"choices": [{"message": {"content": None}, "finish_reason": "length"}],
+                     "usage": {"prompt_tokens": 2000, "completion_tokens": tokens}}
+                    for tokens in (4096, 8192)
+                ] + [
+                    {"error": {"code": "context_length_exceeded", "n_ctx": 16384, "n_prompt_tokens": 2000}},
+                    {"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+                     "usage": {"completion_tokens": 10}},
+                ])
+                client = OpenAICompatibleClient(LLMConfig(
+                    base_url="https://example.invalid/v1", model="m", extra_body={token_field: 4096},
+                ), http)
+                with self.assertLogs(level="WARNING"), client.request_budget(4):
+                    self.assertEqual(client.generate_reply([{"role": "user", "content": "work"}]), "answer")
+                self.assertEqual([call[1][token_field] for call in http.calls], [4096, 8192, 32768, 14384])
+                self.assertTrue(all(call[1]["messages"] == http.calls[0][1]["messages"] for call in http.calls))
+                self.assertIn("12298 tok", client.pop_last_reply_footer())
+
+    def test_output_recovery_does_not_guess_counts_or_reduce_limits_that_already_fit(self) -> None:
+        cases = [
+            {"code": "context_length_exceeded"},
+            {"code": "context_length_exceeded", "n_ctx": 8192},
+            {"code": "context_length_exceeded", "n_prompt_tokens": 6000},
+            {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 9000},
+            {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 8192},
+            {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 1000},
+            {"message": "Context size has been exceeded."},
+        ]
+        for error in cases:
+            with self.subTest(error=error):
+                http = StubHttpClient({"error": error})
+                client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m"), http)
+                with self.assertLogs(level="WARNING"), self.assertRaises(ContextLengthExceededError):
+                    client.generate_reply([{"role": "user", "content": "work"}])
+                self.assertEqual(len(http.calls), 1)
+                self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+
+    def test_output_context_recovery_is_bounded_and_does_not_grow_past_capacity(self) -> None:
+        overflow = {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}}
+        for second, expected_error in (
+            (overflow, ContextLengthExceededError),
+            ({"choices": [{"message": {"content": None}, "finish_reason": "length"}]}, EmptyReplyError),
+        ):
+            with self.subTest(expected_error=expected_error.__name__):
+                http = SequencedHttpClient([overflow, second])
+                client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m"), http)
+                with self.assertLogs(level="WARNING"), self.assertRaises(expected_error):
+                    client.generate_reply([{"role": "user", "content": "work"}])
+                self.assertEqual([call[1]["max_tokens"] for call in http.calls], [4096, 2192])
+                self.assertEqual(len(client.pop_last_request_metrics()), 2)
+                self.assertEqual(client.get_runner_statuses()[0].concurrent_requests, 0)
+                self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+
+    def test_output_context_recovery_consumes_budget_before_runner_failover(self) -> None:
+        http = StubHttpClient({"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}})
+        client = OpenAICompatibleClient(LLMConfig(runners=[
+            LLMRunnerConfig(base_url="https://first.invalid", model="first"),
+            LLMRunnerConfig(base_url="https://second.invalid", model="second"),
+        ]), http)
+        with self.assertLogs(level="WARNING"), client.request_budget(1), self.assertRaises(RequestBudgetExceeded):
+            client.generate_reply([{"role": "user", "content": "work"}])
+        self.assertEqual(len(http.calls), 1)
+        self.assertEqual(len(client.pop_last_request_metrics()), 1)
+
+    def test_output_context_recovery_does_not_invent_an_unconfigured_output_limit(self) -> None:
+        http = StubHttpClient({"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}})
+        client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m", max_tokens=None), http)
+        with self.assertLogs(level="WARNING"), self.assertRaises(ContextLengthExceededError):
+            client.generate_reply([{"role": "user", "content": "work"}])
+        self.assertEqual(len(http.calls), 1)
+        self.assertNotIn("max_tokens", http.calls[0][1])
+
+    def test_context_output_limit_does_not_leak_to_failover_runner(self) -> None:
+        overflow = {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}}
+        http = SequencedHttpClient([overflow, overflow, {"choices": [{"message": {"content": "answer"}}]}])
+        client = OpenAICompatibleClient(LLMConfig(runners=[
+            LLMRunnerConfig(base_url="https://first.invalid", model="first"),
+            LLMRunnerConfig(base_url="https://second.invalid", model="second"),
+        ]), http)
+        with self.assertLogs(level="WARNING"), client.request_budget(3):
+            self.assertEqual(client.generate_reply([{"role": "user", "content": "work"}]), "answer")
+        self.assertEqual([call[1]["max_tokens"] for call in http.calls], [4096, 2192, 4096])
+        self.assertEqual([item["runner_index"] for item in client.pop_last_request_metrics()], [0, 0, 1])
+        self.assertIsNone(client.get_runner_statuses()[0].last_success_at)
+        self.assertIsNotNone(client.get_runner_statuses()[1].last_success_at)
+
+    def test_continuation_does_not_reset_output_context_recovery_allowance(self) -> None:
+        http = SequencedHttpClient([
+            {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}},
+            {"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}]},
+            {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 7000}},
+        ])
+        client = OpenAICompatibleClient(LLMConfig(base_url="https://example.invalid", model="m"), http)
+        with self.assertLogs(level="WARNING"), self.assertRaises(ContextLengthExceededError):
+            client.generate_reply([{"role": "user", "content": "work"}])
+        self.assertEqual([call[1]["max_tokens"] for call in http.calls], [4096, 2192, 2192])
+        self.assertEqual(http.calls[-1][1]["messages"][-2], {"role": "assistant", "content": "partial"})
+        self.assertEqual(client.pop_last_reply_footer(), "")
 
     def test_empty_replies_without_a_retryable_limit_fail_over(self) -> None:
         for finish, message, usage, reason in (

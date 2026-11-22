@@ -3952,13 +3952,28 @@ class BotRunner:
                     self._write_message_trace(trace_payload)
                     self._send_message(backend, conversation_id, trace_payload["final_reply"])
                     return False
-                except ContextLengthExceededError:
+                except ContextLengthExceededError as exc:
                     logging.warning("LLM context window exceeded for %s conversation=%s", backend, conversation_id)
                     self._request_state.stop_reason = "context_length_exceeded"
                     trace_payload["error"] = "context_length_exceeded"
                     trace_payload["final_reply"] = (
-                        "The language model ran out of context space for this request. "
-                        "Increase the model's loaded context length, reduce concurrent requests, or narrow the request."
+                        "The model server reported that its available context capacity was exceeded. "
+                    )
+                    context_tokens = exc.details.get("context_window_tokens")
+                    prompt_tokens = exc.details.get("prompt_tokens")
+                    if context_tokens is not None and prompt_tokens is not None:
+                        trace_payload["final_reply"] += (
+                            f"It reported {prompt_tokens:,} prompt tokens and a {context_tokens:,}-token context window. "
+                        )
+                    else:
+                        trace_payload["final_reply"] += (
+                            "It did not report enough token counts to establish that the prompt is too long. "
+                        )
+                    trace_payload["final_reply"] += (
+                        "Context includes instructions, history, memory, skill results, and generated reasoning/output. "
+                        "Server KV-cache pressure can also cause this error. "
+                        "Check the loaded per-request context, output-token limit, and server logs; "
+                        "reduce concurrent requests or narrow the request."
                     )
                     if self._get_trace_steps():
                         trace_payload["final_reply"] += (

@@ -510,7 +510,8 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(trace["error"], "context_length_exceeded")
         self.assertEqual(trace["metrics"]["stop_reason"], "context_length_exceeded")
         self.assertEqual(trace["steps"][0]["context_chars"], 512)
-        self.assertIn("Increase the model's loaded context length", trace["final_reply"])
+        self.assertIn("loaded per-request context", trace["final_reply"])
+        self.assertIn("output-token limit", trace["final_reply"])
         self.assertIn("reduce concurrent requests", trace["final_reply"])
         self.assertIn("Completed actions", trace["final_reply"])
 
@@ -702,7 +703,49 @@ class RuntimeControlTests(unittest.TestCase):
         self.skill.run.assert_not_called()
         self.assertEqual(self.traces[-1]["error"], "context_length_exceeded")
         self.assertIn("reduce concurrent requests", self.traces[-1]["final_reply"])
+        self.assertIn("did not report enough token counts", self.traces[-1]["final_reply"])
+        self.assertIn("KV-cache pressure", self.traces[-1]["final_reply"])
+        self.assertEqual(self.traces[-1]["metrics"]["requests"][0]["context_error"], {})
         self.assertNotIn("Completed actions", self.traces[-1]["final_reply"])
+
+    def test_prompt_overflow_reports_backend_counts_without_leaking_error_body(self) -> None:
+        self.bot.llm.http_client.post_json.return_value = {
+            "error": {"type": "exceed_context_size_error", "n_ctx": 8192, "n_prompt_tokens": 24689,
+                      "message": "SECRET prompt text"},
+        }
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertFalse(self.bot._handle_message(1, "work"))
+        self.bot.llm.http_client.post_json.assert_called_once()
+        trace = self.traces[-1]
+        self.assertIn("24,689 prompt tokens", trace["final_reply"])
+        self.assertIn("8,192-token context window", trace["final_reply"])
+        self.assertEqual(trace["metrics"]["requests"][0]["context_error"], {
+            "context_window_tokens": 8192, "prompt_tokens": 24689,
+        })
+        self.assertNotIn("SECRET", repr(trace) + "\n".join(logs.output))
+
+    def test_output_reservation_recovers_follow_up_without_repeating_skills_or_trimming_history(self) -> None:
+        self.skill.run.return_value = ("Complete result " * 1000).strip()
+        self.bot.llm.http_client.post_json.side_effect = [
+            self.call(),
+            {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000}},
+            self.response("Done"),
+        ]
+        with self.conversation_history() as history, self.assertLogs(level="WARNING"):
+            self.assertTrue(self.bot._handle_message(1, "work"))
+            self.assertEqual(list(self.bot._history[1])[:-2], history)
+        self.skill.run.assert_called_once()
+        calls = self.bot.llm.http_client.post_json.call_args_list
+        self.assertEqual(len(calls), 3)
+        first, retry = calls[1].args[1], calls[2].args[1]
+        self.assertEqual(retry, {**first, "max_tokens": 2192})
+        self.assertEqual(retry["messages"][1:1 + len(history)], history)
+        self.assertIn(self.skill.run.return_value, retry["messages"][-1]["content"])
+        trace = self.traces[-1]
+        self.assertEqual(trace["final_reply"].split("\n\n", 1)[0], "Done")
+        self.assertEqual(trace["steps"][0]["skill_result"], self.skill.run.return_value)
+        self.assertFalse(trace["steps"][0]["result_truncated"])
+        self.assertEqual(trace["metrics"]["request_count"], 3)
 
     def test_initial_overflow_omits_oldest_complete_turns_only_for_current_prompt(self) -> None:
         prompts = []

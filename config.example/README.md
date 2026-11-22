@@ -13,6 +13,8 @@ Both the bot and the framework CLI can load either a single JSON file or a confi
 
 The hosted example reserves up to 32,768 completion tokens for reasoning and the answer. Existing configurations keep their explicit limits; changing this example does not update `config/llm.json`. For generation-limit errors, increase the active runner's `extra_body.max_completion_tokens` (which takes precedence over `llm.max_tokens`), or `llm.max_tokens` for legacy backends. The model must support the output limit and have context room for both the prompt and generation. Empty token-limited answers receive up to two automatic retries of the current model request, with larger limits; completed skills are not repeated. See [model-client compatibility](../docs/developer-guide.md#model-client-compatibility) for the retry limits and trace fields.
 
+A context error can occur even with a short visible conversation: the request also contains instructions, memory, evidence, and skill results, and generation needs room too. Local servers can also report context exhaustion when their KV cache has no free space. When the server supplies prompt and context token counts showing that only the output allowance is too large, the client retries once per runner with an output limit that fits. This uses the same request budget and preserves the prompt, completed actions, and saved configuration. Logs and trace request metrics retain the reported counts under `context_error`; missing counts remain unknown.
+
 Validate the configuration before starting any frontend:
 
 ```bash

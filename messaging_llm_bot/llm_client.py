@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .config import LLMConfig, LLMRunnerConfig, _effective_llm_runners
-from .http import ContextLengthExceededError, HttpClient, StreamError, _is_context_length_error, _safe_url
+from .http import ContextLengthExceededError, HttpClient, StreamError, _safe_url
 from .llm_progress import RequestProgress
 
 _NOTHINK_RE = re.compile(r"(?i)(?<!\S)/nothink(?!\S)")
@@ -277,6 +277,7 @@ class OpenAICompatibleClient:
         aggregated_usage: dict[str, int] = {}
         continuation_attempt = 0
         token_limit_override: dict[str, int] = {}
+        context_output_limit: int | None = None
         empty_reply_retry = False
         empty_reply_retries = 0
         stream_fallback = False
@@ -310,6 +311,7 @@ class OpenAICompatibleClient:
             self._consume_request_budget()
             started = time.perf_counter()
             request_key = self._register_request(runner_index)
+            prompt_chars = sum(len(self._raw_text(message.get("content"))) for message in continuation_messages)
             request_metrics: dict[str, Any] = {
                 "request_id": request_key,
                 "runner_index": runner_index,
@@ -319,11 +321,14 @@ class OpenAICompatibleClient:
                 "empty_reply_retry": empty_reply_retry,
                 "stream": payload["stream"],
                 "stream_fallback": stream_fallback,
+                "message_count": len(continuation_messages),
+                "prompt_chars": prompt_chars,
                 "usage": {},
                 **{key: payload[key] for key in ("max_tokens", "max_completion_tokens") if key in payload},
             }
             empty_reply_error = None
             stream_error = None
+            context_error = None
             progress = RequestProgress(request_key, runner_index, runner.model_tag or runner.model, started)
             template_options = payload.get("chat_template_kwargs")
             thinking = template_options.get("enable_thinking", "default") if isinstance(template_options, dict) else "default"
@@ -337,7 +342,7 @@ class OpenAICompatibleClient:
                 request_key, runner_index, runner.model_tag or runner.model, runner.model, _safe_url(url),
                 continuation_attempt, _MAX_CONTINUATION_ATTEMPTS,
                 getattr(self._thread_state, "skill_chain_length", 0), len(continuation_messages),
-                sum(len(self._raw_text(message.get("content"))) for message in continuation_messages),
+                prompt_chars,
                 payload["stream"], payload.get("temperature", "default"), payload.get("max_tokens", "default"),
                 payload.get("max_completion_tokens", "default"), thinking, payload.get("reasoning_effort", "default"),
                 getattr(self.http_client, "timeout_seconds", "unknown"), concurrent_requests,
@@ -357,8 +362,11 @@ class OpenAICompatibleClient:
                     if not isinstance(data, dict):
                         raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
                     if data.get("error") is not None:
-                        if _is_context_length_error(data):
-                            raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
+                        error = ContextLengthExceededError.from_payload(
+                            data, f"Model context window exceeded for {_safe_url(url)}",
+                        )
+                        if error is not None:
+                            raise error
                         raise RuntimeError(f"LLM endpoint returned an error from {_safe_url(url)}")
                     choice = self._extract_primary_choice(data)
                     request_metrics["finish_reason"] = str(choice.get("finish_reason") or "").strip().lower()
@@ -373,6 +381,15 @@ class OpenAICompatibleClient:
                         )
                         request_metrics["error"] = type(empty_reply_error).__name__
                         request_metrics["empty_reply_reason"] = empty_reply_error.reason
+            except ContextLengthExceededError as exc:
+                request_metrics["error"] = type(exc).__name__
+                request_metrics["context_error"] = exc.details
+                context_error = exc
+                logging.warning(
+                    "LLM context capacity error: request_id=%s runner=%s reported_counts=%s "
+                    "(missing counts are unknown; prompt_chars is not a token count)",
+                    request_key, runner_index, exc.details,
+                )
             except StreamError as exc:
                 request_metrics["error"] = type(exc).__name__
                 if not payload["stream"] or not callable(getattr(self.http_client, "post_json", None)):
@@ -397,6 +414,27 @@ class OpenAICompatibleClient:
 
             total_duration_ms += duration_ms
             self._merge_usage_counts(aggregated_usage, request_metrics["usage"])
+            token_field = "max_completion_tokens" if payload.get("max_completion_tokens") is not None else "max_tokens"
+            token_limit = payload.get(token_field)
+            if context_error is not None:
+                context_tokens = context_error.details.get("context_window_tokens")
+                prompt_tokens = context_error.details.get("prompt_tokens")
+                if (
+                    context_output_limit is None and context_tokens is not None and prompt_tokens is not None
+                    and isinstance(token_limit, int) and not isinstance(token_limit, bool)
+                    and 0 < context_tokens - prompt_tokens < token_limit
+                ):
+                    # The prompt fits. Retry once with output that fits too, without
+                    # discarding history or replaying skills. Never guess token counts.
+                    context_output_limit = context_tokens - prompt_tokens
+                    token_limit_override[token_field] = context_output_limit
+                    logging.warning(
+                        "LLM prompt fits reported context; retrying once with %s=%s (was %s), "
+                        "runner=%s prompt_tokens=%s context_window_tokens=%s",
+                        token_field, context_output_limit, token_limit, runner_index, prompt_tokens, context_tokens,
+                    )
+                    continue
+                raise context_error
             if stream_error is not None:
                 # Restart only this model request; never reuse an incomplete answer.
                 stream_fallback = True
@@ -411,8 +449,6 @@ class OpenAICompatibleClient:
                 logging.debug("LLM request completed in %.2fms", duration_ms)
 
             if empty_reply_error is not None:
-                token_field = "max_completion_tokens" if payload.get("max_completion_tokens") is not None else "max_tokens"
-                token_limit = payload.get(token_field)
                 if (
                     empty_reply_error.reason == "output_limit"
                     and empty_reply_retries < len(_EMPTY_REPLY_RETRY_MIN_TOKENS)
@@ -420,9 +456,14 @@ class OpenAICompatibleClient:
                 ):
                     # Retry only this prompt, preserving reasoning and completed skills.
                     # Keep the small first retry; sustained reasoning gets more room on the last.
-                    token_limit_override[token_field] = max(
+                    next_limit = max(
                         _EMPTY_REPLY_RETRY_MIN_TOKENS[empty_reply_retries], token_limit * 2,
                     )
+                    if context_output_limit is not None:
+                        next_limit = min(next_limit, context_output_limit)
+                    if next_limit <= token_limit:
+                        raise empty_reply_error
+                    token_limit_override[token_field] = next_limit
                     empty_reply_retries += 1
                     empty_reply_retry = True
                     logging.warning(
@@ -481,8 +522,11 @@ class OpenAICompatibleClient:
                     raise RuntimeError("Malformed response from LLM endpoint: expected a JSON object")
                 self._observe_response(progress, data, streamed=True)
                 if data.get("error") is not None:
-                    if _is_context_length_error(data):
-                        raise ContextLengthExceededError(f"Model context window exceeded for {_safe_url(url)}")
+                    error = ContextLengthExceededError.from_payload(
+                        data, f"Model context window exceeded for {_safe_url(url)}",
+                    )
+                    if error is not None:
+                        raise error
                     raise StreamError(f"LLM endpoint returned a streaming error from {_safe_url(url)}")
                 choices = data.get("choices")
                 if not isinstance(choices, list) or any(not isinstance(choice, dict) for choice in choices):

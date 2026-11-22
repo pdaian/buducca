@@ -21,12 +21,23 @@ class StreamError(RuntimeError):
 
 
 class ContextLengthExceededError(RuntimeError):
-    """The endpoint explicitly rejected a request that exceeded its context window."""
+    """The endpoint reported exhausted context capacity, possibly its KV cache."""
+
+    def __init__(self, message: str, *, details: dict[str, int] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
+    @classmethod
+    def from_payload(cls, payload: Any, message: str) -> ContextLengthExceededError | None:
+        details = _context_length_error_details(payload)
+        return cls(message, details=details) if details is not None else None
 
 
-def _is_context_length_error(payload: Any) -> bool:
-    """Recognize provider errors without exposing their potentially private bodies."""
+def _context_length_error_details(payload: Any) -> dict[str, int] | None:
+    """Retain only known numeric fields, never the provider's private error body."""
     message = ""
+    details: dict[str, int] = {}
+    recognized = False
     if isinstance(payload, bytes):
         message = payload.decode("utf-8", errors="replace")
         try:
@@ -37,22 +48,43 @@ def _is_context_length_error(payload: Any) -> bool:
         error = payload.get("error", payload)
         if isinstance(error, dict):
             codes = (error.get("code"), error.get("type"))
-            if any(code in ("context_length_exceeded", "exceed_context_size_error") for code in codes):
-                return True
+            recognized = any(code in ("context_length_exceeded", "exceed_context_size_error") for code in codes)
+            for source, target, minimum in (
+                ("n_ctx", "context_window_tokens", 1), ("n_prompt_tokens", "prompt_tokens", 0),
+            ):
+                value = error.get(source)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= minimum:
+                    details[target] = value
             message = error.get("message", "")
         elif isinstance(error, str):
             message = error
         else:
-            return False
+            return None
     elif payload is not None:
-        return False
-    return isinstance(message, str) and bool(re.search(
-        r"request \(\d+ tokens\) exceeds the available context size \(\d+ tokens\)"
-        r"|trying to keep the first \d+ tokens when (?:the )?context (?:the )?(?:length|size) is only \d+"
-        r"|maximum context length is \d+ tokens.{0,100}(?:requested|resulted in) \d+ tokens"
-        r"|\bcontext (?:size|length) has been exceeded\b",
-        message, re.IGNORECASE | re.DOTALL,
-    ))
+        return None
+    if isinstance(message, str):
+        patterns = (
+            r"request \((?P<prompt_tokens>[0-9]+) tokens\) exceeds the available context size "
+            r"\((?P<context_window_tokens>[0-9]+) tokens\)",
+            r"maximum context length is (?P<context_window_tokens>[0-9]+) tokens.{0,100}"
+            r"(?:requested|resulted in) (?P<requested_tokens>[0-9]+) tokens"
+            r"(?:\s*\((?P<prompt_tokens>[0-9]+) in (?:the )?messages\b)?",
+            r"trying to keep the first [0-9]+ tokens when (?:the )?context (?:the )?(?:length|size) "
+            r"is only (?P<context_window_tokens>[0-9]+)",
+            r"\bcontext (?:size|length) has been exceeded\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE | re.DOTALL)
+            if match is None:
+                continue
+            recognized = True
+            for key, value in match.groupdict().items():
+                if value is not None and len(value) <= 20:
+                    count = int(value)
+                    if count > 0 or key == "prompt_tokens":
+                        details.setdefault(key, count)
+            break
+    return details if recognized else None
 
 
 def _safe_url(url: str) -> str:
@@ -137,10 +169,11 @@ class HttpClient:
                 raw = b""
             finally:
                 err.close()
-            if err.code in (400, 413, 500) and _is_context_length_error(raw):
-                raise ContextLengthExceededError(
-                    f"HTTP {err.code} for {safe_url}: model context window exceeded"
-                ) from None
+            context_error = ContextLengthExceededError.from_payload(
+                raw, f"HTTP {err.code} for {safe_url}: model context window exceeded",
+            )
+            if context_error is not None:
+                raise context_error from None
             raise RuntimeError(f"HTTP {err.code} for {safe_url}") from None
         except URLError as err:
             if isinstance(err.reason, (socket.timeout, TimeoutError)):

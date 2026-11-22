@@ -104,6 +104,45 @@ class HttpClientTests(unittest.TestCase):
                 read.assert_called_once_with(8192)
             self.assertTrue(response.closed)
 
+    def test_context_errors_preserve_only_reported_numeric_counts(self) -> None:
+        cases = [
+            ({"error": {"type": "exceed_context_size_error", "n_prompt_tokens": 24689, "n_ctx": 8192,
+                        "message": "SECRET", "prompt": "PRIVATE"}},
+             {"prompt_tokens": 24689, "context_window_tokens": 8192}),
+            ({"error": "request (24689 tokens) exceeds the available context size (8192 tokens) SECRET"},
+             {"prompt_tokens": 24689, "context_window_tokens": 8192}),
+            ({"error": {"message": "This model's maximum context length is 8192 tokens. However, you requested "
+                                   "10000 tokens (6000 in the messages, 4000 in the completion). SECRET"}},
+             {"prompt_tokens": 6000, "context_window_tokens": 8192, "requested_tokens": 10000}),
+            ({"error": {"message": "This model's maximum context length is 8192 tokens. However, your messages "
+                                   "resulted in 10000 tokens. SECRET"}},
+             {"context_window_tokens": 8192, "requested_tokens": 10000}),
+            ({"error": "Trying to keep the first 10000 tokens when context the length is only 8192"},
+             {"context_window_tokens": 8192}),
+            ({"error": "Context size has been exceeded. SECRET"}, {}),
+            ({"error": {"code": "context_length_exceeded", "n_ctx": True, "n_prompt_tokens": -1}}, {}),
+            ({"error": {"code": "context_length_exceeded", "n_ctx": 0, "n_prompt_tokens": False}}, {}),
+            ({"error": {"code": "context_length_exceeded", "n_ctx": "8192", "n_prompt_tokens": 6000.5}}, {}),
+            ({"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 0}},
+             {"context_window_tokens": 8192, "prompt_tokens": 0}),
+        ]
+        for status in (400, 413, 500):
+            for body, expected in cases:
+                for streaming in (False, True):
+                    with self.subTest(status=status, body=body, streaming=streaming):
+                        error = HTTPError("https://example.invalid", status, "Error", {}, io.BytesIO(json.dumps(body).encode()))
+                        with patch("messaging_llm_bot.http.urlopen", side_effect=error):
+                            with self.assertRaises(ContextLengthExceededError) as caught:
+                                client = HttpClient(1)
+                                if streaming:
+                                    list(client.post_json_stream("https://example.invalid", {}))
+                                else:
+                                    client.post_json("https://example.invalid", {})
+                        self.assertEqual(caught.exception.details, expected)
+                        self.assertNotIn("SECRET", str(caught.exception))
+                        self.assertNotIn("PRIVATE", repr(caught.exception.details))
+                        self.assertTrue(error.closed)
+
     def test_http_500_context_errors_are_classified_without_treating_other_failures_as_overflow(self) -> None:
         url = "https://user:password@example.invalid/v1/chat/completions?key=PRIVATE"
         bodies = [

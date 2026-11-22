@@ -3,6 +3,7 @@ import json
 import threading
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from messaging_llm_bot.config import LLMConfig, LLMRunnerConfig
 from messaging_llm_bot.http import ContextLengthExceededError, HttpClient, RequestTimeoutError, StreamError
@@ -167,6 +168,39 @@ class LLMStreamingTests(unittest.TestCase):
                     self.assertEqual(self.client.get_runner_statuses()[0].concurrent_requests, 0)
                     self.assertIsNone(self.client.get_runner_statuses()[0].last_success_at)
                     self.assertEqual(self.client.pop_last_reply_footer(), "")
+
+    def test_output_reservation_recovery_works_for_http_json_and_stream_errors(self) -> None:
+        error = {"error": {"code": "context_length_exceeded", "n_ctx": 8192, "n_prompt_tokens": 6000,
+                           "message": "PRIVATE prompt text"}}
+        for streaming, transport in ((False, "http"), (False, "json"), (True, "http"), (True, "json"), (True, "sse")):
+            with self.subTest(streaming=streaming, transport=transport):
+                if transport == "http":
+                    first = HTTPError("http://localhost:1234/v1/chat/completions", 400, "Bad Request", {},
+                                      io.BytesIO(json.dumps(error).encode()))
+                elif transport == "sse":
+                    first = stream_response([error])
+                else:
+                    first = json_response(error)
+                second = stream_response([chunk({"content": "answer"}, finish="stop")]) if streaming else json_response({
+                    "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+                })
+                options = {"stream": streaming, "max_completion_tokens": 4096, "reasoning_effort": "high"}
+                client = OpenAICompatibleClient(LLMConfig(
+                    base_url="http://localhost:1234/v1", model="m", extra_body=options,
+                ), HttpClient(30))
+                with patch("messaging_llm_bot.http.urlopen", side_effect=[first, second]) as request, \
+                        self.assertLogs(level="WARNING") as logs, client.request_budget(2):
+                    self.assertEqual(client.generate_reply(self.messages), "answer")
+                payloads = [json.loads(call.args[0].data) for call in request.call_args_list]
+                self.assertEqual(payloads[1], {**payloads[0], "max_completion_tokens": 2192})
+                self.assertTrue(all("max_tokens" not in payload for payload in payloads))
+                metrics = client.pop_last_request_metrics()
+                self.assertEqual(metrics[0]["context_error"], {"context_window_tokens": 8192, "prompt_tokens": 6000})
+                self.assertNotIn("error", metrics[1])
+                self.assertNotIn("PRIVATE", repr(metrics) + "\n".join(logs.output))
+                self.assertTrue(first.closed)
+                self.assertTrue(second.closed)
+                self.assertEqual(options["max_completion_tokens"], 4096)
 
     def test_explicit_stream_options_are_preserved_without_mutating_config(self) -> None:
         options = {"include_usage": False, "custom_flag": True}
