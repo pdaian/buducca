@@ -140,13 +140,65 @@ If a stream reports an error, disconnects, or ends without completion, the clien
 
 LM Studio/llama.cpp can return `Context size has been exceeded.` as a streaming error or HTTP 500 when it cannot find free KV-cache space. The client classifies this as `ContextLengthExceededError` for streaming and ordinary JSON responses, preserving the existing bounded skill-result recovery and context-limit reply without exposing the error body. Other HTTP 500 errors remain generic. In [llama.cpp's server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-context.cpp), this failure can follow repeated `failed to find free space in the KV cache` warnings and successively smaller batches. Those retries can explain a slowdown before failure; they do not establish CPU offload or GPU-memory exhaustion. A failure with `first_token=unavailable`, no content/reasoning, and `chunks=1` may have received only the error event. `idle=0` then reflects that event's arrival, not prompt-processing progress.
 
-For this failure, compare the server's loaded context and concurrent predictions with `runtime.max_concurrent_requests`, `llm.history_messages`, and the requested output limit. Start with one concurrent request when diagnosing cache pressure, including other clients that share the server. Leave context room for both the prompt and generation; `max_tokens` does not increase the loaded context. If increasing context, check the memory requirement first with [LM Studio's `lms load --estimate-only`](https://lmstudio.ai/docs/cli/local-models/load). The bot's `model_tag` is only a display label; use `api_model` in the request log to identify the requested model.
+For this failure, compare the server's loaded context and concurrent predictions with `runtime.max_concurrent_requests`, `llm.history_messages`, and the requested output limit. Start with one concurrent request when diagnosing cache pressure, including other clients that share the server. Leave context room for both the prompt and generation; `max_tokens` does not increase the loaded context. If increasing context, check the memory requirement first with [LM Studio's `lms load --estimate-only`](https://lmstudio.ai/docs/cli/local-models/load). An estimate below installed RAM does not establish that the GPU can allocate that memory; check the driver limits described [below](#lm-studio-load-failures-on-linux-strix-halo). The bot's `model_tag` is only a display label; use `api_model` in the request log to identify the requested model.
 
 The current client does not implement the Responses API or native function-tool objects. Those are optional future transports in [agent-modernization.md](./agent-modernization.md); the existing JSON skill protocol remains the local/provider-neutral contract.
 
 An empty answer is a failed model request, even when HTTP succeeds. In particular, a reasoning model can spend its entire generation budget before producing visible output: [OpenAI's completion limit includes reasoning tokens](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). The generic default remains 4,096 tokens for local compatibility; the hosted example reserves 32,768 tokens for reasoning and the answer, following [OpenAI's guidance to leave at least 25,000 tokens when evaluating reasoning models](https://developers.openai.com/api/docs/guides/reasoning#allocating-space-for-reasoning). Models or tasks may require a different limit, supported by the backend, and enough loaded context space for both prompt and generation. A runner's `max_completion_tokens` takes precedence over the legacy `max_tokens` field.
 
 If an answer is empty with `finish_reason: "length"` or `"max_tokens"` and a positive output limit was sent, the client retries that prompt at most twice per runner. The first retry doubles the limit with a 4,096-token minimum; the second doubles it again with a 32,768-token minimum. For example, a 4,096-token request can retry with 8,192 and then 32,768 tokens. The retry allowance is shared with continuations of the same reply. These retries preserve reasoning settings, consume the existing request budget, and do not rerun completed skills. They do not modify saved config or invent a limit when none was supplied. Explicit context errors still use the bounded prompt-compaction recovery. Persistent empty answers and other empty completions use runner failover, then report a specific generation-limit, reasoning-only, filtered-response, or empty-response error. Failed attempts retain usage, finish reasons, and the sent `max_tokens` or `max_completion_tokens` in traces and do not update runner success status or chat history. Check those metrics and the INFO-level request logs for the limit, `finish_reason`, `reasoning_chars`, and reported reasoning tokens. The old "I couldn't produce a usable reply" fallback alone is not evidence of VRAM exhaustion; server logs are needed to establish a memory failure.
+
+### LM Studio load failures on Linux Strix Halo
+
+An `lms load` error ending in `exited before becoming healthy`, `exitCode=null`, and `signal=SIGABRT` means the inference process aborted during startup. Read the preceding runtime messages in LM Studio's server logs (`~/.lmstudio/server-logs/`); the wrapper error alone does not identify the cause. This occurs before BUDUCCA can send a model request, so changing the bot's HTTP timeout or output-token limit will not repair it.
+
+On a 128 GB Ryzen AI Max+ 395 running Linux 7.2.15 and LM Studio's Vulkan runtime 2.73.0, the November 22, 2026 failure showed:
+
+```text
+radv/amdgpu: Not enough memory for command submission.
+ggml_vulkan: device lost on Vulkan0
+terminate called after throwing an instance of 'vk::DeviceLostError'
+what(): vk::Queue::submit: ErrorDeviceLost
+```
+
+The live driver exposed only 62.47 GiB of GTT memory, with about 62.4 GiB in use, while Linux still reported about 57 GiB available. The TTM limit was 16,376,809 pages of 4,096 bytes, exactly matching the GTT total. This establishes a GPU shared-memory ceiling despite remaining system RAM. [AMD's Strix Halo guidance](https://rocm.docs.amd.com/en/docs-7.2.0/how-to/system-optimization/strixhalo.html#memory-settings) explains that dynamic GTT allocation defaults to approximately half of system RAM. Dynamic allocation still has a limit; BIOS Auto does not make all installed RAM available to every GPU allocation.
+
+Inspect the live limits without loading another model:
+
+```bash
+getconf PAGESIZE
+cat /sys/module/ttm/parameters/pages_limit
+cat /proc/cmdline
+free -h
+for device in /sys/class/drm/card[0-9]*/device; do
+    [ -r "$device/mem_info_gtt_total" ] || continue
+    printf '%s\n' "$device"
+    for name in mem_info_gtt_total mem_info_gtt_used mem_info_vram_total; do
+        printf '%s: ' "$name"
+        cat "$device/$name"
+    done
+done
+```
+
+The `mem_info_*` values are bytes; `pages_limit` is a page count. CPU and GPU share physical RAM, so these figures are not additional RAM to add to `MemTotal`. Compare GPU allocations with the GTT budget as well as total memory demand with available system memory. Leave room for CPU allocations, the OS, and runtime buffers.
+
+For a 128 GB system with 4 KiB pages, a conservative starting limit is 96 GiB: `96 * 1024^3 / 4096 = 25165824` pages. On Debian with GRUB, append `ttm.pages_limit=25165824` to the existing `GRUB_CMDLINE_LINUX_DEFAULT` value in `/etc/default/grub`, preserving other boot arguments. For example, an existing `"quiet"` value becomes:
+
+```text
+GRUB_CMDLINE_LINUX_DEFAULT="quiet ttm.pages_limit=25165824"
+```
+
+Applying this host configuration requires administrator access: run `sudo update-grub`, then reboot when workloads can be stopped. After reboot, rerun the inspection commands and confirm both `pages_limit=25165824` and a GTT total of `103079215104` bytes (96 GiB) on the AMD device. [Linux 7.2 derives the GTT size from the TTM limit at driver initialization](https://github.com/torvalds/linux/blob/v7.2/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c); changing only the live TTM value may leave the existing GTT budget unchanged. AMD recommends retaining a small BIOS VRAM reservation, such as 512 MiB, and increasing this shared limit. This raises a ceiling rather than reserving 96 GiB immediately, and does not guarantee that every context size will fit. To revert, remove the added argument, regenerate GRUB configuration, and reboot.
+
+Also check the effective context in the runtime log. In this incident, the failed run used `n_ctx_seq=400128`. A subsequent 300,000-token request allocated `n_ctx_seq=300032`, loaded successfully, then logged that it was capping the slot context to the training limit: `n_slots=4`, `n_ctx_slot=262144`, `kv_unified='true'`. The [Qwen3.8-Flash-Next model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next#best-practices) documents a native 262,144-token context and recommends supported RoPE scaling, such as YaRN, for longer contexts. Increasing `--context-length` alone can allocate more memory without increasing the usable per-request window. Verify runtime support and the resulting `n_ctx_slot` before relying on an extended context; the four slots share cache capacity rather than each receiving an independent full cache.
+
+Unload the existing instance before comparing load configurations. Start at the native context, letting LM Studio choose GPU offload:
+
+```bash
+lms load qwen3.8-flash-next@iq3_xxs --context-length 262144
+```
+
+`--gpu max` requests all layers on the GPU. In the failing run, `common_fit_params` reported that the explicit layer count prevented automatic fitting. Omitting that flag allows automatic offload selection, but does not raise the kernel memory ceiling or enable context extension. The `mlock` warning also appeared in the successful load, so it does not by itself explain this abort.
 
 ## Add a new skill
 
