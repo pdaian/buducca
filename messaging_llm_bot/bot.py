@@ -260,20 +260,30 @@ class BotRunner:
         if not self.config.runtime.enable_message_send_skill:
             skills.pop("message_send", None)
         if self.config.runtime.max_skill_result_chars is not None:
-            skills["read_skill_result"] = Skill(
-                name="read_skill_result",
-                description="Read omitted text from a completed skill result in this turn using character offsets.",
-                run=lambda _workspace, args: read_skill_result(
-                    self._get_trace_steps(), args,
-                    max_chars=(
-                        getattr(self._request_state, "skill_result_chars", None)
-                        or self.config.runtime.max_skill_result_chars
-                    ),
-                ),
-                requires_llm_response=True,
-                args_schema='{"step": "required integer >= 1", "offset": "optional integer >= 0", "limit": "optional integer >= 1"}',
-            )
+            skills["read_skill_result"] = self._skill_result_reader()
         return skills
+
+    def _skill_result_reader(self) -> Skill:
+        return Skill(
+            name="read_skill_result",
+            description="Read omitted text from a completed skill result in this turn using character offsets.",
+            run=lambda _workspace, args: read_skill_result(
+                self._get_trace_steps(), args,
+                max_chars=(
+                    getattr(self._request_state, "skill_result_chars", None)
+                    or self.config.runtime.max_skill_result_chars
+                ),
+            ),
+            requires_llm_response=True,
+            args_schema='{"step": "required integer >= 1", "offset": "optional integer >= 0", "limit": "optional integer >= 1"}',
+        )
+
+    def _get_skill(self, name: str) -> Skill | None:
+        # Recovery can enable readback for one turn without changing the shared
+        # skill registry, configured cap, or another conversation's behavior.
+        if name == "read_skill_result" and getattr(self._request_state, "skill_result_chars", None) is not None:
+            return self._skill_result_reader()
+        return self._skills.get(name)
 
     def _conversation_scope_key(self, backend: str, conversation_id: str) -> str:
         return f"{backend}:{conversation_id}"
@@ -1768,7 +1778,7 @@ class BotRunner:
     def _try_parse_skill_call(self, reply: str) -> dict[str, Any] | None:
         payload: Any | None = None
         payload_text = reply.strip()
-        skill_key_markers = [f'"{name}"' for name in self._skills]
+        skill_key_markers = [f'"{name}"' for name in (*self._skills, "read_skill_result")]
         gemma_skill_call = self._parse_gemma_tool_call(payload_text)
         if gemma_skill_call is not None:
             return gemma_skill_call
@@ -2057,7 +2067,7 @@ class BotRunner:
 
 
     def _skill_requires_llm_response(self, skill_name: str) -> bool:
-        skill = self._skills.get(skill_name)
+        skill = self._get_skill(skill_name)
         if skill is None:
             return False
         return skill.requires_llm_response
@@ -2293,10 +2303,21 @@ class BotRunner:
                 except ContextLengthExceededError as exc:
                     if exc.is_capacity_error:
                         raise
-                    if result_limit is not None and result_recovery_attempts < 3:
+                    if result_limit is None and history_recovery_attempts < 3 and self._trim_prompt_history(
+                        prompt, current_request, remove_all=history_recovery_attempts == 2,
+                    ):
+                        # Prefer retaining full results when older turns alone
+                        # can make room. Preview them only if that is insufficient.
+                        history_recovery_attempts += 1
+                        continue
+                    if result_recovery_attempts < 3:
                         previous_prompt_chars = sum(len(message["content"]) for message in prompt)
                         largest_result_chars = max(step["context_chars"] for step in trace_steps)
-                        result_limit = max(512, min(2000, result_limit // 2, largest_result_chars // 2))
+                        # Full results remain the default. An actual rejection
+                        # enables bounded recovery even without a configured cap.
+                        result_limit = max(
+                            512, min(2000, (result_limit or largest_result_chars) // 2, largest_result_chars // 2),
+                        )
                         self._request_state.skill_result_chars = result_limit
                         # Under context pressure, rely on the original request
                         # instead of repeating it in follow-up messages.
@@ -2332,7 +2353,7 @@ class BotRunner:
                     ):
                         raise
                     history_recovery_attempts += 1
-            if summarized_skill_result != raw_skill_result and self.config.runtime.max_skill_result_chars is None:
+            if summarized_skill_result != raw_skill_result and result_limit is None:
                 prompt[-1]["content"] = self._continue_skill_chain_prompt(
                     skill_call["name"],
                     summarized_skill_result,
@@ -2357,7 +2378,7 @@ class BotRunner:
             setter(length)
 
     def _run_skill_call(self, name: str, args: dict[str, Any]) -> str:
-        skill = self._skills.get(name)
+        skill = self._get_skill(name)
         if skill is None:
             available = ", ".join(sorted(self._skills)) or "(none)"
             return f"Unknown skill '{name}'. Available skills: {available}"
