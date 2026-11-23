@@ -300,6 +300,14 @@ The [`add_reminder` skill](../skills/add_reminder/README.md) adds, lists, update
 
 Overdue reminders deliver once on restart, then recurring reminders advance past missed occurrences. Failed sends retry after at least one minute. Delivery is at least once: a crash between the external send and recording completion, or an ambiguous network failure, can duplicate a message. An edit or removal cannot recall a send already in progress. See the skill README for DST behavior, schedule examples, and policy names.
 
+## Scheduled prompt execution
+
+The [`schedule_prompt` skill](../skills/schedule_prompt/README.md) saves future model work with the same once/daily/weekly scheduling rules. It shares `ReminderStore` and the reminder journal, using `delivery: "prompt"`. Its list/update/remove operations address prompts, including legacy prompt records, without converting direct messages.
+
+`BotRunner._poll_due_reminders_once` executes due prompts through `_build_messages`, `_generate_initial_model_reply`, and `_resolve_llm_reply`, with current skills, workspace context, conversation history, action policy, request budgets, and skill-chain limits. Model directives, citations, reply footers, and execution traces follow normal chat behavior. The conversation lock remains held through delivery and history updates. Prompts wait for request capacity and earlier scheduled work; prepared reminder messages still run independently through `ReminderService`.
+
+Read-only or unavailable destinations remain pending without model execution. Failed execution or delivery retries after at least a minute; revisions can be retried immediately. Successful one-offs are removed, recurring prompts advance past missed occurrences, and completion preserves concurrent changes. Failures can repeat already-completed skills on retry, so execution is at least once. The skill README documents file context, timing, management, and policy names.
+
 ## Configuration and action boundaries
 
 `python3 -B run_bot.py --config config --check-config` validates configuration and exits before creating a runner or supervisor. It reads the configuration and contact maps, reports section and field errors, and never checks external credentials or service reachability. `--help` also exits before starting a child process.
@@ -317,7 +325,7 @@ The in-memory regression suite covers reminders, execution limits, result recove
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -B -m pytest \
   --capture=sys --assert=plain -p no:cacheprovider \
-  tests/test_reminders.py tests/test_execution.py tests/test_action_runtime.py \
+  tests/test_reminders.py tests/test_schedule_prompt_skill.py tests/test_execution.py tests/test_action_runtime.py \
   tests/test_runtime_controls.py tests/test_config_validation.py \
   tests/test_llm_client.py tests/test_llm_streaming.py tests/test_http.py \
   tests/test_trace_metrics.py tests/test_run_bot.py

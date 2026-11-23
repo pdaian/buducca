@@ -77,7 +77,7 @@ On restart, an overdue reminder delivers once. A recurring reminder then advance
 
 Failed sends remain pending and retry no sooner than one minute later. Read-only backends retain their reminders without sending. Updates/removals affect future dispatch; a message already being sent cannot be recalled. A crash after a successful send but before its completion is recorded, or an ambiguous network failure, can cause a duplicate on retry.
 
-Existing legacy `prompt` reminders keep their model-driven execution path. They appear in `list` and can be removed, but their prompts are not converted to direct messages by `update`.
+Saved `prompt` reminders keep their model-driven execution path. They appear in `list` and can be removed, but their prompts are not converted to direct messages by `update`. Use [schedule_prompt](../schedule_prompt/README.md) to create or edit prompts that execute later with the normal model and skill chains, including existing legacy prompt reminders.
 
 ## Dependencies and policy
 

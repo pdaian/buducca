@@ -101,14 +101,29 @@ def prepare_message_reminder(
     args: Mapping[str, Any], *, existing: Mapping[str, Any] | None = None, now: float,
 ) -> dict[str, Any]:
     """Validate a direct message reminder without performing any writes."""
+    return _prepare_reminder(args, delivery="message", existing=existing, now=now)
+
+
+def _prepare_reminder(
+    args: Mapping[str, Any], *, delivery: str, existing: Mapping[str, Any] | None = None, now: float,
+) -> dict[str, Any]:
+    if delivery not in ("message", "prompt"):
+        raise ValueError("Reminder delivery must be message or prompt.")
     record = dict(existing or {})
-    for field in ("message", "frequency", "timezone", "backend", "conversation_id"):
+    for field in (delivery, "frequency", "timezone", "backend", "conversation_id"):
         if field in args:
             record[field] = args[field]
-    message = record.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("Missing required arg `message` (non-empty string).")
-    record["message"] = message.strip()
+    content = record.get(delivery, "")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(f"Missing required arg `{delivery}` (non-empty string).")
+    record[delivery] = content.strip()
+    if delivery == "prompt":
+        files = args.get("files", record.get("files", []))
+        if not isinstance(files, (str, list)) or (
+            isinstance(files, list) and any(not isinstance(path, str) for path in files)
+        ):
+            raise ValueError("`files` must be a workspace path or a list of workspace paths.")
+        record["files"] = normalize_paths(files)
     frequency = record.get("frequency", "once")
     if frequency not in ("once", "daily", "weekly"):
         raise ValueError("`frequency` must be once, daily, or weekly.")
@@ -172,7 +187,7 @@ def prepare_message_reminder(
         id=record.get("id") or uuid4().hex,
         created_at=record.get("created_at") or datetime.fromtimestamp(now, timezone.utc).isoformat(),
         revision=uuid4().hex,
-        delivery="message",
+        delivery=delivery,
     )
     return record
 
@@ -225,12 +240,12 @@ class ReminderStore:
                     raise ValueError("invalid time")
                 if not record.get("backend") or not record.get("conversation_id"):
                     raise ValueError("missing destination")
-                if record.get("delivery") == "message":
-                    if not isinstance(record.get("message"), str) or not record["message"].strip():
-                        raise ValueError("missing message")
-                    next_reminder_time(record, after=int(record["unix_time"]))
-                elif not record.get("prompt"):
-                    raise ValueError("missing prompt")
+                delivery = record.get("delivery", "prompt")
+                if delivery not in ("message", "prompt"):
+                    raise ValueError("invalid delivery")
+                if not isinstance(record.get(delivery), str) or not record[delivery].strip():
+                    raise ValueError(f"missing {delivery}")
+                next_reminder_time(record, after=int(record["unix_time"]))
             except (ValueError, TypeError, OverflowError, OSError, ZoneInfoNotFoundError):
                 logging.warning("Skipping malformed reminder entry")
                 continue
@@ -243,30 +258,42 @@ class ReminderStore:
         prefix = "\n" if previous and not previous.endswith("\n") else ""
         self.workspace.append_text(REMINDERS_FILE, prefix + json.dumps(record, ensure_ascii=False) + "\n")
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, *, delivery: str | None = None) -> list[dict[str, Any]]:
         with _REMINDERS_LOCK:
-            return sorted(self._read().values(), key=lambda record: int(record["unix_time"]))
+            records = self._read().values()
+            return sorted(
+                (record for record in records if delivery is None or record.get("delivery", "prompt") == delivery),
+                key=lambda record: int(record["unix_time"]),
+            )
 
-    def add(self, args: Mapping[str, Any], *, now: float) -> dict[str, Any]:
-        record = prepare_message_reminder(args, now=now)
+    def add(self, args: Mapping[str, Any], *, now: float, delivery: str = "message") -> dict[str, Any]:
+        record = _prepare_reminder(args, delivery=delivery, now=now)
+        for path in record.get("files", []):
+            self.workspace.resolve(path)
         with _REMINDERS_LOCK:
             self._append(record)
         return record
 
-    def update(self, reminder_id: str, args: Mapping[str, Any], *, now: float) -> dict[str, Any]:
+    def update(
+        self, reminder_id: str, args: Mapping[str, Any], *, now: float, delivery: str = "message",
+    ) -> dict[str, Any]:
         with _REMINDERS_LOCK:
             existing = self._read().get(reminder_id)
             if existing is None:
                 raise ValueError(f"Reminder `{reminder_id}` was not found.")
-            if existing.get("delivery") != "message":
-                raise ValueError("Legacy prompt reminders can be removed but cannot be edited with add_reminder.")
-            record = prepare_message_reminder(args, existing=existing, now=now)
+            if existing.get("delivery", "prompt") != delivery:
+                skill = "schedule_prompt" if existing.get("delivery", "prompt") == "prompt" else "add_reminder"
+                raise ValueError(f"Use {skill} to edit reminder `{reminder_id}`.")
+            record = _prepare_reminder(args, delivery=delivery, existing=existing, now=now)
+            for path in record.get("files", []):
+                self.workspace.resolve(path)
             self._append(record)
             return record
 
-    def remove(self, reminder_id: str) -> None:
+    def remove(self, reminder_id: str, *, delivery: str | None = None) -> None:
         with _REMINDERS_LOCK:
-            if reminder_id not in self._read():
+            existing = self._read().get(reminder_id)
+            if existing is None or (delivery is not None and existing.get("delivery", "prompt") != delivery):
                 raise ValueError(f"Reminder `{reminder_id}` was not found.")
             self._append({"id": reminder_id, "deleted": True})
 

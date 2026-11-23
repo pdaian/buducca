@@ -205,6 +205,7 @@ class BotRunner:
         self._stop_event = threading.Event()
         self._frontend_workers = self._build_frontend_workers()
         self._reminder_service = ReminderService(ReminderStore(self._workspace), self._send_scheduled_message)
+        self._prompt_retry_at: dict[str, tuple[str, float]] = {}
 
     def _set_active_reply_footer(self, footer: str) -> None:
         self._request_state.reply_footer = footer
@@ -1386,14 +1387,26 @@ class BotRunner:
             self._recent_handled_queries.pop(key, None)
 
     def _poll_due_reminders_once(self) -> None:
-        # Legacy entries are saved prompts that still need a model turn. Direct
-        # messages belong exclusively to ReminderService, which never waits here.
+        # Saved prompts (including legacy entries) use the normal model loop.
+        # Direct messages belong exclusively to the independent ReminderService.
         store = ReminderStore(self._workspace)
-        for record in store.list():
-            if record.get("delivery") == "message" or int(record["unix_time"]) > time.time():
+        records = store.list(delivery="prompt")
+        live_ids = {record["id"] for record in records}
+        self._prompt_retry_at = {key: value for key, value in self._prompt_retry_at.items() if key in live_ids}
+        for record in records:
+            now = time.time()
+            if int(record["unix_time"]) > now:
                 continue
-            if store.is_current(record) and self._run_due_reminder(record):
+            revision, retry_at = self._prompt_retry_at.get(record["id"], ("", 0.0))
+            if revision == record.get("revision", "") and retry_at > now:
+                continue
+            if not store.is_current(record):
+                continue
+            if self._run_due_reminder(record, store=store):
                 store.complete(record, now=time.time())
+                self._prompt_retry_at.pop(record["id"], None)
+            else:
+                self._prompt_retry_at[record["id"]] = (record.get("revision", ""), time.time() + 60)
 
     def _send_scheduled_message(self, record: dict[str, Any]) -> None:
         backend = record["backend"]
@@ -1403,13 +1416,22 @@ class BotRunner:
         for chunk in self._split_reply(text):
             self._send_message(backend, record["conversation_id"], chunk)
 
-    def _run_due_reminder(self, record: dict[str, Any]) -> bool:
+    def _run_due_reminder(self, record: dict[str, Any], *, store: ReminderStore | None = None) -> bool:
         backend = str(record["backend"]).strip()
         conversation_id = str(record["conversation_id"]).strip()
+        if backend not in ("telegram", "signal", "whatsapp", "android") or getattr(self, backend, None) is None:
+            logging.warning("Scheduled prompt backend is unavailable id=%s backend=%s", record.get("id", ""), backend)
+            return False
+        if self._backend_is_read_only(backend):
+            return False
         sender_id = str(record.get("sender_id", conversation_id)).strip() or conversation_id
-        sender_name = "Scheduled Reminder"
+        sender_name = "Scheduled Prompt"
         sender_contact = f"scheduled-reminder:{record.get('id', '')}"
-        reminder_text, disable_thinking = self._extract_nothink_directive(self._build_due_reminder_text(record))
+        saved_prompt, disable_thinking, forced_runner_index = self._extract_llm_directives(str(record["prompt"]))
+        if "delivery" not in record:
+            # Older saved prompts accepted /nothink anywhere in their text.
+            saved_prompt, legacy_nothink = self._extract_nothink_directive(saved_prompt)
+            disable_thinking = disable_thinking or legacy_nothink
         conversation_key = self._history_key(backend, conversation_id)
 
         logging.info(
@@ -1418,9 +1440,22 @@ class BotRunner:
             backend,
             conversation_id,
         )
-        self._set_active_reply_footer("")
-        try:
-            with self._request_context(self._conversation_scope_key(backend, conversation_id)):
+        with self._request_context(self._conversation_scope_key(backend, conversation_id)):
+            # A schedule may be edited or removed while waiting for capacity.
+            if store is not None and not store.is_current(record):
+                return False
+            self._set_active_reply_footer("")
+            trace_payload: dict[str, Any] = {
+                "logged_at": datetime.now(timezone.utc).isoformat(),
+                "backend": backend,
+                "conversation_id": conversation_id,
+                "sender_id": sender_id,
+                "scheduled_prompt_id": record.get("id", ""),
+            }
+            try:
+                self._refresh_skills()
+                reminder_text = self._build_due_reminder_text(dict(record, prompt=saved_prompt))
+                trace_payload["last_message"] = reminder_text
                 with self._typing_indicator(backend, conversation_id):
                     prompt = self._build_messages(
                         conversation_key,
@@ -1431,58 +1466,69 @@ class BotRunner:
                         sender_name=sender_name,
                         sender_contact=sender_contact,
                     )
-                    self._set_active_skill_chain_length(0)
-                    model_reply = self._generate_initial_model_reply(prompt, disable_thinking=disable_thinking)
-                    reply = self._coerce_reply_text(
-                        self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
-                        context=f"scheduled reminder id={record.get('id', '')}",
-                    )
-        except RequestTimeoutError:
-            logging.warning("Scheduled reminder timed out id=%s", record.get("id", ""))
-            return False
-        except Exception:
-            logging.exception("Scheduled reminder failed id=%s", record.get("id", ""))
-            return False
+                    trace_payload["last_prompt"] = prompt
+                    trace_payload["evidence"] = [
+                        {"path": item.path, "snippet": item.snippet, "score": item.score}
+                        for item in self._get_request_evidence()
+                    ]
+                    with ExitStack() as stack:
+                        force_runner = getattr(self.llm, "force_runner", None)
+                        if forced_runner_index is not None and callable(force_runner):
+                            stack.enter_context(force_runner(forced_runner_index))
+                        self._set_active_skill_chain_length(0)
+                        model_reply = self._generate_initial_model_reply(prompt, disable_thinking=disable_thinking)
+                        trace_payload["initial_model_reply"] = model_reply
+                        reply = self._coerce_reply_text(
+                            self._resolve_llm_reply(prompt, model_reply, disable_thinking=disable_thinking),
+                            context=f"scheduled prompt id={record.get('id', '')}",
+                        )
+            except Exception as exc:
+                if isinstance(exc, RequestBudgetExceeded):
+                    self._request_state.stop_reason = "max_llm_requests_per_turn"
+                elif isinstance(exc, ContextLengthExceededError):
+                    self._request_state.stop_reason = "context_length_exceeded"
+                elif isinstance(exc, EmptyReplyError):
+                    self._request_state.stop_reason = exc.reason
+                trace_payload["error"] = "timeout" if isinstance(exc, RequestTimeoutError) else "execution_failed"
+                self._write_message_trace(trace_payload)
+                logging.exception("Scheduled prompt failed id=%s", record.get("id", ""))
+                return False
 
-        self._history[conversation_key].append({"role": "user", "content": reminder_text})
-        self._history[conversation_key].append(
-            {
-                "role": "assistant",
-                "content": self._summarize_skill_result_for_context("web_search", reply),
-            }
-        )
-        reply_footer = self._get_active_reply_footer()
-        if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
-            reply = f"{reply}\n\n{reply_footer}"
+            history_reply = self._summarize_skill_result_for_context("web_search", reply)
+            if self.config.runtime.enable_reply_citations:
+                reply = append_sources(reply, self._get_request_evidence())
+            reply_footer = self._get_active_reply_footer()
+            if reply_footer and reply != _EMPTY_REPLY_FALLBACK:
+                reply = f"{reply}\n\n{reply_footer}"
+            trace_payload["final_reply"] = reply
+            try:
+                for chunk in self._split_reply(reply):
+                    self._send_message(backend, conversation_id, chunk)
+            except Exception:
+                trace_payload["error"] = "delivery_failed"
+                self._write_message_trace(trace_payload)
+                logging.exception("Failed to send scheduled prompt reply id=%s", record.get("id", ""))
+                return False
 
-        try:
-            for chunk in self._split_reply(reply):
-                self._send_message(backend, conversation_id, chunk)
-        except Exception:
-            logging.exception("Failed to send scheduled reminder reply id=%s", record.get("id", ""))
-            return False
-
-        self._append_agenta_query_log(
-            backend=backend,
-            conversation_id=conversation_id,
-            sender_id=sender_id,
-            text=reminder_text,
-            reply=reply,
-            sender_name=sender_name,
-            sender_contact=sender_contact,
-        )
-        self._workspace.append_text(
-            "logs/reminders.history",
-            json.dumps(
-                {
-                    "logged_at": datetime.now(timezone.utc).isoformat(),
-                    "reminder": record,
-                    "reply": reply,
-                },
-                ensure_ascii=False,
+            self._history[conversation_key].append({"role": "user", "content": reminder_text})
+            self._history[conversation_key].append({"role": "assistant", "content": history_reply})
+            self._write_message_trace(trace_payload)
+            self._append_agenta_query_log(
+                backend=backend,
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                text=reminder_text,
+                reply=reply,
+                sender_name=sender_name,
+                sender_contact=sender_contact,
             )
-            + "\n",
-        )
+            self._workspace.append_text(
+                "logs/reminders.history",
+                json.dumps(
+                    {"logged_at": datetime.now(timezone.utc).isoformat(), "reminder": record, "reply": reply},
+                    ensure_ascii=False,
+                ) + "\n",
+            )
         return True
 
     def _poll_due_hourly_once(self) -> None:
@@ -1727,11 +1773,12 @@ class BotRunner:
         unix_time = int(record["unix_time"])
         scheduled_at = datetime.fromtimestamp(unix_time, tz=timezone.utc).isoformat()
         lines = [
-            "[Scheduled reminder]",
+            "[Scheduled prompt]",
             f"- reminder_id: {record.get('id', '')}",
             f"- scheduled_unix_time: {unix_time}",
             f"- scheduled_at_utc: {scheduled_at}",
             "",
+            "Execute the saved prompt now, using skills as needed, and return the result to this conversation.",
             "Predefined prompt:",
             str(record["prompt"]).strip(),
         ]
@@ -1764,6 +1811,9 @@ class BotRunner:
                 content = file_path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 snippets.append(f"File `{relative_path}` is not UTF-8 text.")
+                continue
+            except OSError:
+                snippets.append(f"File `{relative_path}` could not be read.")
                 continue
 
             limit = min(_MAX_REMINDER_FILE_CHARS, remaining_chars)
@@ -2387,7 +2437,7 @@ class BotRunner:
             if reply_footer:
                 args = dict(args)
                 args["_reply_footer"] = reply_footer
-        if name == "add_reminder" and args.get("operation", "add") == "add":
+        if name in ("add_reminder", "schedule_prompt") and args.get("operation", "add") == "add":
             context = getattr(self._request_state, "reminder_context", {})
             args = dict(args)
             args.setdefault("timezone", self.config.llm.system_prompt_timezone)
